@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+﻿import { useCallback, useEffect, useRef, useState } from "react";
 import { CameraOutlined, CheckCircleFilled, LockOutlined, ReloadOutlined, SearchOutlined, UploadOutlined } from "@ant-design/icons";
 import { Button, Card, Empty, Form, Input, InputNumber, Modal, Spin, Tag, Typography, message } from "antd";
 import api from "../../services/api";
@@ -135,8 +135,8 @@ const ProductFinder = () => {
       {result.matches.length === 0 ? <Card><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={recognisedName ? `${recognisedName} — not in our catalogue` : "Item not clear enough yet"} /><Text type="secondary">{result.shouldRescan ? "Follow the instruction above and scan again." : "We identified the item, but it is not listed in this store catalogue."}</Text></Card> : <>
         <div className="finder-result-intro"><CheckCircleFilled /><div><strong>Catalogue matches</strong><span>Review the match and live availability before reserving.</span></div></div>
         {result.matches.map((match) => <Card className="finder-match-card" key={match.product._id}>
-          <div className="finder-match-heading"><div><Title level={4}>{match.product.name}</Title><Text type="secondary">{match.product.brand || "Hardware"} · {match.product.sku} · ₱{Number(match.product.sellingPrice).toLocaleString("en-PH", { minimumFractionDigits: 2 })}</Text></div><Tag color={match.availability.length ? "green" : "red"}>{match.availability.length ? "Available" : "Out of stock"}</Tag></div>
-          {match.availability.length ? <div className="finder-branches">{match.availability.map((item) => <div className="finder-branch" key={item.branch._id}><div><strong>{item.branch.name}</strong><span>{item.branch.code} · {item.available} {match.product.unit} available</span></div><Button type="primary" onClick={() => reserveAtBranch(match.product, item.branch, item.available)}>Reserve</Button></div>)}</div> : <Text type="secondary">We identified this product, but it is out of stock at every branch.</Text>}
+          <div className="finder-match-heading"><div><Title level={4}>{match.product.name}</Title><Text type="secondary">{match.product.brand || "Hardware"} · {match.product.sku} · ₱{Number(match.product.sellingPrice).toLocaleString("en-PH", { minimumFractionDigits: 2 })}</Text></div><Tag color={match.availability.some((item) => item.available > 0) ? "green" : "red"}>{match.availability.some((item) => item.available > 0) ? "Available" : "Out of stock"}</Tag></div>
+          {match.availability.length ? <div className="finder-branches">{match.availability.map((item) => <div className="finder-branch" key={item.branch._id}><div><strong>{item.branch.name}</strong><span>{item.branch.code} · {item.available > 0 ? `${item.available} ${match.product.unit} available` : "Out of stock"}</span></div><Button type="primary" disabled={item.available < 1} onClick={() => reserveAtBranch(match.product, item.branch, item.available)}>Reserve</Button></div>)}</div> : <Text type="secondary">We identified this product, but it has no inventory record at any branch.</Text>}
         </Card>)}
       </>}
     </>;

@@ -1,4 +1,4 @@
-const BranchInventory = require("../models/BranchInventory");
+﻿const BranchInventory = require("../models/BranchInventory");
 const Product = require("../models/Product");
 
 const MAX_IMAGE_BYTES = 6 * 1024 * 1024;
@@ -6,7 +6,9 @@ const MAX_IMAGE_BYTES = 6 * 1024 * 1024;
 const parseAiJson = (text) => {
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
   const value = fenced ? fenced[1] : text;
-  return JSON.parse(value.trim());
+  const start = value.indexOf("{");
+  const end = value.lastIndexOf("}");
+  return JSON.parse((start >= 0 && end > start ? value.slice(start, end + 1) : value).trim());
 };
 
 const firstText = (...values) => values.find((value) => typeof value === "string" && value.trim())?.trim() || "";
@@ -82,7 +84,7 @@ const identifyProduct = async (req, res) => {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: process.env.OPENAI_VISION_MODEL || "gpt-5.6-luna",
+        model: process.env.OPENAI_VISION_MODEL || "gpt-4o",
         store: false,
         text: {
           format: {
@@ -111,8 +113,9 @@ const identifyProduct = async (req, res) => {
     }
 
     const aiResult = await aiResponse.json();
-    const identification = normalizeIdentification(parseAiJson(aiResult.output_text || "{}"));
-    const keywords = identification.keywords;
+    const outputText = aiResult.output_text || (aiResult.output || []).flatMap((item) => item.content || []).map((item) => item.text || item.output_text || "").join(" ") || "{}";
+    const identification = normalizeIdentification(parseAiJson(outputText));
+    const keywords = [...new Set([...identification.keywords, identification.identifiedName, identification.description].filter(Boolean))].slice(0, 12);
     const products = await Product.find({ isActive: true }).populate("category", "name");
     const candidates = products
       .map((product) => ({ product, score: scoreProduct(product, keywords) }))
@@ -141,7 +144,8 @@ const identifyProduct = async (req, res) => {
           available: Math.max(item.quantity - (item.reservedQuantity || 0), 0),
           quantity: item.quantity,
         }))
-        .filter((item) => item.available > 0),
+        .filter((item) => item.branch)
+        .sort((a, b) => b.available - a.available || a.branch.name.localeCompare(b.branch.name)),
     }));
 
     const identifiedName = identification.identifiedName || candidates[0]?.product.name || "";
@@ -164,3 +168,6 @@ const identifyProduct = async (req, res) => {
 };
 
 module.exports = { identifyProduct };
+
+
+
