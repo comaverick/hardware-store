@@ -21,6 +21,19 @@ const normalizeIdentification = (value) => ({
     : [],
 });
 
+const identificationSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["identifiedName", "description", "keywords", "shouldRescan", "guidance"],
+  properties: {
+    identifiedName: { type: "string" },
+    description: { type: "string" },
+    keywords: { type: "array", items: { type: "string" }, maxItems: 8 },
+    shouldRescan: { type: "boolean" },
+    guidance: { type: "string" },
+  },
+};
+
 const scoreProduct = (product, keywords) => {
   const haystack = [
     product.name,
@@ -71,12 +84,20 @@ const identifyProduct = async (req, res) => {
       body: JSON.stringify({
         model: process.env.OPENAI_VISION_MODEL || "gpt-5.6-luna",
         store: false,
+        text: {
+          format: {
+            type: "json_schema",
+            name: "hardware_product_identification",
+            strict: true,
+            schema: identificationSchema,
+          },
+        },
         input: [{
           role: "user",
           content: [
             {
               type: "input_text",
-              text: 'You are guiding a hardware-store cashier who is scanning an unknown item. Return JSON only: {"identifiedName":"what the item appears to be, or an empty string if unclear","description":"brief visible description","keywords":[up to 8 catalogue search terms],"shouldRescan":true or false,"guidance":"one short next camera instruction"}. If the item or its label is unclear, set shouldRescan to true and give one specific instruction such as "Move closer to the label", "Rotate the item to show the front", or "Show the size marking". If you can identify the item category, set shouldRescan to false, name it even if you cannot confirm its brand, and say what detail would improve confidence. Never claim the store has stock.',
+              text: 'You are guiding a hardware-store cashier who is scanning an unknown item. Identify the item or at least its hardware category from what is visible. Never use generic phrases like "Possible product matches" as a name or description. Use an empty identifiedName only when the item is genuinely too unclear to classify; then set shouldRescan to true and give one specific instruction such as "Move closer to the label", "Rotate the item to show the front", or "Show the size marking". If you recognise the item category, provide its name even if the brand or exact size is uncertain. Never claim the store has stock.',
             },
             { type: "input_image", image_url: imageData, detail: "low" },
           ],
@@ -125,7 +146,7 @@ const identifyProduct = async (req, res) => {
 
     res.json({
       identifiedName: identification.identifiedName || candidates[0]?.product.name || "",
-      description: identification.description || "Possible product matches",
+      description: identification.description || "Item could not be identified from this view.",
       keywords,
       guidance: identification.guidance,
       shouldRescan: identification.shouldRescan,
