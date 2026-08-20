@@ -165,7 +165,7 @@ const createSale = async (req, res) => {
 
     if (paid < totalAmount) {
       return res.status(400).json({
-        message: `Insufficient payment. Total is â‚±${totalAmount.toFixed(2)}.`,
+        message: `Insufficient payment. Total is ₱${totalAmount.toFixed(2)}.`,
       });
     }
 

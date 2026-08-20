@@ -240,7 +240,7 @@ const Suppliers = () => {
       title: "Contact Person",
       dataIndex: "contactPerson",
 
-      render: (value) => value || "â€”",
+      render: (value) => value || "—",
     },
 
     {

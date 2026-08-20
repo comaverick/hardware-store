@@ -34,6 +34,16 @@ import "./Dashboard.css";
 
 const { Title, Text } = Typography;
 
+const localDateKey = (value) => {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
 const Dashboard = () => {
   const [inventory, setInventory] = useState([]);
   const [sales, setSales] = useState([]);
@@ -124,7 +134,9 @@ const Dashboard = () => {
       return inventory;
     }
 
-    return inventory.filter((item) => item.branch?._id === selectedBranch);
+    return inventory.filter(
+      (item) => String(item.branch?._id) === String(selectedBranch),
+    );
   }, [inventory, selectedBranch]);
 
   // ========================================
@@ -136,7 +148,9 @@ const Dashboard = () => {
       return sales;
     }
 
-    return sales.filter((sale) => sale.branch?._id === selectedBranch);
+    return sales.filter(
+      (sale) => String(sale.branch?._id) === String(selectedBranch),
+    );
   }, [sales, selectedBranch]);
 
   // ========================================
@@ -160,6 +174,9 @@ const Dashboard = () => {
 
   todayStart.setHours(0, 0, 0, 0);
 
+  const tomorrowStart = new Date(todayStart);
+  tomorrowStart.setDate(tomorrowStart.getDate() + 1);
+
   const todaySales = filteredSales.filter((sale) => {
     if (sale.status !== "COMPLETED") {
       return false;
@@ -167,7 +184,7 @@ const Dashboard = () => {
 
     const saleDate = new Date(sale.createdAt);
 
-    return saleDate >= todayStart;
+    return saleDate >= todayStart && saleDate < tomorrowStart;
   });
 
   const todaySalesAmount = todaySales.reduce(
@@ -218,7 +235,7 @@ const Dashboard = () => {
 
       date.setDate(startDate.getDate() + i);
 
-      const dateKey = date.toISOString().split("T")[0];
+      const dateKey = localDateKey(date);
 
       const daySales = filteredSales.filter((sale) => {
         if (sale.status !== "COMPLETED") {
@@ -227,7 +244,7 @@ const Dashboard = () => {
 
         const saleDate = new Date(sale.createdAt);
 
-        return saleDate.toISOString().split("T")[0] === dateKey;
+        return localDateKey(saleDate) === dateKey;
       });
 
       const amount = daySales.reduce(
@@ -575,11 +592,11 @@ const Dashboard = () => {
               <div className="kpi-top">
                 <span className="kpi-label">Today's Sales</span>
 
-                <span className="kpi-icon sales">â‚±</span>
+                <span className="kpi-icon sales">₱</span>
               </div>
 
               <div className="kpi-value">
-                â‚±
+                ₱
                 {todaySalesAmount.toLocaleString(undefined, {
                   minimumFractionDigits: 2,
                 })}
@@ -719,7 +736,7 @@ const Dashboard = () => {
               <span>SALES</span>
 
               <strong>
-                â‚±
+                ₱
                 {periodSalesTotal.toLocaleString(undefined, {
                   minimumFractionDigits: 2,
                 })}
@@ -780,8 +797,8 @@ const Dashboard = () => {
                   }}
                   tickFormatter={(value) =>
                     value >= 1000
-                      ? `â‚±${(value / 1000).toFixed(0)}k`
-                      : `â‚±${value}`
+                      ? `₱${(value / 1000).toFixed(0)}k`
+                      : `₱${value}`
                   }
                   width={45}
                 />
@@ -797,7 +814,7 @@ const Dashboard = () => {
                   }}
                   formatter={(value, name) => [
                     name === "sales"
-                      ? `â‚±${Number(value).toLocaleString(undefined, {
+                      ? `₱${Number(value).toLocaleString(undefined, {
                           minimumFractionDigits: 2,
                         })}`
                       : value,
@@ -965,7 +982,7 @@ const Dashboard = () => {
                   <div className="sale-branch">{sale.branch?.code}</div>
 
                   <strong className="sale-amount">
-                    â‚±
+                    ₱
                     {Number(sale.totalAmount || 0).toLocaleString(undefined, {
                       minimumFractionDigits: 2,
                     })}
@@ -1001,7 +1018,7 @@ const Dashboard = () => {
                     <strong>{branch.name}</strong>
 
                     <span>
-                      {branch.code} Â· {branch.stock.toLocaleString()} units
+                      {branch.code} · {branch.stock.toLocaleString()} units
                     </span>
                   </div>
 

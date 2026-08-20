@@ -313,7 +313,7 @@ const StockHistory = () => {
         <div className="stock-change">
           <Text type="secondary">{transaction.previousQuantity}</Text>
 
-          <span>â†’</span>
+          <span>→</span>
 
           <strong>{transaction.newQuantity}</strong>
         </div>
@@ -324,7 +324,7 @@ const StockHistory = () => {
       title: "Reason",
       key: "reason",
 
-      render: (_, transaction) => <Text>{transaction.reason || "â€”"}</Text>,
+      render: (_, transaction) => <Text>{transaction.reason || "—"}</Text>,
     },
 
     {
@@ -335,7 +335,7 @@ const StockHistory = () => {
         transaction.reference ? (
           <Tag>{transaction.reference}</Tag>
         ) : (
-          <Text type="secondary">â€”</Text>
+          <Text type="secondary">—</Text>
         ),
     },
 

@@ -422,7 +422,7 @@ const Inventory = () => {
       dataIndex: "reason",
       key: "reason",
 
-      render: (value) => value || "â€”",
+      render: (value) => value || "—",
     },
 
     {
@@ -430,7 +430,7 @@ const Inventory = () => {
       dataIndex: "reference",
       key: "reference",
 
-      render: (value) => value || "â€”",
+      render: (value) => value || "—",
     },
   ];
 
