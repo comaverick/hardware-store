@@ -9,13 +9,15 @@ const parseAiJson = (text) => {
   return JSON.parse(value.trim());
 };
 
+const firstText = (...values) => values.find((value) => typeof value === "string" && value.trim())?.trim() || "";
+
 const normalizeIdentification = (value) => ({
-  identifiedName: typeof value.identifiedName === "string" ? value.identifiedName.trim() : "",
-  description: typeof value.description === "string" ? value.description.trim() : "",
-  guidance: typeof value.guidance === "string" ? value.guidance.trim() : "Take a clear photo of the item and its label.",
-  shouldRescan: Boolean(value.shouldRescan),
-  keywords: Array.isArray(value.keywords)
-    ? value.keywords.filter((keyword) => typeof keyword === "string").slice(0, 8)
+  identifiedName: firstText(value.identifiedName, value.productName, value.itemName, value.name),
+  description: firstText(value.description, value.itemDescription),
+  guidance: firstText(value.guidance, value.nextStep, value.instruction) || "Take a clear photo of the item and its label.",
+  shouldRescan: Boolean(value.shouldRescan ?? value.needsRescan),
+  keywords: Array.isArray(value.keywords ?? value.searchTerms)
+    ? (value.keywords ?? value.searchTerms).filter((keyword) => typeof keyword === "string").slice(0, 8)
     : [],
 });
 
@@ -122,7 +124,7 @@ const identifyProduct = async (req, res) => {
     }));
 
     res.json({
-      identifiedName: identification.identifiedName,
+      identifiedName: identification.identifiedName || candidates[0]?.product.name || "",
       description: identification.description || "Possible product matches",
       keywords,
       guidance: identification.guidance,

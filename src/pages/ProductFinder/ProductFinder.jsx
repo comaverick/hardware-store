@@ -105,12 +105,14 @@ const ProductFinder = () => {
     if (identifying) return <Card className="finder-loading"><Spin size="large" /><strong>Analysing this view…</strong><Text type="secondary">We will give you a camera instruction if another scan is needed.</Text></Card>;
     if (!result) return <Card><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Open the camera and scan the item" /></Card>;
 
+    const recognisedName = result.identifiedName || result.matches?.[0]?.product?.name || result.description || "";
+
     return <>
       <Card className={`finder-guidance ${result.shouldRescan ? "finder-guidance-rescan" : ""}`}>
         <div className="finder-guidance-icon"><CameraOutlined /></div>
-        <div><Text strong>{result.shouldRescan ? "Scan again" : result.identifiedName || "Item analysed"}</Text><div>{result.guidance}</div>{result.description && <Text type="secondary">{result.description}</Text>}</div>
+        <div><Text strong>{recognisedName || (result.shouldRescan ? "Scan again" : "Item analysed")}</Text><div>{result.guidance}</div>{result.description && recognisedName !== result.description && <Text type="secondary">{result.description}</Text>}</div>
       </Card>
-      {result.matches.length === 0 ? <Card><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={result.identifiedName ? `${result.identifiedName} — not in our catalogue` : "No catalogue match yet"} /><Text type="secondary">{result.shouldRescan ? "Follow the instruction above and scan again." : "We identified the item, but it is not listed in this store catalogue."}</Text></Card> : <>
+      {result.matches.length === 0 ? <Card><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={recognisedName ? `${recognisedName} — not in our catalogue` : "No catalogue match yet"} /><Text type="secondary">{result.shouldRescan ? "Follow the instruction above and scan again." : "We identified the item, but it is not listed in this store catalogue."}</Text></Card> : <>
         <div className="finder-result-intro"><CheckCircleFilled /><div><strong>Catalogue matches</strong><span>Review the match and live availability before reserving.</span></div></div>
         {result.matches.map((match) => <Card className="finder-match-card" key={match.product._id}>
           <div className="finder-match-heading"><div><Title level={4}>{match.product.name}</Title><Text type="secondary">{match.product.brand || "Hardware"} · {match.product.sku} · ₱{Number(match.product.sellingPrice).toLocaleString("en-PH", { minimumFractionDigits: 2 })}</Text></div><Tag color={match.availability.length ? "green" : "red"}>{match.availability.length ? "Available" : "Out of stock"}</Tag></div>
