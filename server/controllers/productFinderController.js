@@ -9,6 +9,16 @@ const parseAiJson = (text) => {
   return JSON.parse(value.trim());
 };
 
+const normalizeIdentification = (value) => ({
+  identifiedName: typeof value.identifiedName === "string" ? value.identifiedName.trim() : "",
+  description: typeof value.description === "string" ? value.description.trim() : "",
+  guidance: typeof value.guidance === "string" ? value.guidance.trim() : "Take a clear photo of the item and its label.",
+  shouldRescan: Boolean(value.shouldRescan),
+  keywords: Array.isArray(value.keywords)
+    ? value.keywords.filter((keyword) => typeof keyword === "string").slice(0, 8)
+    : [],
+});
+
 const scoreProduct = (product, keywords) => {
   const haystack = [
     product.name,
@@ -64,7 +74,7 @@ const identifyProduct = async (req, res) => {
           content: [
             {
               type: "input_text",
-              text: 'Identify this hardware-store item. Return JSON only: {"keywords":[up to 8 useful product search terms],"description":"short description"}. Do not invent brand names or specifications you cannot see.',
+              text: 'You are guiding a hardware-store cashier who is scanning an unknown item. Return JSON only: {"identifiedName":"what the item appears to be, or an empty string if unclear","description":"brief visible description","keywords":[up to 8 catalogue search terms],"shouldRescan":true or false,"guidance":"one short next camera instruction"}. If the item or its label is unclear, set shouldRescan to true and give one specific instruction such as "Move closer to the label", "Rotate the item to show the front", or "Show the size marking". If you can identify the item category, set shouldRescan to false, name it even if you cannot confirm its brand, and say what detail would improve confidence. Never claim the store has stock.',
             },
             { type: "input_image", image_url: imageData, detail: "low" },
           ],
@@ -78,8 +88,8 @@ const identifyProduct = async (req, res) => {
     }
 
     const aiResult = await aiResponse.json();
-    const identification = parseAiJson(aiResult.output_text || "{}");
-    const keywords = Array.isArray(identification.keywords) ? identification.keywords : [];
+    const identification = normalizeIdentification(parseAiJson(aiResult.output_text || "{}"));
+    const keywords = identification.keywords;
     const products = await Product.find({ isActive: true }).populate("category", "name");
     const candidates = products
       .map((product) => ({ product, score: scoreProduct(product, keywords) }))
@@ -112,8 +122,11 @@ const identifyProduct = async (req, res) => {
     }));
 
     res.json({
+      identifiedName: identification.identifiedName,
       description: identification.description || "Possible product matches",
       keywords,
+      guidance: identification.guidance,
+      shouldRescan: identification.shouldRescan,
       matches,
     });
   } catch (error) {

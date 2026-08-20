@@ -11,11 +11,17 @@
 .finder-file-input { display: none; }
 .finder-actions, .finder-identify-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 14px; }
 .finder-actions .ant-btn, .finder-identify-actions .ant-btn { min-height: 44px; }
+.finder-camera-tip { display: block; margin-top: 10px; text-align: center; }
 .finder-loading { min-height: 250px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; text-align: center; }
 .finder-result-intro { display: flex; align-items: flex-start; gap: 10px; margin: 0 0 12px; padding: 14px; border-radius: 10px; background: #f6ffed; color: #237804; }
 .finder-result-intro .anticon { margin-top: 3px; font-size: 18px; }
 .finder-result-intro div { display: flex; flex-direction: column; }
 .finder-result-intro span { color: #527a35; font-size: 13px; }
+.finder-guidance { display: flex; gap: 12px; margin-bottom: 12px; border-color: #b7eb8f; background: #f6ffed; }
+.finder-guidance-rescan { border-color: #ffe58f; background: #fffbe6; }
+.finder-guidance-icon { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 50%; background: #d9f7be; color: #237804; font-size: 18px; }
+.finder-guidance-rescan .finder-guidance-icon { background: #fff1b8; color: #ad6800; }
+.finder-guidance > div:last-child { display: flex; flex: 1; flex-direction: column; gap: 3px; }
 .finder-match-card { margin-bottom: 12px; }
 .finder-match-heading { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
 .finder-match-heading h4 { margin: 0 0 3px; }
