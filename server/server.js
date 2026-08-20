@@ -12,6 +12,7 @@ const smartInventoryRoutes =
   require(
     "./routes/smartInventoryRoutes"
   );
+const reservationRoutes = require("./routes/reservationRoutes");
 
 dotenv.config();
 
@@ -41,6 +42,7 @@ app.use(
   "/api/smart-inventory",
   smartInventoryRoutes
 );
+app.use("/api/reservations", reservationRoutes);
 
 app.get("/", (req, res) => {
   res.json({

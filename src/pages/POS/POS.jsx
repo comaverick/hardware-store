@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   BarcodeOutlined,
   DeleteOutlined,
+  HistoryOutlined,
   MinusOutlined,
   PlusOutlined,
   PrinterOutlined,
@@ -69,6 +70,9 @@ const POS = () => {
   // =========================
 
   const [search, setSearch] = useState("");
+  const [selectedCategory, setSelectedCategory] = useState("All");
+  const [recentProductIds, setRecentProductIds] = useState([]);
+  const [selectedCartProductId, setSelectedCartProductId] = useState(null);
 
   // =========================
   // CART
@@ -418,17 +422,22 @@ const POS = () => {
   // SEARCH PRODUCTS
   // =========================
 
+  const categories = useMemo(() => {
+    const names = products
+      .map((product) => product.category?.name || product.category)
+      .filter(Boolean);
+
+    return ["All", ...new Set(names)];
+  }, [products]);
+
   const filteredProducts = useMemo(() => {
     const value = search
       .toLowerCase()
       .trim();
 
-    if (!value) {
-      return products.slice(0, 30);
-    }
-
     return products
       .filter((product) => {
+        const category = product.category?.name || product.category || "";
         const name =
           product.name?.toLowerCase() ||
           "";
@@ -445,15 +454,19 @@ const POS = () => {
           product.brand?.toLowerCase() ||
           "";
 
-        return (
+        const matchesSearch = !value || (
           name.includes(value) ||
           sku.includes(value) ||
           barcode.includes(value) ||
           brand.includes(value)
         );
+
+        return matchesSearch && (
+          selectedCategory === "All" || category === selectedCategory
+        );
       })
       .slice(0, 30);
-  }, [products, search]);
+  }, [products, search, selectedCategory]);
 
   // =========================
   // ADD TO CART
@@ -470,8 +483,11 @@ const POS = () => {
     const inventoryItem =
       inventoryMap[product._id];
 
-    const available =
-      inventoryItem?.quantity || 0;
+    const available = Math.max(
+      (inventoryItem?.quantity || 0) -
+        (inventoryItem?.reservedQuantity || 0),
+      0
+    );
 
     if (available <= 0) {
       message.warning(
@@ -511,6 +527,12 @@ const POS = () => {
         )
       );
 
+      setRecentProductIds((ids) =>
+        [product._id, ...ids.filter((id) => id !== product._id)].slice(0, 8)
+      );
+      setSelectedCartProductId(product._id);
+      window.setTimeout(() => searchRef.current?.focus(), 0);
+
       return;
     }
 
@@ -531,13 +553,39 @@ const POS = () => {
         available,
       },
     ]);
+    setRecentProductIds((ids) =>
+      [product._id, ...ids.filter((id) => id !== product._id)].slice(0, 8)
+    );
+    setSelectedCartProductId(product._id);
+    window.setTimeout(() => searchRef.current?.focus(), 0);
+  };
+
+  const handleProductSearch = (value) => {
+    const scannedValue = value.trim().toLowerCase();
+
+    if (!scannedValue) return;
+
+    const exactProduct = products.find((product) =>
+      [product.barcode, product.sku]
+        .filter(Boolean)
+        .some((code) => code.toLowerCase() === scannedValue)
+    );
+
+    if (exactProduct) {
+      addToCart(exactProduct);
+      setSearch("");
+      window.setTimeout(() => searchRef.current?.focus(), 0);
+      return;
+    }
+
+    message.warning("No product matches that barcode or SKU.");
   };
 
   // =========================
   // QUANTITY
   // =========================
 
-  const updateQuantity = (
+  const applyQuantity = (
     productId,
     quantity
   ) => {
@@ -582,6 +630,23 @@ const POS = () => {
           : item
       )
     );
+  };
+
+  const updateQuantity = (productId, quantity) => {
+    const cartItem = cart.find((item) => item.product === productId);
+    const newQuantity = Number(quantity);
+
+    if (cartItem && newQuantity > 10 && newQuantity > cartItem.quantity) {
+      Modal.confirm({
+        title: "Confirm large quantity",
+        content: `Set ${cartItem.name} to ${newQuantity} units?`,
+        okText: "Confirm quantity",
+        onOk: () => applyQuantity(productId, newQuantity),
+      });
+      return;
+    }
+
+    applyQuantity(productId, newQuantity);
   };
 
   const increaseQuantity = (
@@ -630,6 +695,9 @@ const POS = () => {
         (item) =>
           item.product !== productId
       )
+    );
+    setSelectedCartProductId((selected) =>
+      selected === productId ? null : selected
     );
   };
 
@@ -942,6 +1010,70 @@ const POS = () => {
       },
     });
   };
+
+  const handleDiscountChange = (value) => {
+    const nextDiscount = Number(value) || 0;
+
+    if (subtotal > 0 && nextDiscount > subtotal * 0.1 && nextDiscount > discount) {
+      Modal.confirm({
+        title: "Confirm discount",
+        content: `This discount is over 10% of the sale (₱${subtotal.toLocaleString("en-PH", { minimumFractionDigits: 2 })}).`,
+        okText: "Apply discount",
+        onOk: () => setDiscount(nextDiscount),
+      });
+      return;
+    }
+
+    setDiscount(nextDiscount);
+  };
+
+  const startNewSale = () => {
+    setReceiptOpen(false);
+    setReceipt(null);
+    setSearch("");
+    window.setTimeout(() => searchRef.current?.focus(), 0);
+  };
+
+  useEffect(() => {
+    const isTyping = (target) =>
+      ["INPUT", "TEXTAREA"].includes(target?.tagName) || target?.isContentEditable;
+
+    const handleShortcut = (event) => {
+      if (event.key === "F2") {
+        event.preventDefault();
+        searchRef.current?.focus();
+      }
+
+      if (event.key === "Escape") {
+        setSearch("");
+        setReceiptOpen(false);
+        window.setTimeout(() => searchRef.current?.focus(), 0);
+      }
+
+      if (isTyping(event.target)) return;
+
+      if (event.key === "F4") handlePaymentMethodChange("CASH");
+      if (event.key === "F5") handlePaymentMethodChange("GCASH");
+      if (event.key === "F6") handlePaymentMethodChange("CARD");
+      if (event.key === "F9" && cart.length > 0 && !processing) completeSale();
+
+      if (selectedCartProductId && event.key === "+") {
+        event.preventDefault();
+        increaseQuantity(selectedCartProductId);
+      }
+      if (selectedCartProductId && event.key === "-") {
+        event.preventDefault();
+        decreaseQuantity(selectedCartProductId);
+      }
+      if (selectedCartProductId && event.key === "Delete") {
+        event.preventDefault();
+        removeFromCart(selectedCartProductId);
+      }
+    };
+
+    window.addEventListener("keydown", handleShortcut);
+    return () => window.removeEventListener("keydown", handleShortcut);
+  }, [cart, processing, selectedCartProductId, total]);
 
   // =========================
   // TEST PRINT
@@ -1281,9 +1413,38 @@ const POS = () => {
                   event.target.value
                 )
               }
+              onPressEnter={(event) =>
+                handleProductSearch(event.target.value)
+              }
               allowClear
               autoFocus
             />
+
+            <div className="pos-product-tools">
+              <Select
+                value={selectedCategory}
+                onChange={setSelectedCategory}
+                options={categories.map((category) => ({
+                  value: category,
+                  label: category,
+                }))}
+                aria-label="Filter products by category"
+                className="category-filter"
+              />
+              {recentProductIds.length > 0 && (
+                <div className="recent-products" aria-label="Recently added products">
+                  <HistoryOutlined />
+                  {recentProductIds.slice(0, 4).map((id) => {
+                    const product = products.find((item) => item._id === id);
+                    return product ? (
+                      <Button key={id} size="small" onClick={() => addToCart(product)}>
+                        {product.name}
+                      </Button>
+                    ) : null;
+                  })}
+                </div>
+              )}
+            </div>
 
             <div className="pos-product-count">
 
@@ -1329,6 +1490,8 @@ const POS = () => {
                       hoverable={
                         stock > 0
                       }
+                      role="button"
+                      tabIndex={stock > 0 ? 0 : -1}
                       onClick={() => {
                         if (
                           stock > 0
@@ -1336,6 +1499,12 @@ const POS = () => {
                           addToCart(
                             product
                           );
+                        }
+                      }}
+                      onKeyDown={(event) => {
+                        if (stock > 0 && (event.key === "Enter" || event.key === " ")) {
+                          event.preventDefault();
+                          addToCart(product);
                         }
                       }}
                     >
@@ -1386,7 +1555,7 @@ const POS = () => {
                       <div className="product-bottom">
 
                         <Text type="secondary">
-                          Stock:{" "}
+                          {product.unit ? `Per ${product.unit}` : "Per item"} · Stock:{" "}
                           <strong>
                             {stock}
                           </strong>
@@ -1481,6 +1650,8 @@ const POS = () => {
                   (item) => (
                     <div
                       className="cart-item"
+                      onClick={() => setSelectedCartProductId(item.product)}
+                      data-selected={selectedCartProductId === item.product}
                       key={
                         item.product
                       }
@@ -1636,9 +1807,7 @@ const POS = () => {
                   onChange={(
                     value
                   ) =>
-                    setDiscount(
-                      value || 0
-                    )
+                    handleDiscountChange(value)
                   }
                   size="small"
                   style={{
@@ -1736,6 +1905,20 @@ const POS = () => {
                     }}
                   />
 
+                  {paymentMethod === "CASH" && (
+                    <div className="quick-tender" aria-label="Quick cash amount">
+                      <Button onClick={() => setAmountPaid(total)}>Exact amount</Button>
+                      {[100, 200, 500, 1000].map((amount) => (
+                        <Button
+                          key={amount}
+                          onClick={() => setAmountPaid(amount)}
+                        >
+                          ₱{amount.toLocaleString("en-PH")}
+                        </Button>
+                      ))}
+                    </div>
+                  )}
+
                 </div>
 
                 <div>
@@ -1744,7 +1927,7 @@ const POS = () => {
                     Change
                   </Text>
 
-                  <div className="change-display">
+                  <div className={`change-display ${amountPaid >= total && total > 0 ? "change-ready" : ""}`}>
                     ₱
                     {change.toLocaleString(
                       "en-PH",
@@ -1781,8 +1964,16 @@ const POS = () => {
                 completeSale
               }
             >
-              COMPLETE SALE
+              {cart.length === 0
+                ? "ADD ITEMS TO START"
+                : paymentMethod === "CASH" && amountPaid < total
+                  ? "ENTER SUFFICIENT CASH"
+                  : `PAY ₱${total.toLocaleString("en-PH", { minimumFractionDigits: 2 })}`}
             </Button>
+
+            <Text className="checkout-help" type="secondary">
+              F2 Search · F4 Cash · F5 GCash · F6 Card · F9 Pay
+            </Text>
 
           </Card>
 
@@ -1796,21 +1987,11 @@ const POS = () => {
         title="Sale Completed"
         open={receiptOpen}
         onCancel={() =>
-          setReceiptOpen(false)
+          startNewSale()
         }
         footer={[
           <Button
-            key="close"
-            onClick={() =>
-              setReceiptOpen(false)
-            }
-          >
-            Close
-          </Button>,
-
-          <Button
             key="reprint"
-            type="primary"
             icon={
               <PrinterOutlined />
             }
@@ -1821,7 +2002,15 @@ const POS = () => {
               !printerOnline
             }
           >
-            Reprint Receipt
+            Reprint
+          </Button>,
+
+          <Button
+            key="new-sale"
+            type="primary"
+            onClick={startNewSale}
+          >
+            New Sale
           </Button>,
         ]}
         width={500}
@@ -1829,6 +2018,17 @@ const POS = () => {
 
         {receipt && (
           <div className="receipt">
+
+            {Number(receipt.changeAmount) > 0 && (
+              <div className="receipt-change-hero">
+                <span>CHANGE DUE</span>
+                <strong>
+                  ₱{Number(receipt.changeAmount).toLocaleString("en-PH", {
+                    minimumFractionDigits: 2,
+                  })}
+                </strong>
+              </div>
+            )}
 
             <div className="receipt-header">
 

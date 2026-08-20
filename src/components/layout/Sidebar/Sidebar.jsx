@@ -11,6 +11,7 @@ import {
   HistoryOutlined,
   ShopOutlined,
   FileTextOutlined,
+  LockOutlined,
 } from "@ant-design/icons";
 
 import { Tooltip } from "antd";
@@ -95,6 +96,11 @@ const Sidebar = ({
           key: "/stock-history",
           icon: <HistoryOutlined />,
           label: "Stock History",
+        },
+        {
+          key: "/reservations",
+          icon: <LockOutlined />,
+          label: "Reservations",
         },
         {
           key: "/transfers",

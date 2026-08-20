@@ -177,6 +177,12 @@
   font-size: 14px;
 }
 
+.inventory-reserved {
+  color: #1677ff;
+  font-size: 12px;
+  margin-top: 2px;
+}
+
 /* =========================
    RESPONSIVE
 ========================= */

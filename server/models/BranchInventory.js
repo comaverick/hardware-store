@@ -20,6 +20,12 @@ const branchInventorySchema = new mongoose.Schema(
       min: 0,
     },
 
+    reservedQuantity: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
     reorderLevel: {
       type: Number,
       default: 5,

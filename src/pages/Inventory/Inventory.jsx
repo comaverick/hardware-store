@@ -432,11 +432,16 @@ const Inventory = () => {
       key: "stock",
 
       render: (_, item) => (
-        <strong>
-          {item.quantity}{" "}
-          {item.product?.unit ||
-            "pcs"}
-        </strong>
+        <div>
+          <strong>
+            {item.quantity}{" "}
+            {item.product?.unit ||
+              "pcs"}
+          </strong>
+          <div className="inventory-reserved">
+            {item.reservedQuantity || 0} reserved
+          </div>
+        </div>
       ),
     },
 

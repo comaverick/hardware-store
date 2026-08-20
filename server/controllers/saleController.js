@@ -175,13 +175,17 @@ const createSale = async (
         });
       }
 
+      const availableQuantity =
+        inventory.quantity -
+        (inventory.reservedQuantity || 0);
+
       if (
-        inventory.quantity <
+        availableQuantity <
         quantity
       ) {
         return res.status(400).json({
           message:
-            `Insufficient stock for ${product.name}. Available: ${inventory.quantity}.`,
+            `Insufficient available stock for ${product.name}. Available: ${availableQuantity}.`,
         });
       }
 
