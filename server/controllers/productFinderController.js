@@ -26,7 +26,7 @@ const identificationSchema = {
   additionalProperties: false,
   required: ["identifiedName", "description", "keywords", "shouldRescan", "guidance"],
   properties: {
-    identifiedName: { type: "string" },
+    identifiedName: { type: "string", minLength: 2 },
     description: { type: "string" },
     keywords: { type: "array", items: { type: "string" }, maxItems: 8 },
     shouldRescan: { type: "boolean" },
@@ -97,9 +97,9 @@ const identifyProduct = async (req, res) => {
           content: [
             {
               type: "input_text",
-              text: 'You are guiding a hardware-store cashier who is scanning an unknown item. Identify the item or at least its hardware category from what is visible. Never use generic phrases like "Possible product matches" as a name or description. Use an empty identifiedName only when the item is genuinely too unclear to classify; then set shouldRescan to true and give one specific instruction such as "Move closer to the label", "Rotate the item to show the front", or "Show the size marking". If you recognise the item category, provide its name even if the brand or exact size is uncertain. Never claim the store has stock.',
+              text: 'You are guiding a hardware-store cashier who is scanning an unknown item. Always provide the best visible item name or broad hardware category, even without a label or brand. For example, call visible hand tools "combination pliers", "needle-nose pliers", "adjustable wrench", "claw hammer", or "screwdriver" when appropriate. Never use generic phrases like "Possible product matches", "unknown item", or "cannot identify" as the item name. If the view is not enough to choose an exact type, give the closest broad category and set shouldRescan to true with one specific instruction such as "Rotate the pliers to show the jaws" or "Move closer to the tool head". Never claim the store has stock.',
             },
-            { type: "input_image", image_url: imageData, detail: "low" },
+            { type: "input_image", image_url: imageData, detail: "high" },
           ],
         }],
       }),
@@ -144,12 +144,17 @@ const identifyProduct = async (req, res) => {
         .filter((item) => item.available > 0),
     }));
 
+    const identifiedName = identification.identifiedName || candidates[0]?.product.name || "";
+    const needsAnotherScan = identification.shouldRescan || !identifiedName;
+
     res.json({
-      identifiedName: identification.identifiedName || candidates[0]?.product.name || "",
-      description: identification.description || "Item could not be identified from this view.",
+      identifiedName,
+      description: identification.description || "",
       keywords,
-      guidance: identification.guidance,
-      shouldRescan: identification.shouldRescan,
+      guidance: needsAnotherScan
+        ? identification.guidance || "Move closer and keep the item, label, or size marking in the center of the frame."
+        : identification.guidance,
+      shouldRescan: needsAnotherScan,
       matches,
     });
   } catch (error) {
