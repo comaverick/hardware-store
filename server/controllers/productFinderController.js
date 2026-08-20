@@ -119,7 +119,7 @@ const identifyProduct = async (req, res) => {
     const products = await Product.find({ isActive: true }).populate("category", "name");
     const candidates = products
       .map((product) => ({ product, score: scoreProduct(product, keywords) }))
-      .filter((candidate) => candidate.score > 0)
+      .filter((candidate) => candidate.score >= 3)
       .sort((a, b) => b.score - a.score || a.product.name.localeCompare(b.product.name))
       .slice(0, 5);
 
@@ -168,6 +168,8 @@ const identifyProduct = async (req, res) => {
 };
 
 module.exports = { identifyProduct };
+
+
 
 
 
