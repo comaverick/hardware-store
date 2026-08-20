@@ -1,7 +1,10 @@
 import axios from "axios";
 
 const configuredApiUrl = (
-  process.env.REACT_APP_API_URL || "http://localhost:5000"
+  process.env.REACT_APP_API_URL ||
+  (process.env.NODE_ENV === "production"
+    ? "https://hardware-store-nffe.onrender.com"
+    : "http://localhost:5000")
 ).replace(/\/+$/, "");
 
 const apiBaseUrl = configuredApiUrl.endsWith("/api")

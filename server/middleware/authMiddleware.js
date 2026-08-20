@@ -1,4 +1,4 @@
-﻿const jwt = require("jsonwebtoken");
+const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 const AuditLog = require("../models/AuditLog");
 
@@ -58,6 +58,7 @@ const protect = async (req, res, next) => {
     }
 
     req.user = user;
+    attachAuditLog(req, res);
 
     next();
   } catch (error) {
