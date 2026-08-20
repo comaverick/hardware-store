@@ -64,10 +64,6 @@ const createReservation = async (req, res) => {
       return res.status(400).json({ message: "Branch, product, customer name, and quantity are required." });
     }
 
-    if (req.user.role !== "SUPER_ADMIN" && String(req.user.branch?._id) !== String(branch)) {
-      return res.status(403).json({ message: "You do not have access to this branch." });
-    }
-
     const [branchExists, productExists] = await Promise.all([
       Branch.findOne({ _id: branch, isActive: true }),
       Product.findOne({ _id: product, isActive: true }),

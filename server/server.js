@@ -19,7 +19,7 @@ dotenv.config();
 const app = express();
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "8mb" }));
 
 connectDB();
 
@@ -43,6 +43,7 @@ app.use(
   smartInventoryRoutes
 );
 app.use("/api/reservations", reservationRoutes);
+app.use("/api/product-finder", require("./routes/productFinderRoutes"));
 
 app.get("/", (req, res) => {
   res.json({

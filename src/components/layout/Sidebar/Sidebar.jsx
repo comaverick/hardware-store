@@ -12,6 +12,7 @@ import {
   ShopOutlined,
   FileTextOutlined,
   LockOutlined,
+  CameraOutlined,
 } from "@ant-design/icons";
 
 import { Tooltip } from "antd";
@@ -101,6 +102,11 @@ const Sidebar = ({
           key: "/reservations",
           icon: <LockOutlined />,
           label: "Reservations",
+        },
+        {
+          key: "/product-finder",
+          icon: <CameraOutlined />,
+          label: "AI Product Finder",
         },
         {
           key: "/transfers",
