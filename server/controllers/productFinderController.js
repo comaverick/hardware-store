@@ -139,13 +139,11 @@ const identifyProduct = async (req, res) => {
 
     if (!aiResponse.ok) {
       const error = await aiResponse.json().catch(() => ({}));
-      return res
-        .status(502)
-        .json({
-          message:
-            error.error?.message ||
-            "The image identification service is unavailable.",
-        });
+      return res.status(502).json({
+        message:
+          error.error?.message ||
+          "The image identification service is unavailable.",
+      });
     }
 
     const aiResult = await aiResponse.json();
@@ -200,6 +198,9 @@ const identifyProduct = async (req, res) => {
     const productIds = candidates.map((candidate) => candidate.product._id);
     const inventory = await BranchInventory.find({
       product: { $in: productIds },
+      ...(req.user?.role === "SUPER_ADMIN"
+        ? {}
+        : { branch: req.user?.branch?._id }),
     })
       .populate("branch", "name code")
       .lean();
@@ -245,11 +246,9 @@ const identifyProduct = async (req, res) => {
     });
   } catch (error) {
     console.error("Product finder error:", error);
-    res
-      .status(500)
-      .json({
-        message: "Could not identify the item. Try another clear photo.",
-      });
+    res.status(500).json({
+      message: "Could not identify the item. Try another clear photo.",
+    });
   }
 };
 

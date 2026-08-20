@@ -1,4 +1,4 @@
-const PurchaseOrder = require("../models/PurchaseOrder");
+﻿const PurchaseOrder = require("../models/PurchaseOrder");
 
 const Supplier = require("../models/Supplier");
 
@@ -28,7 +28,9 @@ const generatePONumber = async () => {
 
 const getPurchaseOrders = async (req, res) => {
   try {
-    const orders = await PurchaseOrder.find()
+    const orders = await PurchaseOrder.find(
+      req.user?.role === "SUPER_ADMIN" ? {} : { branch: req.user?.branch?._id },
+    )
       .populate("supplier", "name code")
       .populate("branch", "name code")
       .populate("createdBy", "name email role")
@@ -53,7 +55,12 @@ const getPurchaseOrders = async (req, res) => {
 
 const getPurchaseOrderById = async (req, res) => {
   try {
-    const order = await PurchaseOrder.findById(req.params.id)
+    const order = await PurchaseOrder.findOne({
+      _id: req.params.id,
+      ...(req.user?.role === "SUPER_ADMIN"
+        ? {}
+        : { branch: req.user?.branch?._id }),
+    })
       .populate("supplier", "name code contactPerson phone")
       .populate("branch", "name code")
       .populate("createdBy", "name email role")
@@ -218,8 +225,12 @@ const updatePurchaseOrderStatus = async (req, res) => {
         message: "Invalid status change.",
       });
     }
-
-    const order = await PurchaseOrder.findById(req.params.id);
+    const order = await PurchaseOrder.findOne({
+      _id: req.params.id,
+      ...(req.user?.role === "SUPER_ADMIN"
+        ? {}
+        : { branch: req.user?.branch?._id }),
+    });
 
     if (!order) {
       return res.status(404).json({
@@ -254,8 +265,12 @@ const updatePurchaseOrderStatus = async (req, res) => {
 const receivePurchaseOrder = async (req, res) => {
   try {
     const { items } = req.body;
-
-    const order = await PurchaseOrder.findById(req.params.id);
+    const order = await PurchaseOrder.findOne({
+      _id: req.params.id,
+      ...(req.user?.role === "SUPER_ADMIN"
+        ? {}
+        : { branch: req.user?.branch?._id }),
+    });
 
     if (!order) {
       return res.status(404).json({

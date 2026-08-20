@@ -1,4 +1,4 @@
-const mongoose = require("mongoose");
+﻿const mongoose = require("mongoose");
 
 const Sale = require("../models/Sale");
 
@@ -165,7 +165,7 @@ const createSale = async (req, res) => {
 
     if (paid < totalAmount) {
       return res.status(400).json({
-        message: `Insufficient payment. Total is ₱${totalAmount.toFixed(2)}.`,
+        message: `Insufficient payment. Total is â‚±${totalAmount.toFixed(2)}.`,
       });
     }
 
@@ -294,7 +294,9 @@ const createSale = async (req, res) => {
 
 const getSales = async (req, res) => {
   try {
-    const sales = await Sale.find()
+    const sales = await Sale.find(
+      req.user?.role === "SUPER_ADMIN" ? {} : { branch: req.user?.branch?._id },
+    )
       .populate("branch", "name code")
       .populate("cashier", "name email role")
       .populate("items.product", "name sku barcode unit")
@@ -318,7 +320,12 @@ const getSales = async (req, res) => {
 
 const getSaleById = async (req, res) => {
   try {
-    const sale = await Sale.findById(req.params.id)
+    const sale = await Sale.findOne({
+      _id: req.params.id,
+      ...(req.user?.role === "SUPER_ADMIN"
+        ? {}
+        : { branch: req.user?.branch?._id }),
+    })
       .populate("branch", "name code")
       .populate("cashier", "name email role")
       .populate("items.product", "name sku barcode unit sellingPrice");

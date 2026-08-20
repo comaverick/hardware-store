@@ -1,4 +1,4 @@
-import {
+﻿import {
   DashboardOutlined,
   ShoppingCartOutlined,
   AppstoreOutlined,
@@ -13,6 +13,7 @@ import {
   FileTextOutlined,
   LockOutlined,
   CameraOutlined,
+  AuditOutlined,
 } from "@ant-design/icons";
 
 import { Tooltip } from "antd";
@@ -20,12 +21,14 @@ import { Tooltip } from "antd";
 import { useLocation, useNavigate } from "react-router-dom";
 
 import { useRef } from "react";
+import { useAuth } from "../../../context/AuthContext";
 
 import "./Sidebar.css";
 
 const Sidebar = ({ expanded, setExpanded }) => {
   const navigate = useNavigate();
   const location = useLocation();
+  const { user } = useAuth();
 
   const collapseTimer = useRef(null);
 
@@ -142,6 +145,15 @@ const Sidebar = ({ expanded, setExpanded }) => {
           icon: <BarChartOutlined />,
           label: "Reports",
         },
+        ...(["SUPER_ADMIN", "ADMIN", "MANAGER"].includes(user?.role)
+          ? [
+              {
+                key: "/audit-logs",
+                icon: <AuditOutlined />,
+                label: "Audit Logs",
+              },
+            ]
+          : []),
       ],
     },
   ];

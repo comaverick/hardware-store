@@ -1,0 +1,28 @@
+.audit-page {
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.audit-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 24px;
+}
+
+.audit-header h2 {
+  margin-bottom: 4px;
+}
+
+.audit-actor {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.audit-loading {
+  display: grid;
+  min-height: 180px;
+  place-items: center;
+}

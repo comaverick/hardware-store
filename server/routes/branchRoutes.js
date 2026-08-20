@@ -1,4 +1,5 @@
-const express = require("express");
+﻿const express = require("express");
+const { protect, authorize } = require("../middleware/authMiddleware");
 
 const {
   getBranches,
@@ -8,10 +9,10 @@ const {
 
 const router = express.Router();
 
-router.get("/", getBranches);
+router.get("/", protect, getBranches);
 
-router.get("/:id", getBranch);
+router.get("/:id", protect, getBranch);
 
-router.post("/", createBranch);
+router.post("/", protect, authorize("SUPER_ADMIN"), createBranch);
 
 module.exports = router;

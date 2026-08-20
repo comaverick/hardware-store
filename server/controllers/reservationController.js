@@ -69,11 +69,9 @@ const createReservation = async (req, res) => {
     const reservationQuantity = Number(quantity);
 
     if (!branch || !product || !customerName || reservationQuantity <= 0) {
-      return res
-        .status(400)
-        .json({
-          message: "Branch, product, customer name, and quantity are required.",
-        });
+      return res.status(400).json({
+        message: "Branch, product, customer name, and quantity are required.",
+      });
     }
 
     const [branchExists, productExists] = await Promise.all([

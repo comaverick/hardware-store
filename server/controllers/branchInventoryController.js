@@ -1,11 +1,13 @@
-const BranchInventory = require("../models/BranchInventory");
+﻿const BranchInventory = require("../models/BranchInventory");
 const Product = require("../models/Product");
 const Branch = require("../models/Branch");
 
 // Get inventory for all branches
 const getInventory = async (req, res) => {
   try {
-    const inventory = await BranchInventory.find()
+    const inventory = await BranchInventory.find(
+      req.user?.role === "SUPER_ADMIN" ? {} : { branch: req.user?.branch?._id },
+    )
       .populate("product", "name sku barcode sellingPrice unit")
       .populate("branch", "name code")
       .sort({ createdAt: -1 });
@@ -43,6 +45,9 @@ const getProductInventory = async (req, res) => {
   try {
     const inventory = await BranchInventory.find({
       product: req.params.productId,
+      ...(req.user?.role === "SUPER_ADMIN"
+        ? {}
+        : { branch: req.user?.branch?._id }),
     })
       .populate("branch", "name code")
       .populate("product", "name sku sellingPrice unit");
@@ -112,6 +117,21 @@ const createInventory = async (req, res) => {
 // Update inventory
 const updateInventory = async (req, res) => {
   try {
+    const existingInventory = await BranchInventory.findById(req.params.id);
+
+    if (!existingInventory) {
+      return res.status(404).json({ message: "Inventory record not found" });
+    }
+
+    if (
+      req.user?.role !== "SUPER_ADMIN" &&
+      String(existingInventory.branch) !== String(req.user?.branch?._id)
+    ) {
+      return res
+        .status(403)
+        .json({ message: "You do not have access to this branch." });
+    }
+
     const inventory = await BranchInventory.findByIdAndUpdate(
       req.params.id,
       req.body,

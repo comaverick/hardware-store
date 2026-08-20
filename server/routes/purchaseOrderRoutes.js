@@ -1,4 +1,4 @@
-const express = require("express");
+﻿const express = require("express");
 
 const {
   getPurchaseOrders,
@@ -8,7 +8,7 @@ const {
   receivePurchaseOrder,
 } = require("../controllers/purchaseOrderController");
 
-const { protect } = require("../middleware/authMiddleware");
+const { protect, authorizeBranch } = require("../middleware/authMiddleware");
 
 const router = express.Router();
 
@@ -16,7 +16,7 @@ router.get("/", protect, getPurchaseOrders);
 
 router.get("/:id", protect, getPurchaseOrderById);
 
-router.post("/", protect, createPurchaseOrder);
+router.post("/", protect, authorizeBranch, createPurchaseOrder);
 
 router.put("/:id/status", protect, updatePurchaseOrderStatus);
 

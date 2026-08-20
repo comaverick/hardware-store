@@ -1,4 +1,4 @@
-const InventoryTransaction = require("../models/InventoryTransaction");
+﻿const InventoryTransaction = require("../models/InventoryTransaction");
 
 const Inventory = require("../models/BranchInventory");
 
@@ -8,7 +8,9 @@ const Inventory = require("../models/BranchInventory");
 
 const getTransactions = async (req, res) => {
   try {
-    const transactions = await InventoryTransaction.find()
+    const transactions = await InventoryTransaction.find(
+      req.user?.role === "SUPER_ADMIN" ? {} : { branch: req.user?.branch?._id },
+    )
       .populate("product", "name sku barcode unit")
       .populate("branch", "name code")
       .populate("performedBy", "name email role")
@@ -358,6 +360,9 @@ const getProductTransactions = async (req, res) => {
   try {
     const transactions = await InventoryTransaction.find({
       product: req.params.productId,
+      ...(req.user?.role === "SUPER_ADMIN"
+        ? {}
+        : { branch: req.user?.branch?._id }),
     })
       .populate("product", "name sku barcode unit")
       .populate("branch", "name code")

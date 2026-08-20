@@ -1,5 +1,37 @@
-const jwt = require("jsonwebtoken");
+﻿const jwt = require("jsonwebtoken");
 const User = require("../models/User");
+const AuditLog = require("../models/AuditLog");
+
+const getRequestBranch = (req) =>
+  req.params.branchId ||
+  req.body?.branch ||
+  req.query.branch ||
+  req.user?.branch?._id ||
+  null;
+
+const attachAuditLog = (req, res) => {
+  if (
+    ["GET", "HEAD", "OPTIONS"].includes(req.method) ||
+    req.path === "/audit-logs"
+  )
+    return;
+
+  res.once("finish", () => {
+    const bodyKeys = Object.keys(req.body || {}).filter(
+      (key) => !["password", "token", "imageData"].includes(key),
+    );
+
+    AuditLog.create({
+      actor: req.user._id,
+      action: `${req.method} ${req.baseUrl}${req.path}`,
+      method: req.method,
+      path: `${req.baseUrl}${req.path}`,
+      statusCode: res.statusCode,
+      branch: getRequestBranch(req),
+      metadata: { bodyKeys, params: req.params, query: req.query },
+    }).catch((error) => console.error("Audit log error:", error.message));
+  });
+};
 
 const protect = async (req, res, next) => {
   try {

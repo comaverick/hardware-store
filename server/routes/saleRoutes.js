@@ -1,4 +1,4 @@
-const express = require("express");
+﻿const express = require("express");
 
 const {
   createSale,
@@ -6,7 +6,7 @@ const {
   getSaleById,
 } = require("../controllers/saleController");
 
-const { protect } = require("../middleware/authMiddleware");
+const { protect, authorizeBranch } = require("../middleware/authMiddleware");
 
 const router = express.Router();
 
@@ -17,6 +17,6 @@ router.get("/", protect, getSales);
 router.get("/:id", protect, getSaleById);
 
 // Complete POS sale
-router.post("/", protect, createSale);
+router.post("/", protect, authorizeBranch, createSale);
 
 module.exports = router;

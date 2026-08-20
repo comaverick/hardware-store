@@ -1,4 +1,4 @@
-const express = require("express");
+﻿const express = require("express");
 
 const {
   getTransactions,
@@ -9,7 +9,7 @@ const {
   transferStock,
 } = require("../controllers/inventoryTransactionController");
 
-const { protect } = require("../middleware/authMiddleware");
+const { protect, authorizeBranch } = require("../middleware/authMiddleware");
 
 const router = express.Router();
 
@@ -21,7 +21,12 @@ router.get("/", protect, getTransactions);
 
 router.get("/product/:productId", protect, getProductTransactions);
 
-router.get("/branch/:branchId", protect, getBranchTransactions);
+router.get(
+  "/branch/:branchId",
+  protect,
+  authorizeBranch,
+  getBranchTransactions,
+);
 
 // =========================
 // STOCK ACTIONS
