@@ -180,8 +180,7 @@ const Suppliers = () => {
   const handleDeactivate = (supplier) => {
     Modal.confirm({
       title: "Deactivate this supplier?",
-      content:
-        `${supplier.name} will no longer ` + "be available for new purchases.",
+      content: `${supplier.name} will no longer be available for new purchases.`,
 
       okText: "Deactivate",
       okType: "danger",
@@ -241,7 +240,7 @@ const Suppliers = () => {
       title: "Contact Person",
       dataIndex: "contactPerson",
 
-      render: (value) => value || "—",
+      render: (value) => value || "â€”",
     },
 
     {

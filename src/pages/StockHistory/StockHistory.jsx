@@ -15,7 +15,6 @@ import {
   Input,
   Row,
   Select,
-  Space,
   Statistic,
   Table,
   Tag,
@@ -314,7 +313,7 @@ const StockHistory = () => {
         <div className="stock-change">
           <Text type="secondary">{transaction.previousQuantity}</Text>
 
-          <span>→</span>
+          <span>â†’</span>
 
           <strong>{transaction.newQuantity}</strong>
         </div>
@@ -325,7 +324,7 @@ const StockHistory = () => {
       title: "Reason",
       key: "reason",
 
-      render: (_, transaction) => <Text>{transaction.reason || "—"}</Text>,
+      render: (_, transaction) => <Text>{transaction.reason || "â€”"}</Text>,
     },
 
     {
@@ -336,7 +335,7 @@ const StockHistory = () => {
         transaction.reference ? (
           <Tag>{transaction.reference}</Tag>
         ) : (
-          <Text type="secondary">—</Text>
+          <Text type="secondary">â€”</Text>
         ),
     },
 

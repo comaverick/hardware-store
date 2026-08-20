@@ -1,0 +1,42 @@
+.user-management-page {
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.user-management-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 24px;
+}
+
+.user-management-header h2 {
+  margin-bottom: 4px;
+}
+
+.user-account-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.user-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.user-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  width: 100%;
+}
+
+@media (max-width: 600px) {
+  .user-management-header,
+  .user-form-grid {
+    grid-template-columns: 1fr;
+    flex-direction: column;
+  }
+}

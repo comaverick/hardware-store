@@ -9,9 +9,8 @@ import {
   CheckOutlined,
   ExclamationCircleOutlined,
   InboxOutlined,
-  RiseOutlined,
-  ShopOutlined,
   ShoppingCartOutlined,
+  ShopOutlined,
   ThunderboltOutlined,
   WarningOutlined,
   DownOutlined,
@@ -576,11 +575,11 @@ const Dashboard = () => {
               <div className="kpi-top">
                 <span className="kpi-label">Today's Sales</span>
 
-                <span className="kpi-icon sales">₱</span>
+                <span className="kpi-icon sales">â‚±</span>
               </div>
 
               <div className="kpi-value">
-                ₱
+                â‚±
                 {todaySalesAmount.toLocaleString(undefined, {
                   minimumFractionDigits: 2,
                 })}
@@ -720,7 +719,7 @@ const Dashboard = () => {
               <span>SALES</span>
 
               <strong>
-                ₱
+                â‚±
                 {periodSalesTotal.toLocaleString(undefined, {
                   minimumFractionDigits: 2,
                 })}
@@ -781,8 +780,8 @@ const Dashboard = () => {
                   }}
                   tickFormatter={(value) =>
                     value >= 1000
-                      ? `₱${(value / 1000).toFixed(0)}k`
-                      : `₱${value}`
+                      ? `â‚±${(value / 1000).toFixed(0)}k`
+                      : `â‚±${value}`
                   }
                   width={45}
                 />
@@ -798,7 +797,7 @@ const Dashboard = () => {
                   }}
                   formatter={(value, name) => [
                     name === "sales"
-                      ? `₱${Number(value).toLocaleString(undefined, {
+                      ? `â‚±${Number(value).toLocaleString(undefined, {
                           minimumFractionDigits: 2,
                         })}`
                       : value,
@@ -966,7 +965,7 @@ const Dashboard = () => {
                   <div className="sale-branch">{sale.branch?.code}</div>
 
                   <strong className="sale-amount">
-                    ₱
+                    â‚±
                     {Number(sale.totalAmount || 0).toLocaleString(undefined, {
                       minimumFractionDigits: 2,
                     })}
@@ -1002,7 +1001,7 @@ const Dashboard = () => {
                     <strong>{branch.name}</strong>
 
                     <span>
-                      {branch.code} · {branch.stock.toLocaleString()} units
+                      {branch.code} Â· {branch.stock.toLocaleString()} units
                     </span>
                   </div>
 

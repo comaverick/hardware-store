@@ -1,4 +1,4 @@
-﻿import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route } from "react-router-dom";
 
 import { AuthProvider } from "./context/AuthContext";
 
@@ -18,6 +18,7 @@ import POS from "./pages/POS/POS";
 import Reservations from "./pages/Reservations/Reservations";
 import ProductFinder from "./pages/ProductFinder/ProductFinder";
 import AuditLogs from "./pages/AuditLogs/AuditLogs";
+import UserManagement from "./pages/UserManagement/UserManagement";
 import ComingSoon from "./pages/ComingSoon";
 
 function App() {
@@ -83,6 +84,16 @@ function App() {
               <ProtectedRoute>
                 <AppLayout>
                   <ProductFinder />
+                </AppLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/user-management"
+            element={
+              <ProtectedRoute>
+                <AppLayout>
+                  <UserManagement />
                 </AppLayout>
               </ProtectedRoute>
             }

@@ -1,4 +1,4 @@
-﻿import {
+import {
   DashboardOutlined,
   ShoppingCartOutlined,
   AppstoreOutlined,
@@ -151,6 +151,15 @@ const Sidebar = ({ expanded, setExpanded }) => {
                 key: "/audit-logs",
                 icon: <AuditOutlined />,
                 label: "Audit Logs",
+              },
+            ]
+          : []),
+        ...(["SUPER_ADMIN"].includes(user?.role)
+          ? [
+              {
+                key: "/user-management",
+                icon: <TeamOutlined />,
+                label: "User Management",
               },
             ]
           : []),

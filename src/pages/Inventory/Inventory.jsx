@@ -4,9 +4,7 @@ import {
   AppstoreOutlined,
   ArrowRightOutlined,
   InboxOutlined,
-  PlusOutlined,
   SearchOutlined,
-  ShopOutlined,
   SwapOutlined,
   WarningOutlined,
   HistoryOutlined,
@@ -424,7 +422,7 @@ const Inventory = () => {
       dataIndex: "reason",
       key: "reason",
 
-      render: (value) => value || "—",
+      render: (value) => value || "â€”",
     },
 
     {
@@ -432,7 +430,7 @@ const Inventory = () => {
       dataIndex: "reference",
       key: "reference",
 
-      render: (value) => value || "—",
+      render: (value) => value || "â€”",
     },
   ];
 
