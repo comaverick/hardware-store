@@ -33,26 +33,19 @@ import "./Suppliers.css";
 const { Title, Text } = Typography;
 
 const Suppliers = () => {
-  const [suppliers, setSuppliers] =
-    useState([]);
+  const [suppliers, setSuppliers] = useState([]);
 
-  const [loading, setLoading] =
-    useState(true);
+  const [loading, setLoading] = useState(true);
 
-  const [saving, setSaving] =
-    useState(false);
+  const [saving, setSaving] = useState(false);
 
-  const [search, setSearch] =
-    useState("");
+  const [search, setSearch] = useState("");
 
-  const [statusFilter, setStatusFilter] =
-    useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
 
-  const [modalOpen, setModalOpen] =
-    useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
 
-  const [editingSupplier, setEditingSupplier] =
-    useState(null);
+  const [editingSupplier, setEditingSupplier] = useState(null);
 
   const [form] = Form.useForm();
 
@@ -64,17 +57,14 @@ const Suppliers = () => {
     try {
       setLoading(true);
 
-      const response = await api.get(
-        "/suppliers"
-      );
+      const response = await api.get("/suppliers");
 
       setSuppliers(response.data);
     } catch (error) {
       console.error(error);
 
       message.error(
-        error.response?.data?.message ||
-          "Failed to load suppliers."
+        error.response?.data?.message || "Failed to load suppliers.",
       );
     } finally {
       setLoading(false);
@@ -90,45 +80,23 @@ const Suppliers = () => {
   // =========================
 
   const filteredSuppliers = useMemo(() => {
-    return suppliers.filter(
-      (supplier) => {
-        const value =
-          search
-            .toLowerCase()
-            .trim();
+    return suppliers.filter((supplier) => {
+      const value = search.toLowerCase().trim();
 
-        const matchesSearch =
-          !value ||
-          supplier.name
-            ?.toLowerCase()
-            .includes(value) ||
-          supplier.code
-            ?.toLowerCase()
-            .includes(value) ||
-          supplier.contactPerson
-            ?.toLowerCase()
-            .includes(value) ||
-          supplier.email
-            ?.toLowerCase()
-            .includes(value);
+      const matchesSearch =
+        !value ||
+        supplier.name?.toLowerCase().includes(value) ||
+        supplier.code?.toLowerCase().includes(value) ||
+        supplier.contactPerson?.toLowerCase().includes(value) ||
+        supplier.email?.toLowerCase().includes(value);
 
-        const matchesStatus =
-          statusFilter === "all" ||
-          (statusFilter === "active"
-            ? supplier.isActive
-            : !supplier.isActive);
+      const matchesStatus =
+        statusFilter === "all" ||
+        (statusFilter === "active" ? supplier.isActive : !supplier.isActive);
 
-        return (
-          matchesSearch &&
-          matchesStatus
-        );
-      }
-    );
-  }, [
-    suppliers,
-    search,
-    statusFilter,
-  ]);
+      return matchesSearch && matchesStatus;
+    });
+  }, [suppliers, search, statusFilter]);
 
   // =========================
   // MODAL
@@ -152,13 +120,11 @@ const Suppliers = () => {
     form.setFieldsValue({
       name: supplier.name,
       code: supplier.code,
-      contactPerson:
-        supplier.contactPerson,
+      contactPerson: supplier.contactPerson,
       email: supplier.email,
       phone: supplier.phone,
       address: supplier.address,
-      paymentTerms:
-        supplier.paymentTerms,
+      paymentTerms: supplier.paymentTerms,
       notes: supplier.notes,
     });
 
@@ -184,23 +150,13 @@ const Suppliers = () => {
       setSaving(true);
 
       if (editingSupplier) {
-        await api.put(
-          `/suppliers/${editingSupplier._id}`,
-          values
-        );
+        await api.put(`/suppliers/${editingSupplier._id}`, values);
 
-        message.success(
-          "Supplier updated successfully."
-        );
+        message.success("Supplier updated successfully.");
       } else {
-        await api.post(
-          "/suppliers",
-          values
-        );
+        await api.post("/suppliers", values);
 
-        message.success(
-          "Supplier added successfully."
-        );
+        message.success("Supplier added successfully.");
       }
 
       closeModal();
@@ -210,8 +166,7 @@ const Suppliers = () => {
       console.error(error);
 
       message.error(
-        error.response?.data?.message ||
-          "Failed to save supplier."
+        error.response?.data?.message || "Failed to save supplier.",
       );
     } finally {
       setSaving(false);
@@ -222,15 +177,11 @@ const Suppliers = () => {
   // DEACTIVATE
   // =========================
 
-  const handleDeactivate = (
-    supplier
-  ) => {
+  const handleDeactivate = (supplier) => {
     Modal.confirm({
-      title:
-        "Deactivate this supplier?",
+      title: "Deactivate this supplier?",
       content:
-        `${supplier.name} will no longer ` +
-        "be available for new purchases.",
+        `${supplier.name} will no longer ` + "be available for new purchases.",
 
       okText: "Deactivate",
       okType: "danger",
@@ -238,22 +189,16 @@ const Suppliers = () => {
 
       onOk: async () => {
         try {
-          await api.delete(
-            `/suppliers/${supplier._id}`
-          );
+          await api.delete(`/suppliers/${supplier._id}`);
 
-          message.success(
-            "Supplier deactivated."
-          );
+          message.success("Supplier deactivated.");
 
           await fetchSuppliers();
         } catch (error) {
           console.error(error);
 
           message.error(
-            error.response?.data
-              ?.message ||
-              "Failed to deactivate supplier."
+            error.response?.data?.message || "Failed to deactivate supplier.",
           );
         }
       },
@@ -264,15 +209,9 @@ const Suppliers = () => {
   // STATISTICS
   // =========================
 
-  const activeCount =
-    suppliers.filter(
-      (supplier) =>
-        supplier.isActive
-    ).length;
+  const activeCount = suppliers.filter((supplier) => supplier.isActive).length;
 
-  const inactiveCount =
-    suppliers.length -
-    activeCount;
+  const inactiveCount = suppliers.length - activeCount;
 
   // =========================
   // TABLE
@@ -285,32 +224,24 @@ const Suppliers = () => {
 
       render: (_, supplier) => (
         <div className="supplier-cell">
-
           <div className="supplier-icon">
             <ShopOutlined />
           </div>
 
           <div>
-            <div className="supplier-name">
-              {supplier.name}
-            </div>
+            <div className="supplier-name">{supplier.name}</div>
 
-            <Text type="secondary">
-              {supplier.code}
-            </Text>
+            <Text type="secondary">{supplier.code}</Text>
           </div>
-
         </div>
       ),
     },
 
     {
       title: "Contact Person",
-      dataIndex:
-        "contactPerson",
+      dataIndex: "contactPerson",
 
-      render: (value) =>
-        value || "—",
+      render: (value) => value || "—",
     },
 
     {
@@ -319,47 +250,29 @@ const Suppliers = () => {
 
       render: (_, supplier) => (
         <div className="supplier-contact">
+          <div>{supplier.phone || "No phone"}</div>
 
-          <div>
-            {supplier.phone ||
-              "No phone"}
-          </div>
-
-          <Text type="secondary">
-            {supplier.email ||
-              "No email"}
-          </Text>
-
+          <Text type="secondary">{supplier.email || "No email"}</Text>
         </div>
       ),
     },
 
     {
       title: "Payment Terms",
-      dataIndex:
-        "paymentTerms",
+      dataIndex: "paymentTerms",
 
-      render: (value) => (
-        <Tag>
-          {value || "Cash"}
-        </Tag>
-      ),
+      render: (value) => <Tag>{value || "Cash"}</Tag>,
     },
 
     {
       title: "Status",
-      dataIndex:
-        "isActive",
+      dataIndex: "isActive",
 
       render: (active) =>
         active ? (
-          <Tag color="green">
-            Active
-          </Tag>
+          <Tag color="green">Active</Tag>
         ) : (
-          <Tag color="red">
-            Inactive
-          </Tag>
+          <Tag color="red">Inactive</Tag>
         ),
     },
 
@@ -369,17 +282,10 @@ const Suppliers = () => {
 
       render: (_, supplier) => (
         <Space>
-
           <Button
             type="text"
-            icon={
-              <EditOutlined />
-            }
-            onClick={() =>
-              openEditModal(
-                supplier
-              )
-            }
+            icon={<EditOutlined />}
+            onClick={() => openEditModal(supplier)}
           >
             Edit
           </Button>
@@ -388,19 +294,12 @@ const Suppliers = () => {
             <Button
               type="text"
               danger
-              icon={
-                <DeleteOutlined />
-              }
-              onClick={() =>
-                handleDeactivate(
-                  supplier
-                )
-              }
+              icon={<DeleteOutlined />}
+              onClick={() => handleDeactivate(supplier)}
             >
               Deactivate
             </Button>
           )}
-
         </Space>
       ),
     },
@@ -408,20 +307,13 @@ const Suppliers = () => {
 
   return (
     <div className="suppliers-page">
-
       {/* HEADER */}
 
       <div className="suppliers-header">
-
         <div>
-          <Title level={2}>
-            Suppliers
-          </Title>
+          <Title level={2}>Suppliers</Title>
 
-          <Text type="secondary">
-            Manage suppliers and
-            purchasing partners
-          </Text>
+          <Text type="secondary">Manage suppliers and purchasing partners</Text>
         </div>
 
         <Button
@@ -432,90 +324,46 @@ const Suppliers = () => {
         >
           Add Supplier
         </Button>
-
       </div>
 
       {/* STATISTICS */}
 
-      <Row
-        gutter={[16, 16]}
-        className="supplier-stats"
-      >
-
-        <Col
-          xs={24}
-          sm={8}
-        >
+      <Row gutter={[16, 16]} className="supplier-stats">
+        <Col xs={24} sm={8}>
           <Card className="supplier-stat-card">
-
-            <Statistic
-              title="Total Suppliers"
-              value={suppliers.length}
-            />
-
+            <Statistic title="Total Suppliers" value={suppliers.length} />
           </Card>
         </Col>
 
-        <Col
-          xs={24}
-          sm={8}
-        >
+        <Col xs={24} sm={8}>
           <Card className="supplier-stat-card">
-
-            <Statistic
-              title="Active Suppliers"
-              value={activeCount}
-            />
-
+            <Statistic title="Active Suppliers" value={activeCount} />
           </Card>
         </Col>
 
-        <Col
-          xs={24}
-          sm={8}
-        >
+        <Col xs={24} sm={8}>
           <Card className="supplier-stat-card">
-
-            <Statistic
-              title="Inactive Suppliers"
-              value={inactiveCount}
-            />
-
+            <Statistic title="Inactive Suppliers" value={inactiveCount} />
           </Card>
         </Col>
-
       </Row>
 
       {/* FILTERS */}
 
       <Card className="supplier-filter-card">
-
         <Row gutter={[12, 12]}>
-
-          <Col
-            xs={24}
-            md={17}
-          >
+          <Col xs={24} md={17}>
             <Input
               size="large"
-              prefix={
-                <SearchOutlined />
-              }
+              prefix={<SearchOutlined />}
               placeholder="Search supplier, code, contact, or email..."
               value={search}
-              onChange={(event) =>
-                setSearch(
-                  event.target.value
-                )
-              }
+              onChange={(event) => setSearch(event.target.value)}
               allowClear
             />
           </Col>
 
-          <Col
-            xs={24}
-            md={7}
-          >
+          <Col xs={24} md={7}>
             <Select
               size="large"
               value={statusFilter}
@@ -524,78 +372,48 @@ const Suppliers = () => {
                 width: "100%",
               }}
             >
+              <Select.Option value="all">All Suppliers</Select.Option>
 
-              <Select.Option value="all">
-                All Suppliers
-              </Select.Option>
+              <Select.Option value="active">Active</Select.Option>
 
-              <Select.Option value="active">
-                Active
-              </Select.Option>
-
-              <Select.Option value="inactive">
-                Inactive
-              </Select.Option>
-
+              <Select.Option value="inactive">Inactive</Select.Option>
             </Select>
           </Col>
-
         </Row>
-
       </Card>
 
       {/* TABLE */}
 
       <Card className="supplier-table-card">
-
         <Table
           columns={columns}
-          dataSource={
-            filteredSuppliers
-          }
+          dataSource={filteredSuppliers}
           rowKey="_id"
           loading={loading}
           pagination={{
             pageSize: 10,
             showSizeChanger: true,
 
-            showTotal: (total) =>
-              `${total} suppliers`,
+            showTotal: (total) => `${total} suppliers`,
           }}
           locale={{
-            emptyText: (
-              <Empty
-                description="No suppliers found"
-              />
-            ),
+            emptyText: <Empty description="No suppliers found" />,
           }}
         />
-
       </Card>
 
       {/* ADD / EDIT MODAL */}
 
       <Modal
-        title={
-          editingSupplier
-            ? "Edit Supplier"
-            : "Add Supplier"
-        }
+        title={editingSupplier ? "Edit Supplier" : "Add Supplier"}
         open={modalOpen}
         onCancel={closeModal}
         footer={null}
         width={650}
         destroyOnClose
       >
-
-        <Form
-          form={form}
-          layout="vertical"
-          onFinish={handleSubmit}
-        >
-
+        <Form form={form} layout="vertical" onFinish={handleSubmit}>
           <Row gutter={16}>
-
             <Col span={16}>
               <Form.Item
                 label="Supplier Name"
@@ -603,15 +421,11 @@ const Suppliers = () => {
                 rules={[
                   {
                     required: true,
-                    message:
-                      "Enter supplier name.",
+                    message: "Enter supplier name.",
                   },
                 ]}
               >
-                <Input
-                  size="large"
-                  placeholder="ABC Hardware Supply"
-                />
+                <Input size="large" placeholder="ABC Hardware Supply" />
               </Form.Item>
             </Col>
 
@@ -622,35 +436,24 @@ const Suppliers = () => {
                 rules={[
                   {
                     required: true,
-                    message:
-                      "Enter supplier code.",
+                    message: "Enter supplier code.",
                   },
                 ]}
               >
                 <Input
                   size="large"
                   placeholder="SUP-001"
-                  disabled={
-                    !!editingSupplier
-                  }
+                  disabled={!!editingSupplier}
                 />
               </Form.Item>
             </Col>
-
           </Row>
 
-          <Form.Item
-            label="Contact Person"
-            name="contactPerson"
-          >
-            <Input
-              size="large"
-              placeholder="Juan Dela Cruz"
-            />
+          <Form.Item label="Contact Person" name="contactPerson">
+            <Input size="large" placeholder="Juan Dela Cruz" />
           </Form.Item>
 
           <Row gutter={16}>
-
             <Col span={12}>
               <Form.Item
                 label="Email"
@@ -658,75 +461,40 @@ const Suppliers = () => {
                 rules={[
                   {
                     type: "email",
-                    message:
-                      "Enter a valid email.",
+                    message: "Enter a valid email.",
                   },
                 ]}
               >
-                <Input
-                  size="large"
-                  placeholder="supplier@example.com"
-                />
+                <Input size="large" placeholder="supplier@example.com" />
               </Form.Item>
             </Col>
 
             <Col span={12}>
-              <Form.Item
-                label="Phone"
-                name="phone"
-              >
-                <Input
-                  size="large"
-                  placeholder="09171234567"
-                />
+              <Form.Item label="Phone" name="phone">
+                <Input size="large" placeholder="09171234567" />
               </Form.Item>
             </Col>
-
           </Row>
 
-          <Form.Item
-            label="Address"
-            name="address"
-          >
-            <Input.TextArea
-              rows={3}
-              placeholder="Supplier address"
-            />
+          <Form.Item label="Address" name="address">
+            <Input.TextArea rows={3} placeholder="Supplier address" />
           </Form.Item>
 
-          <Form.Item
-            label="Payment Terms"
-            name="paymentTerms"
-          >
+          <Form.Item label="Payment Terms" name="paymentTerms">
             <Select size="large">
+              <Select.Option value="Cash">Cash</Select.Option>
 
-              <Select.Option value="Cash">
-                Cash
-              </Select.Option>
+              <Select.Option value="15 Days">15 Days</Select.Option>
 
-              <Select.Option value="15 Days">
-                15 Days
-              </Select.Option>
+              <Select.Option value="30 Days">30 Days</Select.Option>
 
-              <Select.Option value="30 Days">
-                30 Days
-              </Select.Option>
+              <Select.Option value="45 Days">45 Days</Select.Option>
 
-              <Select.Option value="45 Days">
-                45 Days
-              </Select.Option>
-
-              <Select.Option value="60 Days">
-                60 Days
-              </Select.Option>
-
+              <Select.Option value="60 Days">60 Days</Select.Option>
             </Select>
           </Form.Item>
 
-          <Form.Item
-            label="Notes"
-            name="notes"
-          >
+          <Form.Item label="Notes" name="notes">
             <Input.TextArea
               rows={3}
               placeholder="Additional supplier notes..."
@@ -734,30 +502,16 @@ const Suppliers = () => {
           </Form.Item>
 
           <div className="supplier-modal-footer">
-
-            <Button
-              onClick={closeModal}
-              disabled={saving}
-            >
+            <Button onClick={closeModal} disabled={saving}>
               Cancel
             </Button>
 
-            <Button
-              type="primary"
-              htmlType="submit"
-              loading={saving}
-            >
-              {editingSupplier
-                ? "Save Changes"
-                : "Add Supplier"}
+            <Button type="primary" htmlType="submit" loading={saving}>
+              {editingSupplier ? "Save Changes" : "Add Supplier"}
             </Button>
-
           </div>
-
         </Form>
-
       </Modal>
-
     </div>
   );
 };

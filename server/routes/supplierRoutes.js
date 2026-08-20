@@ -6,44 +6,20 @@ const {
   createSupplier,
   updateSupplier,
   deleteSupplier,
-} = require(
-  "../controllers/supplierController"
-);
+} = require("../controllers/supplierController");
 
-const {
-  protect,
-} = require("../middleware/authMiddleware");
+const { protect } = require("../middleware/authMiddleware");
 
 const router = express.Router();
 
-router.get(
-  "/",
-  protect,
-  getSuppliers
-);
+router.get("/", protect, getSuppliers);
 
-router.get(
-  "/:id",
-  protect,
-  getSupplierById
-);
+router.get("/:id", protect, getSupplierById);
 
-router.post(
-  "/",
-  protect,
-  createSupplier
-);
+router.post("/", protect, createSupplier);
 
-router.put(
-  "/:id",
-  protect,
-  updateSupplier
-);
+router.put("/:id", protect, updateSupplier);
 
-router.delete(
-  "/:id",
-  protect,
-  deleteSupplier
-);
+router.delete("/:id", protect, deleteSupplier);
 
 module.exports = router;

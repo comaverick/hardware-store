@@ -4,7 +4,6 @@
   background: #f5f5f7;
 }
 
-
 /* ========================================
    MAIN CONTENT
 ======================================== */
@@ -16,16 +15,8 @@
 
   padding: 96px 32px 32px;
 
-  transition:
-    margin-left 0.22s
-    cubic-bezier(
-      0.4,
-      0,
-      0.2,
-      1
-    );
+  transition: margin-left 0.22s cubic-bezier(0.4, 0, 0.2, 1);
 }
-
 
 /* ========================================
    SIDEBAR COLLAPSED
@@ -35,7 +26,6 @@
   margin-left: 72px;
 }
 
-
 /* ========================================
    SIDEBAR EXPANDED
 ======================================== */
@@ -44,16 +34,12 @@
   margin-left: 250px;
 }
 
-
 /* ========================================
    RESPONSIVE
 ======================================== */
 
 @media (max-width: 768px) {
   .app-content {
-    padding:
-      88px
-      20px
-      24px;
+    padding: 88px 20px 24px;
   }
 }

@@ -35,24 +35,19 @@
 }
 
 .inventory-stat-card {
-  border: 1px solid
-    rgba(0, 0, 0, 0.06);
+  border: 1px solid rgba(0, 0, 0, 0.06);
 
   border-radius: 16px;
 
-  box-shadow:
-    0 4px 16px
-      rgba(0, 0, 0, 0.04);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.04);
 }
 
-.inventory-stat-card
-  .ant-card-body {
+.inventory-stat-card .ant-card-body {
   padding: 20px;
 }
 
 .inventory-warning {
-  border-color:
-    rgba(255, 59, 48, 0.15);
+  border-color: rgba(255, 59, 48, 0.15);
 }
 
 /* =========================
@@ -62,14 +57,11 @@
 .inventory-filter-card {
   margin-bottom: 20px;
 
-  border: 1px solid
-    rgba(0, 0, 0, 0.06);
+  border: 1px solid rgba(0, 0, 0, 0.06);
 
   border-radius: 16px;
 
-  box-shadow:
-    0 4px 16px
-      rgba(0, 0, 0, 0.04);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.04);
 }
 
 /* =========================
@@ -77,14 +69,11 @@
 ========================= */
 
 .inventory-table-card {
-  border: 1px solid
-    rgba(0, 0, 0, 0.06);
+  border: 1px solid rgba(0, 0, 0, 0.06);
 
   border-radius: 16px;
 
-  box-shadow:
-    0 4px 16px
-      rgba(0, 0, 0, 0.04);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.04);
 }
 
 .inventory-table-header {
@@ -95,22 +84,15 @@
   margin: 0 0 4px;
 }
 
-.inventory-table-card
-  .ant-table {
+.inventory-table-card .ant-table {
   background: transparent;
 }
 
-.inventory-table-card
-  .ant-table-thead
-  > tr
-  > th {
+.inventory-table-card .ant-table-thead > tr > th {
   background: #fafafa;
 }
 
-.inventory-table-card
-  .ant-table-tbody
-  > tr
-  > td {
+.inventory-table-card .ant-table-tbody > tr > td {
   padding-top: 16px;
   padding-bottom: 16px;
 }
@@ -208,8 +190,7 @@
   padding-top: 20px;
   margin-top: 10px;
 
-  border-top: 1px solid
-    rgba(0, 0, 0, 0.06);
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
 }
 
 .transfer-arrow {

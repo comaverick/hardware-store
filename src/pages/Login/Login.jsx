@@ -1,17 +1,7 @@
 import { useState } from "react";
-import {
-  Button,
-  Card,
-  Form,
-  Input,
-  Typography,
-  message,
-} from "antd";
+import { Button, Card, Form, Input, Typography, message } from "antd";
 
-import {
-  LockOutlined,
-  MailOutlined,
-} from "@ant-design/icons";
+import { LockOutlined, MailOutlined } from "@ant-design/icons";
 
 import { useNavigate } from "react-router-dom";
 
@@ -33,24 +23,15 @@ const Login = () => {
     try {
       setLoading(true);
 
-      const response = await api.post(
-        "/auth/login",
-        values
-      );
+      const response = await api.post("/auth/login", values);
 
-      login(
-        response.data.token,
-        response.data.user
-      );
+      login(response.data.token, response.data.user);
 
       message.success("Welcome back!");
 
       navigate("/dashboard");
     } catch (error) {
-      message.error(
-        error.response?.data?.message ||
-          "Login failed"
-      );
+      message.error(error.response?.data?.message || "Login failed");
     } finally {
       setLoading(false);
     }
@@ -60,39 +41,25 @@ const Login = () => {
     <div className="login-page">
       <Card className="login-card">
         <div className="login-header">
-          <div className="brand-mark">
-            H
-          </div>
+          <div className="brand-mark">H</div>
 
-          <Title level={2}>
-            Hardware Store
-          </Title>
+          <Title level={2}>Hardware Store</Title>
 
-          <Text type="secondary">
-            Store Management System
-          </Text>
+          <Text type="secondary">Store Management System</Text>
         </div>
 
-        <Form
-          layout="vertical"
-          size="large"
-          onFinish={handleLogin}
-        >
+        <Form layout="vertical" size="large" onFinish={handleLogin}>
           <Form.Item
             label="Email"
             name="email"
             rules={[
               {
                 required: true,
-                message:
-                  "Please enter your email",
+                message: "Please enter your email",
               },
             ]}
           >
-            <Input
-              prefix={<MailOutlined />}
-              placeholder="Email"
-            />
+            <Input prefix={<MailOutlined />} placeholder="Email" />
           </Form.Item>
 
           <Form.Item
@@ -101,23 +68,14 @@ const Login = () => {
             rules={[
               {
                 required: true,
-                message:
-                  "Please enter your password",
+                message: "Please enter your password",
               },
             ]}
           >
-            <Input.Password
-              prefix={<LockOutlined />}
-              placeholder="Password"
-            />
+            <Input.Password prefix={<LockOutlined />} placeholder="Password" />
           </Form.Item>
 
-          <Button
-            type="primary"
-            htmlType="submit"
-            block
-            loading={loading}
-          >
+          <Button type="primary" htmlType="submit" block loading={loading}>
             Sign In
           </Button>
         </Form>

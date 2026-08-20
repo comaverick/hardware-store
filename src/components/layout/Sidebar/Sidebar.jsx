@@ -17,24 +17,17 @@ import {
 
 import { Tooltip } from "antd";
 
-import {
-  useLocation,
-  useNavigate,
-} from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 
 import { useRef } from "react";
 
 import "./Sidebar.css";
 
-const Sidebar = ({
-  expanded,
-  setExpanded,
-}) => {
+const Sidebar = ({ expanded, setExpanded }) => {
   const navigate = useNavigate();
   const location = useLocation();
 
-  const collapseTimer =
-    useRef(null);
+  const collapseTimer = useRef(null);
 
   // ========================================
   // HOVER
@@ -42,19 +35,16 @@ const Sidebar = ({
 
   const handleMouseEnter = () => {
     if (collapseTimer.current) {
-      clearTimeout(
-        collapseTimer.current
-      );
+      clearTimeout(collapseTimer.current);
     }
 
     setExpanded(true);
   };
 
   const handleMouseLeave = () => {
-    collapseTimer.current =
-      setTimeout(() => {
-        setExpanded(false);
-      }, 300);
+    collapseTimer.current = setTimeout(() => {
+      setExpanded(false);
+    }, 300);
   };
 
   // ========================================
@@ -172,34 +162,18 @@ const Sidebar = ({
   // MENU ITEM
   // ========================================
 
-  const renderMenuItem = (
-    item
-  ) => {
-    const isActive =
-      location.pathname ===
-      item.key;
+  const renderMenuItem = (item) => {
+    const isActive = location.pathname === item.key;
 
     const button = (
       <button
         type="button"
-        className={`sidebar-item ${
-          isActive
-            ? "sidebar-item-active"
-            : ""
-        }`}
-        onClick={() =>
-          navigate(item.key)
-        }
+        className={`sidebar-item ${isActive ? "sidebar-item-active" : ""}`}
+        onClick={() => navigate(item.key)}
       >
+        <span className="sidebar-item-icon">{item.icon}</span>
 
-        <span className="sidebar-item-icon">
-          {item.icon}
-        </span>
-
-        <span className="sidebar-item-label">
-          {item.label}
-        </span>
-
+        <span className="sidebar-item-label">{item.label}</span>
       </button>
     );
 
@@ -216,101 +190,54 @@ const Sidebar = ({
       );
     }
 
-    return (
-      <div key={item.key}>
-        {button}
-      </div>
-    );
+    return <div key={item.key}>{button}</div>;
   };
 
   return (
     <aside
       className={`sidebar ${
-        expanded
-          ? "sidebar-expanded"
-          : "sidebar-collapsed"
+        expanded ? "sidebar-expanded" : "sidebar-collapsed"
       }`}
-      onMouseEnter={
-        handleMouseEnter
-      }
-      onMouseLeave={
-        handleMouseLeave
-      }
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
     >
-
       {/* =================================
           BRAND
       ================================= */}
 
       <div className="sidebar-brand">
-
-        <div className="sidebar-logo">
-          H
-        </div>
+        <div className="sidebar-logo">H</div>
 
         <div className="sidebar-brand-text">
+          <div className="sidebar-title">Hardware Store</div>
 
-          <div className="sidebar-title">
-            Hardware Store
-          </div>
-
-          <div className="sidebar-subtitle">
-            Management System
-          </div>
-
+          <div className="sidebar-subtitle">Management System</div>
         </div>
-
       </div>
-
 
       {/* =================================
           NAVIGATION
       ================================= */}
 
       <nav className="sidebar-navigation">
+        {menuGroups.map((group) => (
+          <div className="sidebar-group" key={group.title}>
+            <div className="sidebar-group-title">{group.title}</div>
 
-        {menuGroups.map(
-          (group) => (
-            <div
-              className="sidebar-group"
-              key={group.title}
-            >
-
-              <div className="sidebar-group-title">
-                {group.title}
-              </div>
-
-              <div className="sidebar-group-items">
-
-                {group.items.map(
-                  (item) =>
-                    renderMenuItem(
-                      item
-                    )
-                )}
-
-              </div>
-
+            <div className="sidebar-group-items">
+              {group.items.map((item) => renderMenuItem(item))}
             </div>
-          )
-        )}
-
+          </div>
+        ))}
       </nav>
-
 
       {/* =================================
           BOTTOM
       ================================= */}
 
       <div className="sidebar-bottom">
-
-        {bottomItems.map(
-          (item) =>
-            renderMenuItem(item)
-        )}
-
+        {bottomItems.map((item) => renderMenuItem(item))}
       </div>
-
     </aside>
   );
 };

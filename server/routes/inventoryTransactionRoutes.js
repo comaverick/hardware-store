@@ -7,13 +7,9 @@ const {
   receiveStock,
   adjustStock,
   transferStock,
-} = require(
-  "../controllers/inventoryTransactionController"
-);
+} = require("../controllers/inventoryTransactionController");
 
-const {
-  protect,
-} = require("../middleware/authMiddleware");
+const { protect } = require("../middleware/authMiddleware");
 
 const router = express.Router();
 
@@ -21,44 +17,20 @@ const router = express.Router();
 // TRANSACTION HISTORY
 // =========================
 
-router.get(
-  "/",
-  protect,
-  getTransactions
-);
+router.get("/", protect, getTransactions);
 
-router.get(
-  "/product/:productId",
-  protect,
-  getProductTransactions
-);
+router.get("/product/:productId", protect, getProductTransactions);
 
-router.get(
-  "/branch/:branchId",
-  protect,
-  getBranchTransactions
-);
+router.get("/branch/:branchId", protect, getBranchTransactions);
 
 // =========================
 // STOCK ACTIONS
 // =========================
 
-router.post(
-  "/receive",
-  protect,
-  receiveStock
-);
+router.post("/receive", protect, receiveStock);
 
-router.post(
-  "/adjust",
-  protect,
-  adjustStock
-);
+router.post("/adjust", protect, adjustStock);
 
-router.post(
-  "/transfer",
-  protect,
-  transferStock
-);
+router.post("/transfer", protect, transferStock);
 
 module.exports = router;

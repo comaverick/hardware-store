@@ -13,10 +13,7 @@ const protect = async (req, res, next) => {
 
     const token = authHeader.split(" ")[1];
 
-    const decoded = jwt.verify(
-      token,
-      process.env.JWT_SECRET
-    );
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
     const user = await User.findById(decoded.id)
       .select("-password")
@@ -44,9 +41,7 @@ const authorizeBranch = (req, res, next) => {
   }
 
   const requestedBranchId =
-    req.params.branchId ||
-    req.body.branch ||
-    req.query.branch;
+    req.params.branchId || req.body.branch || req.query.branch;
 
   // User has no assigned branch
   if (!req.user.branch) {

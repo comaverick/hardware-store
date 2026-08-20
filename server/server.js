@@ -4,14 +4,9 @@ const dotenv = require("dotenv");
 const connectDB = require("./config/db");
 const inventoryTransactionRoutes = require("./routes/inventoryTransactionRoutes");
 const supplierRoutes = require("./routes/supplierRoutes");
-const purchaseOrderRoutes =
-  require("./routes/purchaseOrderRoutes");
-const saleRoutes =
-  require("./routes/saleRoutes");
-const smartInventoryRoutes =
-  require(
-    "./routes/smartInventoryRoutes"
-  );
+const purchaseOrderRoutes = require("./routes/purchaseOrderRoutes");
+const saleRoutes = require("./routes/saleRoutes");
+const smartInventoryRoutes = require("./routes/smartInventoryRoutes");
 const reservationRoutes = require("./routes/reservationRoutes");
 
 dotenv.config();
@@ -30,18 +25,9 @@ app.use("/api/inventory", require("./routes/branchInventoryRoutes"));
 app.use("/api/auth", require("./routes/authRoutes"));
 app.use("/api/inventory-transactions", inventoryTransactionRoutes);
 app.use("/api/suppliers", supplierRoutes);
-app.use(
-  "/api/purchase-orders",
-  purchaseOrderRoutes
-);
-app.use(
-  "/api/sales",
-  saleRoutes
-);
-app.use(
-  "/api/smart-inventory",
-  smartInventoryRoutes
-);
+app.use("/api/purchase-orders", purchaseOrderRoutes);
+app.use("/api/sales", saleRoutes);
+app.use("/api/smart-inventory", smartInventoryRoutes);
 app.use("/api/reservations", reservationRoutes);
 app.use("/api/product-finder", require("./routes/productFinderRoutes"));
 

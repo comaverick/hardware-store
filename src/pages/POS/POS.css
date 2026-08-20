@@ -79,8 +79,7 @@
 
   border-radius: 9px;
 
-  border: 1px solid
-    rgba(0, 0, 0, 0.08);
+  border: 1px solid rgba(0, 0, 0, 0.08);
 
   background: #f8f8f8;
 
@@ -101,8 +100,7 @@
   border-color: #b7eb8f;
 }
 
-.printer-connected
-  .printer-status-dot {
+.printer-connected .printer-status-dot {
   color: #52c41a;
 }
 
@@ -112,8 +110,7 @@
   border-color: #ffccc7;
 }
 
-.printer-disconnected
-  .printer-status-dot {
+.printer-disconnected .printer-status-dot {
   color: #ff4d4f;
 }
 
@@ -141,12 +138,9 @@
 .pos-cart-card {
   border-radius: 16px;
 
-  border: 1px solid
-    rgba(0, 0, 0, 0.06);
+  border: 1px solid rgba(0, 0, 0, 0.06);
 
-  box-shadow:
-    0 4px 18px
-    rgba(0, 0, 0, 0.04);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.04);
 }
 
 .pos-cart-card {
@@ -192,11 +186,7 @@
 .pos-products-grid {
   display: grid;
 
-  grid-template-columns:
-    repeat(
-      auto-fill,
-      minmax(210px, 1fr)
-    );
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
 
   gap: 14px;
 
@@ -302,15 +292,13 @@
 
   display: grid;
 
-  grid-template-columns:
-    minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
 
   gap: 10px;
 
   padding: 14px 0;
 
-  border-bottom: 1px solid
-    rgba(0, 0, 0, 0.06);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
 }
 
 .cart-item[data-selected="true"] {
@@ -430,8 +418,7 @@
   width: 100%;
 }
 
-.payment-methods
-  .ant-radio-button-wrapper {
+.payment-methods .ant-radio-button-wrapper {
   flex: 1;
 
   text-align: center;
@@ -440,8 +427,7 @@
 .amount-row {
   display: grid;
 
-  grid-template-columns:
-    1fr 1fr;
+  grid-template-columns: 1fr 1fr;
 
   gap: 12px;
 
@@ -740,8 +726,7 @@
   }
 
   .pos-products-grid {
-    grid-template-columns:
-      repeat(2, 1fr);
+    grid-template-columns: repeat(2, 1fr);
   }
 
   .pos-product-tools {
@@ -754,15 +739,13 @@
   }
 
   .amount-row {
-    grid-template-columns:
-      1fr;
+    grid-template-columns: 1fr;
   }
 }
 
 @media (max-width: 480px) {
   .pos-products-grid {
-    grid-template-columns:
-      1fr;
+    grid-template-columns: 1fr;
   }
 
   .cart-item-controls {

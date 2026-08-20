@@ -22,30 +22,26 @@ const resetDemoData = async () => {
 
     const salesResult = await Sale.deleteMany({});
 
-    console.log(
-      `Deleted ${salesResult.deletedCount} sales.`
-    );
+    console.log(`Deleted ${salesResult.deletedCount} sales.`);
 
     // =====================================================
     // 2. CLEAR INVENTORY TRANSACTIONS
     // =====================================================
 
-    const transactionResult =
-      await InventoryTransaction.deleteMany({});
+    const transactionResult = await InventoryTransaction.deleteMany({});
 
     console.log(
-      `Deleted ${transactionResult.deletedCount} inventory transactions.`
+      `Deleted ${transactionResult.deletedCount} inventory transactions.`,
     );
 
     // =====================================================
     // 3. CLEAR CURRENT BRANCH INVENTORY
     // =====================================================
 
-    const inventoryResult =
-      await BranchInventory.deleteMany({});
+    const inventoryResult = await BranchInventory.deleteMany({});
 
     console.log(
-      `Deleted ${inventoryResult.deletedCount} branch inventory records.`
+      `Deleted ${inventoryResult.deletedCount} branch inventory records.`,
     );
 
     // =====================================================
@@ -57,19 +53,13 @@ const resetDemoData = async () => {
     }).select("_id name code");
 
     if (branches.length === 0) {
-      throw new Error(
-        "No active branches found."
-      );
+      throw new Error("No active branches found.");
     }
 
-    console.log(
-      `\nFound ${branches.length} active branch(es):`
-    );
+    console.log(`\nFound ${branches.length} active branch(es):`);
 
     branches.forEach((branch) => {
-      console.log(
-        `- ${branch.name} (${branch.code})`
-      );
+      console.log(`- ${branch.name} (${branch.code})`);
     });
 
     // =====================================================
@@ -78,19 +68,13 @@ const resetDemoData = async () => {
 
     const products = await Product.find({
       isActive: true,
-    }).select(
-      "_id name sku reorderLevel"
-    );
+    }).select("_id name sku reorderLevel");
 
     if (products.length === 0) {
-      throw new Error(
-        "No active products found."
-      );
+      throw new Error("No active products found.");
     }
 
-    console.log(
-      `\nFound ${products.length} active products.`
-    );
+    console.log(`\nFound ${products.length} active products.`);
 
     // =====================================================
     // 6. CREATE FRESH BRANCH INVENTORY
@@ -123,19 +107,11 @@ const resetDemoData = async () => {
           quantity = 25 + (i % 6) * 10;
         }
 
-        const reorderLevel =
-          product.reorderLevel || 5;
+        const reorderLevel = product.reorderLevel || 5;
 
-        const aisle =
-          String.fromCharCode(
-            65 + (i % 6)
-          );
+        const aisle = String.fromCharCode(65 + (i % 6));
 
-        const shelf =
-          String((i % 5) + 1).padStart(
-            2,
-            "0"
-          );
+        const shelf = String((i % 5) + 1).padStart(2, "0");
 
         inventoryRecords.push({
           branch: branch._id,
@@ -152,13 +128,11 @@ const resetDemoData = async () => {
     // =====================================================
 
     if (inventoryRecords.length > 0) {
-      await BranchInventory.insertMany(
-        inventoryRecords
-      );
+      await BranchInventory.insertMany(inventoryRecords);
     }
 
     console.log(
-      `\nCreated ${inventoryRecords.length} branch inventory records.`
+      `\nCreated ${inventoryRecords.length} branch inventory records.`,
     );
 
     // =====================================================
@@ -169,35 +143,22 @@ const resetDemoData = async () => {
     console.log("DEMO DATA RESET COMPLETE");
     console.log("================================");
 
-    console.log(
-      `Products kept: ${products.length}`
-    );
+    console.log(`Products kept: ${products.length}`);
 
-    console.log(
-      `Branches used: ${branches.length}`
-    );
+    console.log(`Branches used: ${branches.length}`);
 
-    console.log(
-      `Inventory records: ${inventoryRecords.length}`
-    );
+    console.log(`Inventory records: ${inventoryRecords.length}`);
 
     console.log("Sales: 0");
     console.log("Inventory transactions: 0");
 
-    console.log(
-      "\nYour product IDs were preserved."
-    );
+    console.log("\nYour product IDs were preserved.");
 
     await mongoose.connection.close();
 
-    console.log(
-      "MongoDB connection closed."
-    );
+    console.log("MongoDB connection closed.");
   } catch (error) {
-    console.error(
-      "\nReset error:",
-      error
-    );
+    console.error("\nReset error:", error);
 
     await mongoose.connection.close();
 

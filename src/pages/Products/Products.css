@@ -30,8 +30,7 @@
 
   border-radius: 16px;
 
-  box-shadow:
-    0 4px 16px rgba(0, 0, 0, 0.04);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.04);
 }
 
 /* =========================
@@ -43,8 +42,7 @@
 
   border-radius: 16px;
 
-  box-shadow:
-    0 4px 16px rgba(0, 0, 0, 0.04);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.04);
 }
 
 .products-table-card .ant-table {
@@ -55,10 +53,7 @@
   background: #fafafa;
 }
 
-.products-table-card
-  .ant-table-tbody
-  > tr
-  > td {
+.products-table-card .ant-table-tbody > tr > td {
   padding-top: 16px;
   padding-bottom: 16px;
 }
@@ -122,8 +117,7 @@
 
   margin-top: 8px;
 
-  border-top: 1px solid
-    rgba(0, 0, 0, 0.06);
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
 }
 
 /* =========================
@@ -201,8 +195,7 @@
 
   padding: 14px 4px;
 
-  border-bottom: 1px solid
-    rgba(0, 0, 0, 0.06);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
 }
 
 .branch-stock-row:last-child {

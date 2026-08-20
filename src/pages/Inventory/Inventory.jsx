@@ -38,32 +38,23 @@ import "./Inventory.css";
 const { Title, Text } = Typography;
 
 const Inventory = () => {
-  const [inventory, setInventory] =
-    useState([]);
+  const [inventory, setInventory] = useState([]);
 
-  const [loading, setLoading] =
-    useState(true);
+  const [loading, setLoading] = useState(true);
 
-  const [search, setSearch] =
-    useState("");
+  const [search, setSearch] = useState("");
 
-  const [branchFilter, setBranchFilter] =
-    useState("all");
+  const [branchFilter, setBranchFilter] = useState("all");
 
-  const [statusFilter, setStatusFilter] =
-    useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
 
-  const [actionModal, setActionModal] =
-    useState(null);
+  const [actionModal, setActionModal] = useState(null);
 
-  const [saving, setSaving] =
-    useState(false);
+  const [saving, setSaving] = useState(false);
 
-  const [transactions, setTransactions] =
-    useState([]);
+  const [transactions, setTransactions] = useState([]);
 
-  const [historyOpen, setHistoryOpen] =
-    useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   const [receiveForm] = Form.useForm();
   const [adjustForm] = Form.useForm();
@@ -77,16 +68,14 @@ const Inventory = () => {
     try {
       setLoading(true);
 
-      const response =
-        await api.get("/inventory");
+      const response = await api.get("/inventory");
 
       setInventory(response.data);
     } catch (error) {
       console.error(error);
 
       message.error(
-        error.response?.data?.message ||
-          "Failed to load inventory."
+        error.response?.data?.message || "Failed to load inventory.",
       );
     } finally {
       setLoading(false);
@@ -101,25 +90,17 @@ const Inventory = () => {
   // FETCH TRANSACTIONS
   // =========================
 
-  const fetchTransactions =
-    async () => {
-      try {
-        const response =
-          await api.get(
-            "/inventory-transactions"
-          );
+  const fetchTransactions = async () => {
+    try {
+      const response = await api.get("/inventory-transactions");
 
-        setTransactions(
-          response.data
-        );
-      } catch (error) {
-        console.error(error);
+      setTransactions(response.data);
+    } catch (error) {
+      console.error(error);
 
-        message.error(
-          "Failed to load transaction history."
-        );
-      }
-    };
+      message.error("Failed to load transaction history.");
+    }
+  };
 
   // =========================
   // BRANCHES
@@ -130,16 +111,11 @@ const Inventory = () => {
 
     inventory.forEach((item) => {
       if (item.branch?._id) {
-        branchMap.set(
-          item.branch._id,
-          item.branch
-        );
+        branchMap.set(item.branch._id, item.branch);
       }
     });
 
-    return Array.from(
-      branchMap.values()
-    );
+    return Array.from(branchMap.values());
   }, [inventory]);
 
   // =========================
@@ -147,26 +123,19 @@ const Inventory = () => {
   // =========================
 
   const getStockStatus = (item) => {
-    const quantity =
-      item.quantity;
+    const quantity = item.quantity;
 
-    const reorderLevel =
-      item.reorderLevel || 0;
+    const reorderLevel = item.reorderLevel || 0;
 
     if (quantity === 0) {
       return "OUT";
     }
 
-    if (
-      quantity <= reorderLevel
-    ) {
+    if (quantity <= reorderLevel) {
       return "LOW";
     }
 
-    if (
-      quantity <=
-      reorderLevel * 2
-    ) {
+    if (quantity <= reorderLevel * 2) {
       return "WARNING";
     }
 
@@ -177,204 +146,134 @@ const Inventory = () => {
   // FILTER
   // =========================
 
-  const filteredInventory =
-    useMemo(() => {
-      return inventory.filter(
-        (item) => {
-          const searchValue =
-            search
-              .toLowerCase()
-              .trim();
+  const filteredInventory = useMemo(() => {
+    return inventory.filter((item) => {
+      const searchValue = search.toLowerCase().trim();
 
-          const productName =
-            item.product?.name?.toLowerCase() ||
-            "";
+      const productName = item.product?.name?.toLowerCase() || "";
 
-          const sku =
-            item.product?.sku?.toLowerCase() ||
-            "";
+      const sku = item.product?.sku?.toLowerCase() || "";
 
-          const branchCode =
-            item.branch?.code?.toLowerCase() ||
-            "";
+      const branchCode = item.branch?.code?.toLowerCase() || "";
 
-          const matchesSearch =
-            !searchValue ||
-            productName.includes(
-              searchValue
-            ) ||
-            sku.includes(
-              searchValue
-            ) ||
-            branchCode.includes(
-              searchValue
-            );
+      const matchesSearch =
+        !searchValue ||
+        productName.includes(searchValue) ||
+        sku.includes(searchValue) ||
+        branchCode.includes(searchValue);
 
-          const matchesBranch =
-            branchFilter ===
-              "all" ||
-            item.branch?._id ===
-              branchFilter;
+      const matchesBranch =
+        branchFilter === "all" || item.branch?._id === branchFilter;
 
-          const matchesStatus =
-            statusFilter ===
-              "all" ||
-            getStockStatus(item) ===
-              statusFilter;
+      const matchesStatus =
+        statusFilter === "all" || getStockStatus(item) === statusFilter;
 
-          return (
-            matchesSearch &&
-            matchesBranch &&
-            matchesStatus
-          );
-        }
-      );
-    }, [
-      inventory,
-      search,
-      branchFilter,
-      statusFilter,
-    ]);
+      return matchesSearch && matchesBranch && matchesStatus;
+    });
+  }, [inventory, search, branchFilter, statusFilter]);
 
   // =========================
   // STATISTICS
   // =========================
 
-  const totalStock =
-    inventory.reduce(
-      (total, item) =>
-        total + item.quantity,
-      0
-    );
+  const totalStock = inventory.reduce(
+    (total, item) => total + item.quantity,
+    0,
+  );
 
-  const lowStockCount =
-    inventory.filter(
-      (item) =>
-        getStockStatus(item) ===
-        "LOW"
-    ).length;
+  const lowStockCount = inventory.filter(
+    (item) => getStockStatus(item) === "LOW",
+  ).length;
 
-  const outOfStockCount =
-    inventory.filter(
-      (item) =>
-        getStockStatus(item) ===
-        "OUT"
-    ).length;
+  const outOfStockCount = inventory.filter(
+    (item) => getStockStatus(item) === "OUT",
+  ).length;
 
-  const healthyCount =
-    inventory.filter(
-      (item) =>
-        getStockStatus(item) ===
-        "HEALTHY"
-    ).length;
+  const healthyCount = inventory.filter(
+    (item) => getStockStatus(item) === "HEALTHY",
+  ).length;
 
   // =========================
   // RECEIVE STOCK
   // =========================
 
-  const handleReceive =
-    async (values) => {
-      try {
-        setSaving(true);
+  const handleReceive = async (values) => {
+    try {
+      setSaving(true);
 
-        await api.post(
-          "/inventory-transactions/receive",
-          values
-        );
+      await api.post("/inventory-transactions/receive", values);
 
-        message.success(
-          "Stock received successfully."
-        );
+      message.success("Stock received successfully.");
 
-        receiveForm.resetFields();
+      receiveForm.resetFields();
 
-        setActionModal(null);
+      setActionModal(null);
 
-        await fetchInventory();
-      } catch (error) {
-        console.error(error);
+      await fetchInventory();
+    } catch (error) {
+      console.error(error);
 
-        message.error(
-          error.response?.data
-            ?.message ||
-            "Failed to receive stock."
-        );
-      } finally {
-        setSaving(false);
-      }
-    };
+      message.error(
+        error.response?.data?.message || "Failed to receive stock.",
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
 
   // =========================
   // ADJUST STOCK
   // =========================
 
-  const handleAdjust =
-    async (values) => {
-      try {
-        setSaving(true);
+  const handleAdjust = async (values) => {
+    try {
+      setSaving(true);
 
-        await api.post(
-          "/inventory-transactions/adjust",
-          values
-        );
+      await api.post("/inventory-transactions/adjust", values);
 
-        message.success(
-          "Stock adjusted successfully."
-        );
+      message.success("Stock adjusted successfully.");
 
-        adjustForm.resetFields();
+      adjustForm.resetFields();
 
-        setActionModal(null);
+      setActionModal(null);
 
-        await fetchInventory();
-      } catch (error) {
-        console.error(error);
+      await fetchInventory();
+    } catch (error) {
+      console.error(error);
 
-        message.error(
-          error.response?.data
-            ?.message ||
-            "Failed to adjust stock."
-        );
-      } finally {
-        setSaving(false);
-      }
-    };
+      message.error(error.response?.data?.message || "Failed to adjust stock.");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   // =========================
   // TRANSFER STOCK
   // =========================
 
-  const handleTransfer =
-    async (values) => {
-      try {
-        setSaving(true);
+  const handleTransfer = async (values) => {
+    try {
+      setSaving(true);
 
-        await api.post(
-          "/inventory-transactions/transfer",
-          values
-        );
+      await api.post("/inventory-transactions/transfer", values);
 
-        message.success(
-          "Stock transferred successfully."
-        );
+      message.success("Stock transferred successfully.");
 
-        transferForm.resetFields();
+      transferForm.resetFields();
 
-        setActionModal(null);
+      setActionModal(null);
 
-        await fetchInventory();
-      } catch (error) {
-        console.error(error);
+      await fetchInventory();
+    } catch (error) {
+      console.error(error);
 
-        message.error(
-          error.response?.data
-            ?.message ||
-            "Failed to transfer stock."
-        );
-      } finally {
-        setSaving(false);
-      }
-    };
+      message.error(
+        error.response?.data?.message || "Failed to transfer stock.",
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
 
   // =========================
   // TABLE
@@ -387,23 +286,15 @@ const Inventory = () => {
 
       render: (_, item) => (
         <div className="inventory-product">
-
           <div className="inventory-product-icon">
             <AppstoreOutlined />
           </div>
 
           <div>
+            <div className="inventory-product-name">{item.product?.name}</div>
 
-            <div className="inventory-product-name">
-              {item.product?.name}
-            </div>
-
-            <div className="inventory-product-sku">
-              {item.product?.sku}
-            </div>
-
+            <div className="inventory-product-sku">{item.product?.sku}</div>
           </div>
-
         </div>
       ),
     },
@@ -414,15 +305,9 @@ const Inventory = () => {
 
       render: (_, item) => (
         <div>
+          <div className="inventory-branch-name">{item.branch?.name}</div>
 
-          <div className="inventory-branch-name">
-            {item.branch?.name}
-          </div>
-
-          <Text type="secondary">
-            {item.branch?.code}
-          </Text>
-
+          <Text type="secondary">{item.branch?.code}</Text>
         </div>
       ),
     },
@@ -434,9 +319,7 @@ const Inventory = () => {
       render: (_, item) => (
         <div>
           <strong>
-            {item.quantity}{" "}
-            {item.product?.unit ||
-              "pcs"}
+            {item.quantity} {item.product?.unit || "pcs"}
           </strong>
           <div className="inventory-reserved">
             {item.reservedQuantity || 0} reserved
@@ -456,11 +339,7 @@ const Inventory = () => {
       dataIndex: "shelfLocation",
       key: "shelf",
 
-      render: (value) => (
-        <Tag>
-          {value || "Not assigned"}
-        </Tag>
-      ),
+      render: (value) => <Tag>{value || "Not assigned"}</Tag>,
     },
 
     {
@@ -468,38 +347,21 @@ const Inventory = () => {
       key: "status",
 
       render: (_, item) => {
-        const status =
-          getStockStatus(item);
+        const status = getStockStatus(item);
 
         if (status === "OUT") {
-          return (
-            <Tag color="red">
-              Out of Stock
-            </Tag>
-          );
+          return <Tag color="red">Out of Stock</Tag>;
         }
 
         if (status === "LOW") {
-          return (
-            <Tag color="red">
-              Low Stock
-            </Tag>
-          );
+          return <Tag color="red">Low Stock</Tag>;
         }
 
         if (status === "WARNING") {
-          return (
-            <Tag color="orange">
-              Watch
-            </Tag>
-          );
+          return <Tag color="orange">Watch</Tag>;
         }
 
-        return (
-          <Tag color="green">
-            Healthy
-          </Tag>
-        );
+        return <Tag color="green">Healthy</Tag>;
       },
     },
   ];
@@ -514,28 +376,21 @@ const Inventory = () => {
       dataIndex: "createdAt",
       key: "date",
 
-      render: (value) =>
-        new Date(
-          value
-        ).toLocaleString(),
+      render: (value) => new Date(value).toLocaleString(),
     },
 
     {
       title: "Product",
       key: "product",
 
-      render: (_, item) =>
-        item.product?.name ||
-        "Unknown",
+      render: (_, item) => item.product?.name || "Unknown",
     },
 
     {
       title: "Branch",
       key: "branch",
 
-      render: (_, item) =>
-        item.branch?.code ||
-        "Unknown",
+      render: (_, item) => item.branch?.code || "Unknown",
     },
 
     {
@@ -544,7 +399,6 @@ const Inventory = () => {
       key: "type",
 
       render: (type) => {
-
         const colors = {
           STOCK_IN: "green",
           STOCK_OUT: "red",
@@ -554,17 +408,7 @@ const Inventory = () => {
         };
 
         return (
-          <Tag
-            color={
-              colors[type] ||
-              "default"
-            }
-          >
-            {type.replace(
-              "_",
-              " "
-            )}
-          </Tag>
+          <Tag color={colors[type] || "default"}>{type.replace("_", " ")}</Tag>
         );
       },
     },
@@ -580,8 +424,7 @@ const Inventory = () => {
       dataIndex: "reason",
       key: "reason",
 
-      render: (value) =>
-        value || "—",
+      render: (value) => value || "—",
     },
 
     {
@@ -589,8 +432,7 @@ const Inventory = () => {
       dataIndex: "reference",
       key: "reference",
 
-      render: (value) =>
-        value || "—",
+      render: (value) => value || "—",
     },
   ];
 
@@ -600,28 +442,18 @@ const Inventory = () => {
 
   return (
     <div className="inventory-page">
-
       {/* HEADER */}
 
       <div className="inventory-header">
-
         <div>
-          <Title level={2}>
-            Inventory
-          </Title>
+          <Title level={2}>Inventory</Title>
 
-          <Text type="secondary">
-            Manage stock across all
-            four branches
-          </Text>
+          <Text type="secondary">Manage stock across all four branches</Text>
         </div>
 
         <Space wrap>
-
           <Button
-            icon={
-              <HistoryOutlined />
-            }
+            icon={<HistoryOutlined />}
             onClick={async () => {
               await fetchTransactions();
               setHistoryOpen(true);
@@ -631,164 +463,87 @@ const Inventory = () => {
           </Button>
 
           <Button
-            icon={
-              <InboxOutlined />
-            }
-            onClick={() =>
-              setActionModal(
-                "receive"
-              )
-            }
+            icon={<InboxOutlined />}
+            onClick={() => setActionModal("receive")}
           >
             Receive Stock
           </Button>
 
           <Button
-            icon={
-              <WarningOutlined />
-            }
-            onClick={() =>
-              setActionModal(
-                "adjust"
-              )
-            }
+            icon={<WarningOutlined />}
+            onClick={() => setActionModal("adjust")}
           >
             Adjust Stock
           </Button>
 
           <Button
             type="primary"
-            icon={
-              <SwapOutlined />
-            }
-            onClick={() =>
-              setActionModal(
-                "transfer"
-              )
-            }
+            icon={<SwapOutlined />}
+            onClick={() => setActionModal("transfer")}
           >
             Transfer Stock
           </Button>
-
         </Space>
-
       </div>
 
       {/* STATS */}
 
-      <Row
-        gutter={[16, 16]}
-        className="inventory-stats"
-      >
-
-        <Col
-          xs={24}
-          sm={12}
-          lg={6}
-        >
+      <Row gutter={[16, 16]} className="inventory-stats">
+        <Col xs={24} sm={12} lg={6}>
           <Card className="inventory-stat-card">
-
             <Statistic
               title="Total Stock"
               value={totalStock}
-              prefix={
-                <InboxOutlined />
-              }
+              prefix={<InboxOutlined />}
             />
-
           </Card>
         </Col>
 
-        <Col
-          xs={24}
-          sm={12}
-          lg={6}
-        >
+        <Col xs={24} sm={12} lg={6}>
           <Card className="inventory-stat-card">
-
             <Statistic
               title="Inventory Records"
               value={inventory.length}
-              prefix={
-                <AppstoreOutlined />
-              }
+              prefix={<AppstoreOutlined />}
             />
-
           </Card>
         </Col>
 
-        <Col
-          xs={24}
-          sm={12}
-          lg={6}
-        >
+        <Col xs={24} sm={12} lg={6}>
           <Card className="inventory-stat-card inventory-warning">
-
             <Statistic
               title="Low Stock"
               value={lowStockCount}
-              prefix={
-                <WarningOutlined />
-              }
+              prefix={<WarningOutlined />}
             />
-
           </Card>
         </Col>
 
-        <Col
-          xs={24}
-          sm={12}
-          lg={6}
-        >
+        <Col xs={24} sm={12} lg={6}>
           <Card className="inventory-stat-card">
+            <Statistic title="Healthy Stock" value={healthyCount} />
 
-            <Statistic
-              title="Healthy Stock"
-              value={healthyCount}
-            />
-
-            <Text type="secondary">
-              {outOfStockCount} out
-              of stock
-            </Text>
-
+            <Text type="secondary">{outOfStockCount} out of stock</Text>
           </Card>
         </Col>
-
       </Row>
 
       {/* FILTERS */}
 
       <Card className="inventory-filter-card">
-
         <Row gutter={[12, 12]}>
-
-          <Col
-            xs={24}
-            md={12}
-            lg={14}
-          >
+          <Col xs={24} md={12} lg={14}>
             <Input
               size="large"
-              prefix={
-                <SearchOutlined />
-              }
+              prefix={<SearchOutlined />}
               placeholder="Search product, SKU, or branch..."
               value={search}
-              onChange={(event) =>
-                setSearch(
-                  event.target.value
-                )
-              }
+              onChange={(event) => setSearch(event.target.value)}
               allowClear
             />
           </Col>
 
-          <Col
-            xs={24}
-            md={6}
-            lg={5}
-          >
+          <Col xs={24} md={6} lg={5}>
             <Select
               size="large"
               value={branchFilter}
@@ -797,30 +552,17 @@ const Inventory = () => {
                 width: "100%",
               }}
             >
+              <Select.Option value="all">All Branches</Select.Option>
 
-              <Select.Option value="all">
-                All Branches
-              </Select.Option>
-
-              {branches.map(
-                (branch) => (
-                  <Select.Option
-                    key={branch._id}
-                    value={branch._id}
-                  >
-                    {branch.code}
-                  </Select.Option>
-                )
-              )}
-
+              {branches.map((branch) => (
+                <Select.Option key={branch._id} value={branch._id}>
+                  {branch.code}
+                </Select.Option>
+              ))}
             </Select>
           </Col>
 
-          <Col
-            xs={24}
-            md={6}
-            lg={5}
-          >
+          <Col xs={24} md={6} lg={5}>
             <Select
               size="large"
               value={statusFilter}
@@ -829,43 +571,26 @@ const Inventory = () => {
                 width: "100%",
               }}
             >
+              <Select.Option value="all">All Status</Select.Option>
 
-              <Select.Option value="all">
-                All Status
-              </Select.Option>
+              <Select.Option value="HEALTHY">Healthy</Select.Option>
 
-              <Select.Option value="HEALTHY">
-                Healthy
-              </Select.Option>
+              <Select.Option value="WARNING">Watch</Select.Option>
 
-              <Select.Option value="WARNING">
-                Watch
-              </Select.Option>
+              <Select.Option value="LOW">Low Stock</Select.Option>
 
-              <Select.Option value="LOW">
-                Low Stock
-              </Select.Option>
-
-              <Select.Option value="OUT">
-                Out of Stock
-              </Select.Option>
-
+              <Select.Option value="OUT">Out of Stock</Select.Option>
             </Select>
           </Col>
-
         </Row>
-
       </Card>
 
       {/* TABLE */}
 
       <Card className="inventory-table-card">
-
         <Table
           columns={columns}
-          dataSource={
-            filteredInventory
-          }
+          dataSource={filteredInventory}
           rowKey="_id"
           loading={loading}
           pagination={{
@@ -873,14 +598,9 @@ const Inventory = () => {
             showSizeChanger: true,
           }}
           locale={{
-            emptyText: (
-              <Empty
-                description="No inventory records found"
-              />
-            ),
+            emptyText: <Empty description="No inventory records found" />,
           }}
         />
-
       </Card>
 
       {/* =========================
@@ -889,50 +609,36 @@ const Inventory = () => {
 
       <Modal
         title="Receive Stock"
-        open={
-          actionModal ===
-          "receive"
-        }
+        open={actionModal === "receive"}
         onCancel={() => {
           receiveForm.resetFields();
           setActionModal(null);
         }}
         footer={null}
       >
-
-        <Form
-          form={receiveForm}
-          layout="vertical"
-          onFinish={handleReceive}
-        >
-
+        <Form form={receiveForm} layout="vertical" onFinish={handleReceive}>
           <Form.Item
             label="Inventory"
             name="inventoryId"
             rules={[
               {
                 required: true,
-                message:
-                  "Select inventory.",
+                message: "Select inventory.",
               },
             ]}
           >
-
             <Select
               showSearch
               placeholder="Select product and branch"
               optionFilterProp="label"
-              options={inventory.map(
-                (item) => ({
-                  value: item._id,
-                  label:
-                    `${item.product?.name} - ` +
-                    `${item.branch?.code} ` +
-                    `(${item.quantity} in stock)`,
-                })
-              )}
+              options={inventory.map((item) => ({
+                value: item._id,
+                label:
+                  `${item.product?.name} - ` +
+                  `${item.branch?.code} ` +
+                  `(${item.quantity} in stock)`,
+              }))}
             />
-
           </Form.Item>
 
           <Form.Item
@@ -941,12 +647,10 @@ const Inventory = () => {
             rules={[
               {
                 required: true,
-                message:
-                  "Enter quantity.",
+                message: "Enter quantity.",
               },
             ]}
           >
-
             <InputNumber
               min={1}
               style={{
@@ -954,31 +658,17 @@ const Inventory = () => {
               }}
               size="large"
             />
-
           </Form.Item>
 
-          <Form.Item
-            label="Reason"
-            name="reason"
-            initialValue="Stock received"
-          >
-            <Input
-              placeholder="Reason"
-            />
+          <Form.Item label="Reason" name="reason" initialValue="Stock received">
+            <Input placeholder="Reason" />
           </Form.Item>
 
-          <Form.Item
-            label="Notes"
-            name="notes"
-          >
-            <Input.TextArea
-              rows={3}
-              placeholder="Optional notes"
-            />
+          <Form.Item label="Notes" name="notes">
+            <Input.TextArea rows={3} placeholder="Optional notes" />
           </Form.Item>
 
           <div className="action-modal-footer">
-
             <Button
               onClick={() => {
                 receiveForm.resetFields();
@@ -988,18 +678,11 @@ const Inventory = () => {
               Cancel
             </Button>
 
-            <Button
-              type="primary"
-              htmlType="submit"
-              loading={saving}
-            >
+            <Button type="primary" htmlType="submit" loading={saving}>
               Receive Stock
             </Button>
-
           </div>
-
         </Form>
-
       </Modal>
 
       {/* =========================
@@ -1008,50 +691,36 @@ const Inventory = () => {
 
       <Modal
         title="Adjust Stock"
-        open={
-          actionModal ===
-          "adjust"
-        }
+        open={actionModal === "adjust"}
         onCancel={() => {
           adjustForm.resetFields();
           setActionModal(null);
         }}
         footer={null}
       >
-
-        <Form
-          form={adjustForm}
-          layout="vertical"
-          onFinish={handleAdjust}
-        >
-
+        <Form form={adjustForm} layout="vertical" onFinish={handleAdjust}>
           <Form.Item
             label="Inventory"
             name="inventoryId"
             rules={[
               {
                 required: true,
-                message:
-                  "Select inventory.",
+                message: "Select inventory.",
               },
             ]}
           >
-
             <Select
               showSearch
               placeholder="Select inventory"
               optionFilterProp="label"
-              options={inventory.map(
-                (item) => ({
-                  value: item._id,
-                  label:
-                    `${item.product?.name} - ` +
-                    `${item.branch?.code} ` +
-                    `(Current: ${item.quantity})`,
-                })
-              )}
+              options={inventory.map((item) => ({
+                value: item._id,
+                label:
+                  `${item.product?.name} - ` +
+                  `${item.branch?.code} ` +
+                  `(Current: ${item.quantity})`,
+              }))}
             />
-
           </Form.Item>
 
           <Form.Item
@@ -1060,12 +729,10 @@ const Inventory = () => {
             rules={[
               {
                 required: true,
-                message:
-                  "Enter new quantity.",
+                message: "Enter new quantity.",
               },
             ]}
           >
-
             <InputNumber
               min={0}
               style={{
@@ -1073,7 +740,6 @@ const Inventory = () => {
               }}
               size="large"
             />
-
           </Form.Item>
 
           <Form.Item
@@ -1082,52 +748,30 @@ const Inventory = () => {
             rules={[
               {
                 required: true,
-                message:
-                  "Select a reason.",
+                message: "Select a reason.",
               },
             ]}
           >
+            <Select placeholder="Select reason">
+              <Select.Option value="Damaged stock">Damaged stock</Select.Option>
 
-            <Select
-              placeholder="Select reason"
-            >
-
-              <Select.Option value="Damaged stock">
-                Damaged stock
-              </Select.Option>
-
-              <Select.Option value="Lost stock">
-                Lost stock
-              </Select.Option>
+              <Select.Option value="Lost stock">Lost stock</Select.Option>
 
               <Select.Option value="Physical count correction">
                 Physical count correction
               </Select.Option>
 
-              <Select.Option value="Expired stock">
-                Expired stock
-              </Select.Option>
+              <Select.Option value="Expired stock">Expired stock</Select.Option>
 
-              <Select.Option value="Other">
-                Other
-              </Select.Option>
-
+              <Select.Option value="Other">Other</Select.Option>
             </Select>
-
           </Form.Item>
 
-          <Form.Item
-            label="Notes"
-            name="notes"
-          >
-            <Input.TextArea
-              rows={3}
-              placeholder="Explain the adjustment..."
-            />
+          <Form.Item label="Notes" name="notes">
+            <Input.TextArea rows={3} placeholder="Explain the adjustment..." />
           </Form.Item>
 
           <div className="action-modal-footer">
-
             <Button
               onClick={() => {
                 adjustForm.resetFields();
@@ -1137,18 +781,11 @@ const Inventory = () => {
               Cancel
             </Button>
 
-            <Button
-              type="primary"
-              htmlType="submit"
-              loading={saving}
-            >
+            <Button type="primary" htmlType="submit" loading={saving}>
               Adjust Stock
             </Button>
-
           </div>
-
         </Form>
-
       </Modal>
 
       {/* =========================
@@ -1157,10 +794,7 @@ const Inventory = () => {
 
       <Modal
         title="Transfer Stock"
-        open={
-          actionModal ===
-          "transfer"
-        }
+        open={actionModal === "transfer"}
         onCancel={() => {
           transferForm.resetFields();
           setActionModal(null);
@@ -1168,40 +802,29 @@ const Inventory = () => {
         footer={null}
         width={600}
       >
-
-        <Form
-          form={transferForm}
-          layout="vertical"
-          onFinish={handleTransfer}
-        >
-
+        <Form form={transferForm} layout="vertical" onFinish={handleTransfer}>
           <Form.Item
             label="From Inventory"
             name="fromInventoryId"
             rules={[
               {
                 required: true,
-                message:
-                  "Select source inventory.",
+                message: "Select source inventory.",
               },
             ]}
           >
-
             <Select
               showSearch
               placeholder="Select source branch"
               optionFilterProp="label"
-              options={inventory.map(
-                (item) => ({
-                  value: item._id,
-                  label:
-                    `${item.product?.name} - ` +
-                    `${item.branch?.code} ` +
-                    `(Available: ${item.quantity})`,
-                })
-              )}
+              options={inventory.map((item) => ({
+                value: item._id,
+                label:
+                  `${item.product?.name} - ` +
+                  `${item.branch?.code} ` +
+                  `(Available: ${item.quantity})`,
+              }))}
             />
-
           </Form.Item>
 
           <div className="transfer-arrow">
@@ -1214,27 +837,22 @@ const Inventory = () => {
             rules={[
               {
                 required: true,
-                message:
-                  "Select destination inventory.",
+                message: "Select destination inventory.",
               },
             ]}
           >
-
             <Select
               showSearch
               placeholder="Select destination branch"
               optionFilterProp="label"
-              options={inventory.map(
-                (item) => ({
-                  value: item._id,
-                  label:
-                    `${item.product?.name} - ` +
-                    `${item.branch?.code} ` +
-                    `(Current: ${item.quantity})`,
-                })
-              )}
+              options={inventory.map((item) => ({
+                value: item._id,
+                label:
+                  `${item.product?.name} - ` +
+                  `${item.branch?.code} ` +
+                  `(Current: ${item.quantity})`,
+              }))}
             />
-
           </Form.Item>
 
           <Form.Item
@@ -1243,12 +861,10 @@ const Inventory = () => {
             rules={[
               {
                 required: true,
-                message:
-                  "Enter quantity.",
+                message: "Enter quantity.",
               },
             ]}
           >
-
             <InputNumber
               min={1}
               style={{
@@ -1256,7 +872,6 @@ const Inventory = () => {
               }}
               size="large"
             />
-
           </Form.Item>
 
           <Form.Item
@@ -1267,18 +882,11 @@ const Inventory = () => {
             <Input />
           </Form.Item>
 
-          <Form.Item
-            label="Notes"
-            name="notes"
-          >
-            <Input.TextArea
-              rows={3}
-              placeholder="Optional transfer notes"
-            />
+          <Form.Item label="Notes" name="notes">
+            <Input.TextArea rows={3} placeholder="Optional transfer notes" />
           </Form.Item>
 
           <div className="action-modal-footer">
-
             <Button
               onClick={() => {
                 transferForm.resetFields();
@@ -1288,18 +896,11 @@ const Inventory = () => {
               Cancel
             </Button>
 
-            <Button
-              type="primary"
-              htmlType="submit"
-              loading={saving}
-            >
+            <Button type="primary" htmlType="submit" loading={saving}>
               Transfer Stock
             </Button>
-
           </div>
-
         </Form>
-
       </Modal>
 
       {/* =========================
@@ -1309,20 +910,13 @@ const Inventory = () => {
       <Modal
         title="Inventory Transaction History"
         open={historyOpen}
-        onCancel={() =>
-          setHistoryOpen(false)
-        }
+        onCancel={() => setHistoryOpen(false)}
         footer={null}
         width={1000}
       >
-
         <Table
-          columns={
-            transactionColumns
-          }
-          dataSource={
-            transactions
-          }
+          columns={transactionColumns}
+          dataSource={transactions}
           rowKey="_id"
           pagination={{
             pageSize: 8,
@@ -1331,9 +925,7 @@ const Inventory = () => {
             x: 900,
           }}
         />
-
       </Modal>
-
     </div>
   );
 };

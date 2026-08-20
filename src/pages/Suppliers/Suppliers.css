@@ -23,8 +23,7 @@
 .supplier-table-card {
   border: 1px solid rgba(0, 0, 0, 0.06);
   border-radius: 16px;
-  box-shadow:
-    0 4px 16px rgba(0, 0, 0, 0.04);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.04);
 }
 
 .supplier-filter-card {
@@ -62,17 +61,11 @@
   gap: 2px;
 }
 
-.supplier-table-card
-  .ant-table-thead
-  > tr
-  > th {
+.supplier-table-card .ant-table-thead > tr > th {
   background: #fafafa;
 }
 
-.supplier-table-card
-  .ant-table-tbody
-  > tr
-  > td {
+.supplier-table-card .ant-table-tbody > tr > td {
   padding-top: 16px;
   padding-bottom: 16px;
 }
@@ -85,8 +78,7 @@
   padding-top: 20px;
   margin-top: 8px;
 
-  border-top: 1px solid
-    rgba(0, 0, 0, 0.06);
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
 }
 
 @media (max-width: 768px) {

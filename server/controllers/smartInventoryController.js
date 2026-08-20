@@ -15,14 +15,11 @@ const getSmartRestock = async (req, res) => {
     // CHECK BRANCH
     // =========================
 
-    const branch = await Branch.findById(
-      branchId
-    );
+    const branch = await Branch.findById(branchId);
 
     if (!branch || !branch.isActive) {
       return res.status(404).json({
-        message:
-          "Branch does not exist or is inactive.",
+        message: "Branch does not exist or is inactive.",
       });
     }
 
@@ -32,25 +29,17 @@ const getSmartRestock = async (req, res) => {
 
     const now = new Date();
 
-    const sevenDaysAgo = new Date(
-      now
-    );
+    const sevenDaysAgo = new Date(now);
 
-    sevenDaysAgo.setDate(
-      sevenDaysAgo.getDate() - 7
-    );
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
 
     // =========================
     // GET INVENTORY
     // =========================
 
-    const inventories =
-      await BranchInventory.find({
-        branch: branchId,
-      }).populate(
-        "product",
-        "name sku barcode unit sellingPrice isActive"
-      );
+    const inventories = await BranchInventory.find({
+      branch: branchId,
+    }).populate("product", "name sku barcode unit sellingPrice isActive");
 
     // =========================
     // GET RECENT SALES
@@ -65,9 +54,7 @@ const getSmartRestock = async (req, res) => {
         $gte: sevenDaysAgo,
         $lte: now,
       },
-    }).select(
-      "items createdAt"
-    );
+    }).select("items createdAt");
 
     // =========================
     // CALCULATE SALES
@@ -77,15 +64,13 @@ const getSmartRestock = async (req, res) => {
 
     for (const sale of sales) {
       for (const item of sale.items) {
-        const productId =
-          item.product.toString();
+        const productId = item.product.toString();
 
         if (!salesMap[productId]) {
           salesMap[productId] = 0;
         }
 
-        salesMap[productId] +=
-          Number(item.quantity);
+        salesMap[productId] += Number(item.quantity);
       }
     }
 
@@ -93,95 +78,58 @@ const getSmartRestock = async (req, res) => {
     // BUILD RECOMMENDATIONS
     // =========================
 
-    const recommendations =
-      inventories
-        .filter(
-          (inventory) =>
-            inventory.product &&
-            inventory.product.isActive
-        )
-        .map((inventory) => {
-          const product =
-            inventory.product;
+    const recommendations = inventories
+      .filter((inventory) => inventory.product && inventory.product.isActive)
+      .map((inventory) => {
+        const product = inventory.product;
 
-          const productId =
-            product._id.toString();
+        const productId = product._id.toString();
 
-          const currentStock =
-            Number(
-              inventory.quantity
-            );
+        const currentStock = Number(inventory.quantity);
 
-          const reorderLevel =
-            Number(
-              inventory.reorderLevel
-            );
+        const reorderLevel = Number(inventory.reorderLevel);
 
-          const soldLast7Days =
-            salesMap[productId] || 0;
+        const soldLast7Days = salesMap[productId] || 0;
 
-          // =========================
-          // AVERAGE DAILY SALES
-          // =========================
+        // =========================
+        // AVERAGE DAILY SALES
+        // =========================
 
-          const averageDailySales =
-            soldLast7Days / 7;
+        const averageDailySales = soldLast7Days / 7;
 
-          // =========================
-          // DAYS UNTIL STOCKOUT
-          // =========================
+        // =========================
+        // DAYS UNTIL STOCKOUT
+        // =========================
 
-          let daysUntilStockout =
-            null;
+        let daysUntilStockout = null;
 
-          if (
-            averageDailySales > 0
-          ) {
-            daysUntilStockout =
-              currentStock /
-              averageDailySales;
-          }
+        if (averageDailySales > 0) {
+          daysUntilStockout = currentStock / averageDailySales;
+        }
 
-          // =========================
-          // RISK
-          // =========================
+        // =========================
+        // RISK
+        // =========================
 
-          let risk = "LOW";
+        let risk = "LOW";
 
-          if (
-            currentStock <= 0
-          ) {
-            risk = "CRITICAL";
-          } else if (
-            daysUntilStockout !==
-              null &&
-            daysUntilStockout <= 2
-          ) {
-            risk = "CRITICAL";
-          } else if (
-            daysUntilStockout !==
-              null &&
-            daysUntilStockout <= 5
-          ) {
-            risk = "HIGH";
-          } else if (
-            currentStock <=
-            reorderLevel
-          ) {
-            risk = "HIGH";
-          } else if (
-            daysUntilStockout !==
-              null &&
-            daysUntilStockout <= 10
-          ) {
-            risk = "MEDIUM";
-          }
+        if (currentStock <= 0) {
+          risk = "CRITICAL";
+        } else if (daysUntilStockout !== null && daysUntilStockout <= 2) {
+          risk = "CRITICAL";
+        } else if (daysUntilStockout !== null && daysUntilStockout <= 5) {
+          risk = "HIGH";
+        } else if (currentStock <= reorderLevel) {
+          risk = "HIGH";
+        } else if (daysUntilStockout !== null && daysUntilStockout <= 10) {
+          risk = "MEDIUM";
+        }
 
-          // =========================
-          // RECOMMENDED ORDER
-          // =========================
+        // =========================
+        // RECOMMENDED ORDER
+        // =========================
 
-          /*
+        /*
             We want enough stock for
             approximately 14 days of
             expected demand.
@@ -192,65 +140,46 @@ const getSmartRestock = async (req, res) => {
             reorder level.
           */
 
-          const fourteenDayDemand =
-            averageDailySales * 14;
+        const fourteenDayDemand = averageDailySales * 14;
 
-          const targetStock =
-            Math.max(
-              reorderLevel * 2,
-              Math.ceil(
-                fourteenDayDemand
-              )
-            );
+        const targetStock = Math.max(
+          reorderLevel * 2,
+          Math.ceil(fourteenDayDemand),
+        );
 
-          const recommendedOrder =
-            Math.max(
-              0,
-              Math.ceil(
-                targetStock -
-                  currentStock
-              )
-            );
+        const recommendedOrder = Math.max(
+          0,
+          Math.ceil(targetStock - currentStock),
+        );
 
-          return {
-            product: {
-              _id: product._id,
-              name: product.name,
-              sku: product.sku,
-              barcode: product.barcode,
-              unit: product.unit,
-              sellingPrice:
-                product.sellingPrice,
-            },
+        return {
+          product: {
+            _id: product._id,
+            name: product.name,
+            sku: product.sku,
+            barcode: product.barcode,
+            unit: product.unit,
+            sellingPrice: product.sellingPrice,
+          },
 
-            currentStock,
+          currentStock,
 
-            reorderLevel,
+          reorderLevel,
 
-            soldLast7Days,
+          soldLast7Days,
 
-            averageDailySales:
-              Number(
-                averageDailySales.toFixed(
-                  2
-                )
-              ),
+          averageDailySales: Number(averageDailySales.toFixed(2)),
 
-            daysUntilStockout:
-              daysUntilStockout ===
-              null
-                ? null
-                : Number(
-                    daysUntilStockout.toFixed(
-                      1
-                    )
-                  ),
+          daysUntilStockout:
+            daysUntilStockout === null
+              ? null
+              : Number(daysUntilStockout.toFixed(1)),
 
-            risk,
+          risk,
 
-            recommendedOrder,
-          };
-        });
+          recommendedOrder,
+        };
+      });
 
     // =========================
     // SORT BY RISK
@@ -263,11 +192,7 @@ const getSmartRestock = async (req, res) => {
       LOW: 4,
     };
 
-    recommendations.sort(
-      (a, b) =>
-        riskPriority[a.risk] -
-        riskPriority[b.risk]
-    );
+    recommendations.sort((a, b) => riskPriority[a.risk] - riskPriority[b.risk]);
 
     // =========================
     // RESPONSE
@@ -286,38 +211,23 @@ const getSmartRestock = async (req, res) => {
         to: now,
       },
 
-      totalProducts:
-        recommendations.length,
+      totalProducts: recommendations.length,
 
-      criticalCount:
-        recommendations.filter(
-          (item) =>
-            item.risk === "CRITICAL"
-        ).length,
+      criticalCount: recommendations.filter((item) => item.risk === "CRITICAL")
+        .length,
 
-      highCount:
-        recommendations.filter(
-          (item) =>
-            item.risk === "HIGH"
-        ).length,
+      highCount: recommendations.filter((item) => item.risk === "HIGH").length,
 
-      mediumCount:
-        recommendations.filter(
-          (item) =>
-            item.risk === "MEDIUM"
-        ).length,
+      mediumCount: recommendations.filter((item) => item.risk === "MEDIUM")
+        .length,
 
       recommendations,
     });
   } catch (error) {
-    console.error(
-      "Smart restock error:",
-      error
-    );
+    console.error("Smart restock error:", error);
 
     res.status(500).json({
-      message:
-        "Failed to generate smart restock recommendations.",
+      message: "Failed to generate smart restock recommendations.",
     });
   }
 };

@@ -26,20 +26,10 @@
 
   overflow: hidden;
 
-  transition:
-    width 0.22s
-    cubic-bezier(
-      0.4,
-      0,
-      0.2,
-      1
-    );
+  transition: width 0.22s cubic-bezier(0.4, 0, 0.2, 1);
 
-  box-shadow:
-    1px 0 0
-      rgba(0, 0, 0, 0.02);
+  box-shadow: 1px 0 0 rgba(0, 0, 0, 0.02);
 }
-
 
 /* ========================================
    EXPANDED
@@ -48,11 +38,8 @@
 .sidebar-expanded {
   width: 250px;
 
-  box-shadow:
-    8px 0 25px
-      rgba(0, 0, 0, 0.06);
+  box-shadow: 8px 0 25px rgba(0, 0, 0, 0.06);
 }
-
 
 /* ========================================
    BRAND
@@ -104,20 +91,17 @@
 
   opacity: 0;
 
-  transform:
-    translateX(-5px);
+  transform: translateX(-5px);
 
   transition:
     opacity 0.12s ease,
     transform 0.18s ease;
 }
 
-.sidebar-expanded
-  .sidebar-brand-text {
+.sidebar-expanded .sidebar-brand-text {
   opacity: 1;
 
-  transform:
-    translateX(0);
+  transform: translateX(0);
 
   transition-delay: 0.08s;
 }
@@ -142,7 +126,6 @@
   line-height: 14px;
 }
 
-
 /* ========================================
    NAVIGATION
 ======================================== */
@@ -156,8 +139,7 @@
 
   overflow-x: hidden;
 
-  padding:
-    12px 2px 8px;
+  padding: 12px 2px 8px;
 }
 
 .sidebar-navigation::-webkit-scrollbar {
@@ -169,7 +151,6 @@
 
   border-radius: 10px;
 }
-
 
 /* ========================================
    GROUP
@@ -200,17 +181,14 @@
 
   opacity: 0;
 
-  transition:
-    opacity 0.1s ease;
+  transition: opacity 0.1s ease;
 }
 
-.sidebar-expanded
-  .sidebar-group-title {
+.sidebar-expanded .sidebar-group-title {
   opacity: 1;
 
   transition-delay: 0.08s;
 }
-
 
 /* ========================================
    ITEMS
@@ -263,7 +241,6 @@
     color 0.16s ease;
 }
 
-
 /* ========================================
    ICON
 ======================================== */
@@ -283,10 +260,8 @@
 
   font-size: 18px;
 
-  transition:
-    color 0.16s ease;
+  transition: color 0.16s ease;
 }
-
 
 /* ========================================
    LABEL
@@ -303,8 +278,7 @@
 
   opacity: 0;
 
-  transform:
-    translateX(-5px);
+  transform: translateX(-5px);
 
   transition:
     opacity 0.1s ease,
@@ -313,28 +287,23 @@
   pointer-events: none;
 }
 
-
 /* ========================================
    EXPANDED ITEM
 ======================================== */
 
-.sidebar-expanded
-  .sidebar-item {
+.sidebar-expanded .sidebar-item {
   justify-content: flex-start;
 
   padding-left: 11px;
 }
 
-.sidebar-expanded
-  .sidebar-item-label {
+.sidebar-expanded .sidebar-item-label {
   opacity: 1;
 
-  transform:
-    translateX(0);
+  transform: translateX(0);
 
   transition-delay: 0.07s;
 }
-
 
 /* ========================================
    HOVER
@@ -346,11 +315,9 @@
   color: #222222;
 }
 
-.sidebar-item:hover
-  .sidebar-item-icon {
+.sidebar-item:hover .sidebar-item-icon {
   color: #333333;
 }
-
 
 /* ========================================
    ACTIVE
@@ -364,11 +331,9 @@
   font-weight: 650;
 }
 
-.sidebar-item-active
-  .sidebar-item-icon {
+.sidebar-item-active .sidebar-item-icon {
   color: #111111;
 }
-
 
 /* ========================================
    ACTIVE INDICATOR
@@ -386,12 +351,10 @@
 
   width: 3px;
 
-  border-radius:
-    0 4px 4px 0;
+  border-radius: 0 4px 4px 0;
 
   background: #111111;
 }
-
 
 /* ========================================
    BOTTOM
@@ -402,6 +365,5 @@
 
   padding-top: 9px;
 
-  border-top:
-    1px solid #eeeeee;
+  border-top: 1px solid #eeeeee;
 }

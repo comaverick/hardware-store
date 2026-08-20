@@ -1,8 +1,4 @@
-import {
-  BrowserRouter,
-  Routes,
-  Route,
-} from "react-router-dom";
+import { BrowserRouter, Routes, Route } from "react-router-dom";
 
 import { AuthProvider } from "./context/AuthContext";
 
@@ -26,15 +22,9 @@ import ComingSoon from "./pages/ComingSoon";
 function App() {
   return (
     <BrowserRouter>
-
       <AuthProvider>
-
         <Routes>
-
-          <Route
-            path="/login"
-            element={<Login />}
-          />
+          <Route path="/login" element={<Login />} />
 
           <Route
             path="/dashboard"
@@ -203,11 +193,8 @@ function App() {
               </ProtectedRoute>
             }
           />
-
         </Routes>
-
       </AuthProvider>
-
     </BrowserRouter>
   );
 }

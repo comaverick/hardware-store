@@ -6,21 +6,16 @@ const Supplier = require("../models/Supplier");
 
 const getSuppliers = async (req, res) => {
   try {
-    const suppliers = await Supplier.find()
-      .sort({
-        createdAt: -1,
-      });
+    const suppliers = await Supplier.find().sort({
+      createdAt: -1,
+    });
 
     res.json(suppliers);
   } catch (error) {
-    console.error(
-      "Get suppliers error:",
-      error
-    );
+    console.error("Get suppliers error:", error);
 
     res.status(500).json({
-      message:
-        "Failed to retrieve suppliers.",
+      message: "Failed to retrieve suppliers.",
     });
   }
 };
@@ -29,33 +24,22 @@ const getSuppliers = async (req, res) => {
 // GET ONE SUPPLIER
 // =========================
 
-const getSupplierById = async (
-  req,
-  res
-) => {
+const getSupplierById = async (req, res) => {
   try {
-    const supplier =
-      await Supplier.findById(
-        req.params.id
-      );
+    const supplier = await Supplier.findById(req.params.id);
 
     if (!supplier) {
       return res.status(404).json({
-        message:
-          "Supplier not found.",
+        message: "Supplier not found.",
       });
     }
 
     res.json(supplier);
   } catch (error) {
-    console.error(
-      "Get supplier error:",
-      error
-    );
+    console.error("Get supplier error:", error);
 
     res.status(500).json({
-      message:
-        "Failed to retrieve supplier.",
+      message: "Failed to retrieve supplier.",
     });
   }
 };
@@ -64,10 +48,7 @@ const getSupplierById = async (
 // CREATE SUPPLIER
 // =========================
 
-const createSupplier = async (
-  req,
-  res
-) => {
+const createSupplier = async (req, res) => {
   try {
     const {
       name,
@@ -82,47 +63,37 @@ const createSupplier = async (
 
     if (!name || !code) {
       return res.status(400).json({
-        message:
-          "Supplier name and code are required.",
+        message: "Supplier name and code are required.",
       });
     }
 
-    const existingSupplier =
-      await Supplier.findOne({
-        code: code.toUpperCase(),
-      });
+    const existingSupplier = await Supplier.findOne({
+      code: code.toUpperCase(),
+    });
 
     if (existingSupplier) {
       return res.status(400).json({
-        message:
-          "Supplier code already exists.",
+        message: "Supplier code already exists.",
       });
     }
 
-    const supplier =
-      await Supplier.create({
-        name,
-        code,
-        contactPerson,
-        email,
-        phone,
-        address,
-        paymentTerms,
-        notes,
-      });
+    const supplier = await Supplier.create({
+      name,
+      code,
+      contactPerson,
+      email,
+      phone,
+      address,
+      paymentTerms,
+      notes,
+    });
 
-    res.status(201).json(
-      supplier
-    );
+    res.status(201).json(supplier);
   } catch (error) {
-    console.error(
-      "Create supplier error:",
-      error
-    );
+    console.error("Create supplier error:", error);
 
     res.status(500).json({
-      message:
-        "Failed to create supplier.",
+      message: "Failed to create supplier.",
     });
   }
 };
@@ -131,20 +102,13 @@ const createSupplier = async (
 // UPDATE SUPPLIER
 // =========================
 
-const updateSupplier = async (
-  req,
-  res
-) => {
+const updateSupplier = async (req, res) => {
   try {
-    const supplier =
-      await Supplier.findById(
-        req.params.id
-      );
+    const supplier = await Supplier.findById(req.params.id);
 
     if (!supplier) {
       return res.status(404).json({
-        message:
-          "Supplier not found.",
+        message: "Supplier not found.",
       });
     }
 
@@ -161,74 +125,47 @@ const updateSupplier = async (
     } = req.body;
 
     if (code) {
-      const existingSupplier =
-        await Supplier.findOne({
-          code:
-            code.toUpperCase(),
+      const existingSupplier = await Supplier.findOne({
+        code: code.toUpperCase(),
 
-          _id: {
-            $ne: supplier._id,
-          },
-        });
+        _id: {
+          $ne: supplier._id,
+        },
+      });
 
       if (existingSupplier) {
         return res.status(400).json({
-          message:
-            "Supplier code already exists.",
+          message: "Supplier code already exists.",
         });
       }
 
-      supplier.code =
-        code.toUpperCase();
+      supplier.code = code.toUpperCase();
     }
 
-    if (name !== undefined)
-      supplier.name = name;
+    if (name !== undefined) supplier.name = name;
 
-    if (
-      contactPerson !==
-      undefined
-    )
-      supplier.contactPerson =
-        contactPerson;
+    if (contactPerson !== undefined) supplier.contactPerson = contactPerson;
 
-    if (email !== undefined)
-      supplier.email = email;
+    if (email !== undefined) supplier.email = email;
 
-    if (phone !== undefined)
-      supplier.phone = phone;
+    if (phone !== undefined) supplier.phone = phone;
 
-    if (address !== undefined)
-      supplier.address = address;
+    if (address !== undefined) supplier.address = address;
 
-    if (
-      paymentTerms !==
-      undefined
-    )
-      supplier.paymentTerms =
-        paymentTerms;
+    if (paymentTerms !== undefined) supplier.paymentTerms = paymentTerms;
 
-    if (notes !== undefined)
-      supplier.notes = notes;
+    if (notes !== undefined) supplier.notes = notes;
 
-    if (
-      isActive !== undefined
-    )
-      supplier.isActive =
-        isActive;
+    if (isActive !== undefined) supplier.isActive = isActive;
 
     await supplier.save();
 
     res.json(supplier);
   } catch (error) {
-    console.error(
-      "Update supplier error:",
-      error
-    );
+    console.error("Update supplier error:", error);
 
     res.status(500).json({
-      message:
-        "Failed to update supplier.",
+      message: "Failed to update supplier.",
     });
   }
 };
@@ -237,20 +174,13 @@ const updateSupplier = async (
 // DEACTIVATE SUPPLIER
 // =========================
 
-const deleteSupplier = async (
-  req,
-  res
-) => {
+const deleteSupplier = async (req, res) => {
   try {
-    const supplier =
-      await Supplier.findById(
-        req.params.id
-      );
+    const supplier = await Supplier.findById(req.params.id);
 
     if (!supplier) {
       return res.status(404).json({
-        message:
-          "Supplier not found.",
+        message: "Supplier not found.",
       });
     }
 
@@ -260,19 +190,14 @@ const deleteSupplier = async (
     await supplier.save();
 
     res.json({
-      message:
-        "Supplier deactivated successfully.",
+      message: "Supplier deactivated successfully.",
       supplier,
     });
   } catch (error) {
-    console.error(
-      "Delete supplier error:",
-      error
-    );
+    console.error("Delete supplier error:", error);
 
     res.status(500).json({
-      message:
-        "Failed to deactivate supplier.",
+      message: "Failed to deactivate supplier.",
     });
   }
 };

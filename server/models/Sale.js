@@ -28,7 +28,7 @@ const saleItemSchema = new mongoose.Schema(
   },
   {
     _id: true,
-  }
+  },
 );
 
 const saleSchema = new mongoose.Schema(
@@ -49,10 +49,8 @@ const saleSchema = new mongoose.Schema(
       type: [saleItemSchema],
       required: true,
       validate: {
-        validator: (items) =>
-          items.length > 0,
-        message:
-          "Sale must contain at least one item.",
+        validator: (items) => items.length > 0,
+        message: "Sale must contain at least one item.",
       },
     },
 
@@ -76,11 +74,7 @@ const saleSchema = new mongoose.Schema(
 
     paymentMethod: {
       type: String,
-      enum: [
-        "CASH",
-        "GCASH",
-        "CARD",
-      ],
+      enum: ["CASH", "GCASH", "CARD"],
       required: true,
     },
 
@@ -98,11 +92,7 @@ const saleSchema = new mongoose.Schema(
 
     status: {
       type: String,
-      enum: [
-        "COMPLETED",
-        "VOIDED",
-        "REFUNDED",
-      ],
+      enum: ["COMPLETED", "VOIDED", "REFUNDED"],
       default: "COMPLETED",
     },
 
@@ -114,10 +104,7 @@ const saleSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
-  }
+  },
 );
 
-module.exports = mongoose.model(
-  "Sale",
-  saleSchema
-);
+module.exports = mongoose.model("Sale", saleSchema);

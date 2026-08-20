@@ -49,20 +49,15 @@ const PurchaseOrders = () => {
 
   const [search, setSearch] = useState("");
 
-  const [statusFilter, setStatusFilter] =
-    useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
 
-  const [createOpen, setCreateOpen] =
-    useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
 
-  const [viewOpen, setViewOpen] =
-    useState(false);
+  const [viewOpen, setViewOpen] = useState(false);
 
-  const [receiveOpen, setReceiveOpen] =
-    useState(false);
+  const [receiveOpen, setReceiveOpen] = useState(false);
 
-  const [selectedOrder, setSelectedOrder] =
-    useState(null);
+  const [selectedOrder, setSelectedOrder] = useState(null);
 
   const [createForm] = Form.useForm();
 
@@ -91,28 +86,17 @@ const PurchaseOrders = () => {
       setOrders(ordersResponse.data);
 
       setSuppliers(
-        suppliersResponse.data.filter(
-          (supplier) => supplier.isActive
-        )
+        suppliersResponse.data.filter((supplier) => supplier.isActive),
       );
 
-      setBranches(
-        branchesResponse.data.filter(
-          (branch) => branch.isActive
-        )
-      );
+      setBranches(branchesResponse.data.filter((branch) => branch.isActive));
 
-      setProducts(
-        productsResponse.data.filter(
-          (product) => product.isActive
-        )
-      );
+      setProducts(productsResponse.data.filter((product) => product.isActive));
     } catch (error) {
       console.error(error);
 
       message.error(
-        error.response?.data?.message ||
-          "Failed to load purchase order data."
+        error.response?.data?.message || "Failed to load purchase order data.",
       );
     } finally {
       setLoading(false);
@@ -129,21 +113,13 @@ const PurchaseOrders = () => {
 
   const filteredOrders = useMemo(() => {
     return orders.filter((order) => {
-      const value = search
-        .toLowerCase()
-        .trim();
+      const value = search.toLowerCase().trim();
 
-      const poNumber =
-        order.poNumber?.toLowerCase() ||
-        "";
+      const poNumber = order.poNumber?.toLowerCase() || "";
 
-      const supplier =
-        order.supplier?.name?.toLowerCase() ||
-        "";
+      const supplier = order.supplier?.name?.toLowerCase() || "";
 
-      const branch =
-        order.branch?.code?.toLowerCase() ||
-        "";
+      const branch = order.branch?.code?.toLowerCase() || "";
 
       const matchesSearch =
         !value ||
@@ -152,42 +128,28 @@ const PurchaseOrders = () => {
         branch.includes(value);
 
       const matchesStatus =
-        statusFilter === "all" ||
-        order.status === statusFilter;
+        statusFilter === "all" || order.status === statusFilter;
 
-      return (
-        matchesSearch &&
-        matchesStatus
-      );
+      return matchesSearch && matchesStatus;
     });
-  }, [
-    orders,
-    search,
-    statusFilter,
-  ]);
+  }, [orders, search, statusFilter]);
 
   // =========================
   // STATISTICS
   // =========================
 
-  const draftCount = orders.filter(
-    (order) => order.status === "DRAFT"
-  ).length;
+  const draftCount = orders.filter((order) => order.status === "DRAFT").length;
 
   const orderedCount = orders.filter(
-    (order) =>
-      order.status === "ORDERED"
+    (order) => order.status === "ORDERED",
   ).length;
 
   const receivingCount = orders.filter(
-    (order) =>
-      order.status ===
-      "PARTIALLY_RECEIVED"
+    (order) => order.status === "PARTIALLY_RECEIVED",
   ).length;
 
   const receivedCount = orders.filter(
-    (order) =>
-      order.status === "RECEIVED"
+    (order) => order.status === "RECEIVED",
   ).length;
 
   // =========================
@@ -222,14 +184,9 @@ const PurchaseOrders = () => {
     try {
       setSaving(true);
 
-      await api.post(
-        "/purchase-orders",
-        values
-      );
+      await api.post("/purchase-orders", values);
 
-      message.success(
-        "Purchase order created successfully."
-      );
+      message.success("Purchase order created successfully.");
 
       closeCreateModal();
 
@@ -238,8 +195,7 @@ const PurchaseOrders = () => {
       console.error(error);
 
       message.error(
-        error.response?.data?.message ||
-          "Failed to create purchase order."
+        error.response?.data?.message || "Failed to create purchase order.",
       );
     } finally {
       setSaving(false);
@@ -250,29 +206,20 @@ const PurchaseOrders = () => {
   // STATUS
   // =========================
 
-  const updateStatus = async (
-    order,
-    status
-  ) => {
+  const updateStatus = async (order, status) => {
     try {
-      await api.put(
-        `/purchase-orders/${order._id}/status`,
-        {
-          status,
-        }
-      );
+      await api.put(`/purchase-orders/${order._id}/status`, {
+        status,
+      });
 
-      message.success(
-        `Purchase order marked as ${status}.`
-      );
+      message.success(`Purchase order marked as ${status}.`);
 
       await fetchData();
     } catch (error) {
       console.error(error);
 
       message.error(
-        error.response?.data?.message ||
-          "Failed to update purchase order."
+        error.response?.data?.message || "Failed to update purchase order.",
       );
     }
   };
@@ -294,19 +241,12 @@ const PurchaseOrders = () => {
   const openReceive = (order) => {
     setSelectedOrder(order);
 
-    const remainingItems =
-      order.items
-        .filter(
-          (item) =>
-            item.receivedQuantity <
-            item.quantity
-        )
-        .map((item) => ({
-          itemId: item._id,
-          quantity:
-            item.quantity -
-            item.receivedQuantity,
-        }));
+    const remainingItems = order.items
+      .filter((item) => item.receivedQuantity < item.quantity)
+      .map((item) => ({
+        itemId: item._id,
+        quantity: item.quantity - item.receivedQuantity,
+      }));
 
     receiveForm.setFieldsValue({
       items: remainingItems,
@@ -325,45 +265,30 @@ const PurchaseOrders = () => {
     setReceiveOpen(false);
   };
 
-  const handleReceive = async (
-    values
-  ) => {
+  const handleReceive = async (values) => {
     try {
       setSaving(true);
 
-      const items =
-        (values.items || [])
-          .filter(
-            (item) =>
-              Number(item.quantity) > 0
-          )
-          .map((item) => ({
-            itemId: item.itemId,
-            quantity: Number(
-              item.quantity
-            ),
-          }));
+      const items = (values.items || [])
+        .filter((item) => Number(item.quantity) > 0)
+        .map((item) => ({
+          itemId: item.itemId,
+          quantity: Number(item.quantity),
+        }));
 
       if (items.length === 0) {
-        message.error(
-          "Enter at least one received quantity."
-        );
+        message.error("Enter at least one received quantity.");
 
         setSaving(false);
 
         return;
       }
 
-      await api.post(
-        `/purchase-orders/${selectedOrder._id}/receive`,
-        {
-          items,
-        }
-      );
+      await api.post(`/purchase-orders/${selectedOrder._id}/receive`, {
+        items,
+      });
 
-      message.success(
-        "Purchase order received successfully."
-      );
+      message.success("Purchase order received successfully.");
 
       closeReceiveModal();
 
@@ -372,8 +297,7 @@ const PurchaseOrders = () => {
       console.error(error);
 
       message.error(
-        error.response?.data?.message ||
-          "Failed to receive purchase order."
+        error.response?.data?.message || "Failed to receive purchase order.",
       );
     } finally {
       setSaving(false);
@@ -412,14 +336,9 @@ const PurchaseOrders = () => {
       },
     };
 
-    const value =
-      config[status] || config.DRAFT;
+    const value = config[status] || config.DRAFT;
 
-    return (
-      <Tag color={value.color}>
-        {value.label}
-      </Tag>
-    );
+    return <Tag color={value.color}>{value.label}</Tag>;
   };
 
   // =========================
@@ -432,9 +351,7 @@ const PurchaseOrders = () => {
       dataIndex: "poNumber",
       key: "poNumber",
 
-      render: (value) => (
-        <strong>{value}</strong>
-      ),
+      render: (value) => <strong>{value}</strong>,
     },
 
     {
@@ -443,13 +360,9 @@ const PurchaseOrders = () => {
 
       render: (_, order) => (
         <div>
-          <div className="po-supplier">
-            {order.supplier?.name}
-          </div>
+          <div className="po-supplier">{order.supplier?.name}</div>
 
-          <Text type="secondary">
-            {order.supplier?.code}
-          </Text>
+          <Text type="secondary">{order.supplier?.code}</Text>
         </div>
       ),
     },
@@ -458,19 +371,14 @@ const PurchaseOrders = () => {
       title: "Branch",
       key: "branch",
 
-      render: (_, order) => (
-        <Tag>
-          {order.branch?.code}
-        </Tag>
-      ),
+      render: (_, order) => <Tag>{order.branch?.code}</Tag>,
     },
 
     {
       title: "Items",
       key: "items",
 
-      render: (_, order) =>
-        order.items?.length || 0,
+      render: (_, order) => order.items?.length || 0,
     },
 
     {
@@ -479,12 +387,9 @@ const PurchaseOrders = () => {
       key: "total",
 
       render: (value) =>
-        `₱${Number(value).toLocaleString(
-          "en-PH",
-          {
-            minimumFractionDigits: 2,
-          }
-        )}`,
+        `₱${Number(value).toLocaleString("en-PH", {
+          minimumFractionDigits: 2,
+        })}`,
     },
 
     {
@@ -492,8 +397,7 @@ const PurchaseOrders = () => {
       dataIndex: "status",
       key: "status",
 
-      render: (status) =>
-        getStatusTag(status),
+      render: (status) => getStatusTag(status),
     },
 
     {
@@ -501,12 +405,7 @@ const PurchaseOrders = () => {
       dataIndex: "createdAt",
       key: "created",
 
-      render: (value) =>
-        new Date(
-          value
-        ).toLocaleDateString(
-          "en-PH"
-        ),
+      render: (value) => new Date(value).toLocaleDateString("en-PH"),
     },
 
     {
@@ -518,9 +417,7 @@ const PurchaseOrders = () => {
           <Button
             type="text"
             icon={<EyeOutlined />}
-            onClick={() =>
-              openView(order)
-            }
+            onClick={() => openView(order)}
           >
             View
           </Button>
@@ -529,30 +426,19 @@ const PurchaseOrders = () => {
             <Button
               type="text"
               icon={<SendOutlined />}
-              onClick={() =>
-                updateStatus(
-                  order,
-                  "ORDERED"
-                )
-              }
+              onClick={() => updateStatus(order, "ORDERED")}
             >
               Order
             </Button>
           )}
 
-          {(order.status ===
-            "ORDERED" ||
-            order.status ===
-              "PARTIALLY_RECEIVED") && (
+          {(order.status === "ORDERED" ||
+            order.status === "PARTIALLY_RECEIVED") && (
             <Button
               type="primary"
               ghost
-              icon={
-                <InboxOutlined />
-              }
-              onClick={() =>
-                openReceive(order)
-              }
+              icon={<InboxOutlined />}
+              onClick={() => openReceive(order)}
             >
               Receive
             </Button>
@@ -564,21 +450,16 @@ const PurchaseOrders = () => {
 
   return (
     <div className="purchase-orders-page">
-
       {/* =========================
           HEADER
       ========================= */}
 
       <div className="purchase-orders-header">
-
         <div>
-          <Title level={2}>
-            Purchase Orders
-          </Title>
+          <Title level={2}>Purchase Orders</Title>
 
           <Text type="secondary">
-            Manage supplier orders
-            and incoming stock
+            Manage supplier orders and incoming stock
           </Text>
         </div>
 
@@ -586,76 +467,40 @@ const PurchaseOrders = () => {
           type="primary"
           size="large"
           icon={<PlusOutlined />}
-          onClick={
-            openCreateModal
-          }
+          onClick={openCreateModal}
         >
           Create Purchase Order
         </Button>
-
       </div>
 
       {/* =========================
           STATISTICS
       ========================= */}
 
-      <Row
-        gutter={[16, 16]}
-        className="po-stats"
-      >
-
-        <Col
-          xs={24}
-          sm={12}
-          lg={6}
-        >
+      <Row gutter={[16, 16]} className="po-stats">
+        <Col xs={24} sm={12} lg={6}>
           <Card className="po-stat-card">
-            <Statistic
-              title="Draft"
-              value={draftCount}
-            />
+            <Statistic title="Draft" value={draftCount} />
           </Card>
         </Col>
 
-        <Col
-          xs={24}
-          sm={12}
-          lg={6}
-        >
+        <Col xs={24} sm={12} lg={6}>
           <Card className="po-stat-card">
-            <Statistic
-              title="Ordered"
-              value={orderedCount}
-            />
+            <Statistic title="Ordered" value={orderedCount} />
           </Card>
         </Col>
 
-        <Col
-          xs={24}
-          sm={12}
-          lg={6}
-        >
+        <Col xs={24} sm={12} lg={6}>
           <Card className="po-stat-card">
-            <Statistic
-              title="Receiving"
-              value={receivingCount}
-            />
+            <Statistic title="Receiving" value={receivingCount} />
           </Card>
         </Col>
 
-        <Col
-          xs={24}
-          sm={12}
-          lg={6}
-        >
+        <Col xs={24} sm={12} lg={6}>
           <Card className="po-stat-card">
-            <Statistic
-              title="Received"
-              value={receivedCount}
-            />
+            <Statistic title="Received" value={receivedCount} />
           </Card>
         </Col>
-
       </Row>
 
       {/* =========================
@@ -663,73 +508,43 @@ const PurchaseOrders = () => {
       ========================= */}
 
       <Card className="po-filter-card">
-
         <Row gutter={[12, 12]}>
-
-          <Col
-            xs={24}
-            md={16}
-          >
+          <Col xs={24} md={16}>
             <Input
               size="large"
-              prefix={
-                <SearchOutlined />
-              }
+              prefix={<SearchOutlined />}
               placeholder="Search PO number, supplier, or branch..."
               value={search}
-              onChange={(event) =>
-                setSearch(
-                  event.target.value
-                )
-              }
+              onChange={(event) => setSearch(event.target.value)}
               allowClear
             />
           </Col>
 
-          <Col
-            xs={24}
-            md={8}
-          >
+          <Col xs={24} md={8}>
             <Select
               size="large"
               value={statusFilter}
-              onChange={
-                setStatusFilter
-              }
+              onChange={setStatusFilter}
               style={{
                 width: "100%",
               }}
             >
+              <Select.Option value="all">All Statuses</Select.Option>
 
-              <Select.Option value="all">
-                All Statuses
-              </Select.Option>
+              <Select.Option value="DRAFT">Draft</Select.Option>
 
-              <Select.Option value="DRAFT">
-                Draft
-              </Select.Option>
-
-              <Select.Option value="ORDERED">
-                Ordered
-              </Select.Option>
+              <Select.Option value="ORDERED">Ordered</Select.Option>
 
               <Select.Option value="PARTIALLY_RECEIVED">
                 Partially Received
               </Select.Option>
 
-              <Select.Option value="RECEIVED">
-                Received
-              </Select.Option>
+              <Select.Option value="RECEIVED">Received</Select.Option>
 
-              <Select.Option value="CANCELLED">
-                Cancelled
-              </Select.Option>
-
+              <Select.Option value="CANCELLED">Cancelled</Select.Option>
             </Select>
           </Col>
-
         </Row>
-
       </Card>
 
       {/* =========================
@@ -737,30 +552,21 @@ const PurchaseOrders = () => {
       ========================= */}
 
       <Card className="po-table-card">
-
         <Table
           columns={columns}
-          dataSource={
-            filteredOrders
-          }
+          dataSource={filteredOrders}
           rowKey="_id"
           loading={loading}
           pagination={{
             pageSize: 10,
             showSizeChanger: true,
 
-            showTotal: (total) =>
-              `${total} purchase orders`,
+            showTotal: (total) => `${total} purchase orders`,
           }}
           locale={{
-            emptyText: (
-              <Empty
-                description="No purchase orders found"
-              />
-            ),
+            emptyText: <Empty description="No purchase orders found" />,
           }}
         />
-
       </Card>
 
       {/* =========================
@@ -770,279 +576,160 @@ const PurchaseOrders = () => {
       <Modal
         title="Create Purchase Order"
         open={createOpen}
-        onCancel={
-          closeCreateModal
-        }
+        onCancel={closeCreateModal}
         footer={null}
         width={900}
         destroyOnClose
       >
-
-        <Form
-          form={createForm}
-          layout="vertical"
-          onFinish={
-            handleCreate
-          }
-        >
-
+        <Form form={createForm} layout="vertical" onFinish={handleCreate}>
           <Row gutter={16}>
-
             <Col span={12}>
-
               <Form.Item
                 label="Supplier"
                 name="supplier"
                 rules={[
                   {
                     required: true,
-                    message:
-                      "Select a supplier.",
+                    message: "Select a supplier.",
                   },
                 ]}
               >
-
                 <Select
                   size="large"
                   placeholder="Select supplier"
                   showSearch
                   optionFilterProp="label"
-                  options={suppliers.map(
-                    (supplier) => ({
-                      value:
-                        supplier._id,
-                      label:
-                        `${supplier.code} - ${supplier.name}`,
-                    })
-                  )}
+                  options={suppliers.map((supplier) => ({
+                    value: supplier._id,
+                    label: `${supplier.code} - ${supplier.name}`,
+                  }))}
                 />
-
               </Form.Item>
-
             </Col>
 
             <Col span={12}>
-
               <Form.Item
                 label="Receiving Branch"
                 name="branch"
                 rules={[
                   {
                     required: true,
-                    message:
-                      "Select a branch.",
+                    message: "Select a branch.",
                   },
                 ]}
               >
-
                 <Select
                   size="large"
                   placeholder="Select branch"
                   showSearch
                   optionFilterProp="label"
-                  options={branches.map(
-                    (branch) => ({
-                      value:
-                        branch._id,
-                      label:
-                        `${branch.code} - ${branch.name}`,
-                    })
-                  )}
+                  options={branches.map((branch) => ({
+                    value: branch._id,
+                    label: `${branch.code} - ${branch.name}`,
+                  }))}
                 />
-
               </Form.Item>
-
             </Col>
-
           </Row>
 
-          <Form.Item
-            label="Expected Delivery Date"
-            name="expectedDeliveryDate"
-          >
-            <Input
-              type="date"
-              size="large"
-            />
+          <Form.Item label="Expected Delivery Date" name="expectedDeliveryDate">
+            <Input type="date" size="large" />
           </Form.Item>
 
-          <Title level={5}>
-            Order Items
-          </Title>
+          <Title level={5}>Order Items</Title>
 
-          <Form.List
-            name="items"
-          >
-            {(
-              fields,
-              { add, remove }
-            ) => (
+          <Form.List name="items">
+            {(fields, { add, remove }) => (
               <>
-                {fields.map(
-                  (
-                    field,
-                    index
-                  ) => (
-                    <Card
-                      key={
-                        field.key
-                      }
-                      size="small"
-                      className="po-item-card"
-                    >
+                {fields.map((field, index) => (
+                  <Card key={field.key} size="small" className="po-item-card">
+                    <Row gutter={12} align="bottom">
+                      <Col flex="1">
+                        <Form.Item
+                          {...field}
+                          label={index === 0 ? "Product" : ""}
+                          name={[field.name, "product"]}
+                          rules={[
+                            {
+                              required: true,
+                              message: "Select product.",
+                            },
+                          ]}
+                        >
+                          <Select
+                            placeholder="Select product"
+                            showSearch
+                            optionFilterProp="label"
+                            options={products.map((product) => ({
+                              value: product._id,
+                              label: `${product.sku} - ${product.name}`,
+                            }))}
+                          />
+                        </Form.Item>
+                      </Col>
 
-                      <Row
-                        gutter={12}
-                        align="bottom"
-                      >
+                      <Col flex="130px">
+                        <Form.Item
+                          {...field}
+                          label={index === 0 ? "Quantity" : ""}
+                          name={[field.name, "quantity"]}
+                          rules={[
+                            {
+                              required: true,
+                              message: "Enter quantity.",
+                            },
+                          ]}
+                        >
+                          <InputNumber
+                            min={1}
+                            style={{
+                              width: "100%",
+                            }}
+                          />
+                        </Form.Item>
+                      </Col>
 
-                        <Col flex="1">
+                      <Col flex="160px">
+                        <Form.Item
+                          {...field}
+                          label={index === 0 ? "Unit Cost" : ""}
+                          name={[field.name, "unitCost"]}
+                          rules={[
+                            {
+                              required: true,
+                              message: "Enter cost.",
+                            },
+                          ]}
+                        >
+                          <InputNumber
+                            min={0}
+                            precision={2}
+                            prefix="₱"
+                            style={{
+                              width: "100%",
+                            }}
+                          />
+                        </Form.Item>
+                      </Col>
 
-                          <Form.Item
-                            {...field}
-                            label={
-                              index ===
-                              0
-                                ? "Product"
-                                : ""
-                            }
-                            name={[
-                              field.name,
-                              "product",
-                            ]}
-                            rules={[
-                              {
-                                required: true,
-                                message:
-                                  "Select product.",
-                              },
-                            ]}
-                          >
-
-                            <Select
-                              placeholder="Select product"
-                              showSearch
-                              optionFilterProp="label"
-                              options={products.map(
-                                (
-                                  product
-                                ) => ({
-                                  value:
-                                    product._id,
-                                  label:
-                                    `${product.sku} - ${product.name}`,
-                                })
-                              )}
-                            />
-
-                          </Form.Item>
-
-                        </Col>
-
-                        <Col flex="130px">
-
-                          <Form.Item
-                            {...field}
-                            label={
-                              index ===
-                              0
-                                ? "Quantity"
-                                : ""
-                            }
-                            name={[
-                              field.name,
-                              "quantity",
-                            ]}
-                            rules={[
-                              {
-                                required: true,
-                                message:
-                                  "Enter quantity.",
-                              },
-                            ]}
-                          >
-
-                            <InputNumber
-                              min={1}
-                              style={{
-                                width:
-                                  "100%",
-                              }}
-                            />
-
-                          </Form.Item>
-
-                        </Col>
-
-                        <Col flex="160px">
-
-                          <Form.Item
-                            {...field}
-                            label={
-                              index ===
-                              0
-                                ? "Unit Cost"
-                                : ""
-                            }
-                            name={[
-                              field.name,
-                              "unitCost",
-                            ]}
-                            rules={[
-                              {
-                                required: true,
-                                message:
-                                  "Enter cost.",
-                              },
-                            ]}
-                          >
-
-                            <InputNumber
-                              min={0}
-                              precision={2}
-                              prefix="₱"
-                              style={{
-                                width:
-                                  "100%",
-                              }}
-                            />
-
-                          </Form.Item>
-
-                        </Col>
-
-                        <Col flex="50px">
-
-                          <Button
-                            danger
-                            type="text"
-                            disabled={
-                              fields.length ===
-                              1
-                            }
-                            onClick={() =>
-                              remove(
-                                field.name
-                              )
-                            }
-                          >
-                            ×
-                          </Button>
-
-                        </Col>
-
-                      </Row>
-
-                    </Card>
-                  )
-                )}
+                      <Col flex="50px">
+                        <Button
+                          danger
+                          type="text"
+                          disabled={fields.length === 1}
+                          onClick={() => remove(field.name)}
+                        >
+                          ×
+                        </Button>
+                      </Col>
+                    </Row>
+                  </Card>
+                ))}
 
                 <Button
                   type="dashed"
                   block
-                  icon={
-                    <PlusOutlined />
-                  }
+                  icon={<PlusOutlined />}
                   onClick={() =>
                     add({
                       quantity: 1,
@@ -1063,20 +750,11 @@ const PurchaseOrders = () => {
               marginTop: 20,
             }}
           >
-            <Input.TextArea
-              rows={3}
-              placeholder="Purchase order notes..."
-            />
+            <Input.TextArea rows={3} placeholder="Purchase order notes..." />
           </Form.Item>
 
           <div className="po-modal-footer">
-
-            <Button
-              onClick={
-                closeCreateModal
-              }
-              disabled={saving}
-            >
+            <Button onClick={closeCreateModal} disabled={saving}>
               Cancel
             </Button>
 
@@ -1084,17 +762,12 @@ const PurchaseOrders = () => {
               type="primary"
               htmlType="submit"
               loading={saving}
-              icon={
-                <FileTextOutlined />
-              }
+              icon={<FileTextOutlined />}
             >
               Create Purchase Order
             </Button>
-
           </div>
-
         </Form>
-
       </Modal>
 
       {/* =========================
@@ -1108,177 +781,100 @@ const PurchaseOrders = () => {
             : "Purchase Order"
         }
         open={viewOpen}
-        onCancel={() =>
-          setViewOpen(false)
-        }
+        onCancel={() => setViewOpen(false)}
         footer={null}
         width={850}
       >
-
         {selectedOrder && (
           <>
-
-            <Row
-              gutter={[16, 16]}
-              className="po-details"
-            >
-
+            <Row gutter={[16, 16]} className="po-details">
               <Col span={8}>
-
-                <Text type="secondary">
-                  Supplier
-                </Text>
+                <Text type="secondary">Supplier</Text>
 
                 <div>
-                  <strong>
-                    {
-                      selectedOrder
-                        .supplier
-                        ?.name
-                    }
-                  </strong>
+                  <strong>{selectedOrder.supplier?.name}</strong>
                 </div>
-
               </Col>
 
               <Col span={8}>
-
-                <Text type="secondary">
-                  Branch
-                </Text>
+                <Text type="secondary">Branch</Text>
 
                 <div>
-                  <strong>
-                    {
-                      selectedOrder
-                        .branch
-                        ?.code
-                    }
-                  </strong>
+                  <strong>{selectedOrder.branch?.code}</strong>
                 </div>
-
               </Col>
 
               <Col span={8}>
+                <Text type="secondary">Status</Text>
 
-                <Text type="secondary">
-                  Status
-                </Text>
-
-                <div>
-                  {getStatusTag(
-                    selectedOrder.status
-                  )}
-                </div>
-
+                <div>{getStatusTag(selectedOrder.status)}</div>
               </Col>
-
             </Row>
 
             <Table
               className="po-details-table"
               pagination={false}
               rowKey="_id"
-              dataSource={
-                selectedOrder.items
-              }
+              dataSource={selectedOrder.items}
               columns={[
                 {
                   title: "Product",
                   key: "product",
 
-                  render: (
-                    _,
-                    item
-                  ) =>
-                    item.product
-                      ?.name,
+                  render: (_, item) => item.product?.name,
                 },
 
                 {
                   title: "SKU",
                   key: "sku",
 
-                  render: (
-                    _,
-                    item
-                  ) =>
-                    item.product
-                      ?.sku,
+                  render: (_, item) => item.product?.sku,
                 },
 
                 {
                   title: "Ordered",
-                  dataIndex:
-                    "quantity",
+                  dataIndex: "quantity",
                 },
 
                 {
                   title: "Received",
-                  dataIndex:
-                    "receivedQuantity",
+                  dataIndex: "receivedQuantity",
                 },
 
                 {
                   title: "Unit Cost",
-                  dataIndex:
-                    "unitCost",
+                  dataIndex: "unitCost",
 
                   render: (value) =>
-                    `₱${Number(
-                      value
-                    ).toLocaleString(
-                      "en-PH",
-                      {
-                        minimumFractionDigits:
-                          2,
-                      }
-                    )}`,
+                    `₱${Number(value).toLocaleString("en-PH", {
+                      minimumFractionDigits: 2,
+                    })}`,
                 },
 
                 {
                   title: "Subtotal",
-                  dataIndex:
-                    "subtotal",
+                  dataIndex: "subtotal",
 
                   render: (value) =>
-                    `₱${Number(
-                      value
-                    ).toLocaleString(
-                      "en-PH",
-                      {
-                        minimumFractionDigits:
-                          2,
-                      }
-                    )}`,
+                    `₱${Number(value).toLocaleString("en-PH", {
+                      minimumFractionDigits: 2,
+                    })}`,
                 },
               ]}
             />
 
             <div className="po-total">
-
-              <Text>
-                Total
-              </Text>
+              <Text>Total</Text>
 
               <strong>
                 ₱
-                {Number(
-                  selectedOrder.totalAmount
-                ).toLocaleString(
-                  "en-PH",
-                  {
-                    minimumFractionDigits:
-                      2,
-                  }
-                )}
+                {Number(selectedOrder.totalAmount).toLocaleString("en-PH", {
+                  minimumFractionDigits: 2,
+                })}
               </strong>
-
             </div>
-
           </>
         )}
-
       </Modal>
 
       {/* =========================
@@ -1292,172 +888,92 @@ const PurchaseOrders = () => {
             : "Receive Purchase Order"
         }
         open={receiveOpen}
-        onCancel={
-          closeReceiveModal
-        }
+        onCancel={closeReceiveModal}
         footer={null}
         width={700}
       >
-
         {selectedOrder && (
-          <Form
-            form={receiveForm}
-            layout="vertical"
-            onFinish={
-              handleReceive
-            }
-          >
-
+          <Form form={receiveForm} layout="vertical" onFinish={handleReceive}>
             <div className="receive-info">
-
-              <Text type="secondary">
-                Receiving branch
-              </Text>
+              <Text type="secondary">Receiving branch</Text>
 
               <strong>
-                {
-                  selectedOrder
-                    .branch
-                    ?.code
-                }{" "}
-                —{" "}
-                {
-                  selectedOrder
-                    .branch
-                    ?.name
-                }
+                {selectedOrder.branch?.code} — {selectedOrder.branch?.name}
               </strong>
-
             </div>
 
-            <Form.List
-              name="items"
-            >
+            <Form.List name="items">
               {(fields) => (
                 <>
-                  {fields.map(
-                    (
-                      field,
-                      index
-                    ) => {
+                  {fields.map((field, index) => {
+                    const orderItem = selectedOrder.items.filter(
+                      (item) => item.receivedQuantity < item.quantity,
+                    )[index];
 
-                      const orderItem =
-                        selectedOrder.items
-                          .filter(
-                            (item) =>
-                              item.receivedQuantity <
-                              item.quantity
-                          )[index];
+                    if (!orderItem) {
+                      return null;
+                    }
 
-                      if (
-                        !orderItem
-                      ) {
-                        return null;
-                      }
+                    const remaining =
+                      orderItem.quantity - orderItem.receivedQuantity;
 
-                      const remaining =
-                        orderItem.quantity -
-                        orderItem.receivedQuantity;
+                    return (
+                      <Card
+                        key={field.key}
+                        size="small"
+                        className="receive-item"
+                      >
+                        <div className="receive-item-info">
+                          <div>
+                            <strong>{orderItem.product?.name}</strong>
 
-                      return (
-                        <Card
-                          key={
-                            field.key
-                          }
-                          size="small"
-                          className="receive-item"
-                        >
-
-                          <div className="receive-item-info">
-
-                            <div>
-
-                              <strong>
-                                {
-                                  orderItem
-                                    .product
-                                    ?.name
-                                }
-                              </strong>
-
-                              <Text type="secondary">
-                                {
-                                  orderItem
-                                    .product
-                                    ?.sku
-                                }
-                              </Text>
-
-                            </div>
-
-                            <Tag>
-                              Remaining:{" "}
-                              {remaining}
-                            </Tag>
-
+                            <Text type="secondary">
+                              {orderItem.product?.sku}
+                            </Text>
                           </div>
 
-                          {/* ITEM ID */}
-                          <Form.Item
-                            {...field}
-                            name={[
-                              field.name,
-                              "itemId",
-                            ]}
-                            initialValue={
-                              orderItem._id
-                            }
-                            hidden
-                          >
-                            <Input />
-                          </Form.Item>
+                          <Tag>Remaining: {remaining}</Tag>
+                        </div>
 
-                          {/* RECEIVE QUANTITY */}
-                          <Form.Item
-                            {...field}
-                            label="Receive Quantity"
-                            name={[
-                              field.name,
-                              "quantity",
-                            ]}
-                            rules={[
-                              {
-                                required: true,
-                                message:
-                                  "Enter receive quantity.",
-                              },
-                            ]}
-                          >
+                        {/* ITEM ID */}
+                        <Form.Item
+                          {...field}
+                          name={[field.name, "itemId"]}
+                          initialValue={orderItem._id}
+                          hidden
+                        >
+                          <Input />
+                        </Form.Item>
 
-                            <InputNumber
-                              min={0}
-                              max={
-                                remaining
-                              }
-                              style={{
-                                width:
-                                  "100%",
-                              }}
-                            />
-
-                          </Form.Item>
-
-                        </Card>
-                      );
-                    }
-                  )}
+                        {/* RECEIVE QUANTITY */}
+                        <Form.Item
+                          {...field}
+                          label="Receive Quantity"
+                          name={[field.name, "quantity"]}
+                          rules={[
+                            {
+                              required: true,
+                              message: "Enter receive quantity.",
+                            },
+                          ]}
+                        >
+                          <InputNumber
+                            min={0}
+                            max={remaining}
+                            style={{
+                              width: "100%",
+                            }}
+                          />
+                        </Form.Item>
+                      </Card>
+                    );
+                  })}
                 </>
               )}
             </Form.List>
 
             <div className="po-modal-footer">
-
-              <Button
-                onClick={
-                  closeReceiveModal
-                }
-                disabled={saving}
-              >
+              <Button onClick={closeReceiveModal} disabled={saving}>
                 Cancel
               </Button>
 
@@ -1465,20 +981,14 @@ const PurchaseOrders = () => {
                 type="primary"
                 htmlType="submit"
                 loading={saving}
-                icon={
-                  <InboxOutlined />
-                }
+                icon={<InboxOutlined />}
               >
                 Receive Stock
               </Button>
-
             </div>
-
           </Form>
         )}
-
       </Modal>
-
     </div>
   );
 };

@@ -3,8 +3,16 @@ const mongoose = require("mongoose");
 const reservationSchema = new mongoose.Schema(
   {
     reservationNumber: { type: String, required: true, unique: true },
-    branch: { type: mongoose.Schema.Types.ObjectId, ref: "Branch", required: true },
-    product: { type: mongoose.Schema.Types.ObjectId, ref: "Product", required: true },
+    branch: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Branch",
+      required: true,
+    },
+    product: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Product",
+      required: true,
+    },
     quantity: { type: Number, required: true, min: 1 },
     customerName: { type: String, required: true, trim: true },
     customerPhone: { type: String, trim: true },
@@ -14,10 +22,14 @@ const reservationSchema = new mongoose.Schema(
       default: "ACTIVE",
     },
     expiresAt: { type: Date, required: true },
-    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+    createdBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
     completedAt: Date,
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 reservationSchema.index({ status: 1, expiresAt: 1 });

@@ -59,13 +59,7 @@ const getProductInventory = async (req, res) => {
 // Create inventory record
 const createInventory = async (req, res) => {
   try {
-    const {
-      branch,
-      product,
-      quantity,
-      reorderLevel,
-      shelfLocation,
-    } = req.body;
+    const { branch, product, quantity, reorderLevel, shelfLocation } = req.body;
 
     const existingInventory = await BranchInventory.findOne({
       branch,
@@ -102,9 +96,7 @@ const createInventory = async (req, res) => {
       shelfLocation,
     });
 
-    const populatedInventory = await BranchInventory.findById(
-      inventory._id
-    )
+    const populatedInventory = await BranchInventory.findById(inventory._id)
       .populate("product", "name sku barcode sellingPrice unit")
       .populate("branch", "name code");
 
@@ -126,7 +118,7 @@ const updateInventory = async (req, res) => {
       {
         new: true,
         runValidators: true,
-      }
+      },
     )
       .populate("product", "name sku barcode sellingPrice unit")
       .populate("branch", "name code");

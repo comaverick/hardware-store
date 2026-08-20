@@ -7,31 +7,21 @@ import Topbar from "../Topbar/Topbar";
 import "./AppLayout.css";
 
 const AppLayout = ({ children }) => {
-  const [sidebarExpanded, setSidebarExpanded] =
-    useState(false);
+  const [sidebarExpanded, setSidebarExpanded] = useState(false);
 
   return (
     <Layout className="app-layout">
+      <Sidebar expanded={sidebarExpanded} setExpanded={setSidebarExpanded} />
 
-      <Sidebar
-        expanded={sidebarExpanded}
-        setExpanded={setSidebarExpanded}
-      />
-
-      <Topbar
-        sidebarExpanded={sidebarExpanded}
-      />
+      <Topbar sidebarExpanded={sidebarExpanded} />
 
       <main
         className={`app-content ${
-          sidebarExpanded
-            ? "app-content-expanded"
-            : "app-content-collapsed"
+          sidebarExpanded ? "app-content-expanded" : "app-content-collapsed"
         }`}
       >
         {children}
       </main>
-
     </Layout>
   );
 };

@@ -18,13 +18,13 @@ const releaseExpiredReservations = async () => {
     const released = await Reservation.findOneAndUpdate(
       { _id: reservation._id, status: "ACTIVE" },
       { $set: { status: "EXPIRED" } },
-      { new: true }
+      { new: true },
     );
 
     if (released) {
       await BranchInventory.findOneAndUpdate(
         { branch: reservation.branch, product: reservation.product },
-        { $inc: { reservedQuantity: -reservation.quantity } }
+        { $inc: { reservedQuantity: -reservation.quantity } },
       );
     }
   }
@@ -33,7 +33,8 @@ const releaseExpiredReservations = async () => {
 const reservationQuery = (req) => {
   const query = {};
   if (req.query.branch) query.branch = req.query.branch;
-  else if (req.user.role !== "SUPER_ADMIN" && req.user.branch) query.branch = req.user.branch._id;
+  else if (req.user.role !== "SUPER_ADMIN" && req.user.branch)
+    query.branch = req.user.branch._id;
   if (req.query.status) query.status = req.query.status;
   return query;
 };
@@ -57,18 +58,32 @@ const createReservation = async (req, res) => {
   let heldQuantity = 0;
 
   try {
-    const { branch, product, quantity, customerName, customerPhone, expiresAt } = req.body;
+    const {
+      branch,
+      product,
+      quantity,
+      customerName,
+      customerPhone,
+      expiresAt,
+    } = req.body;
     const reservationQuantity = Number(quantity);
 
     if (!branch || !product || !customerName || reservationQuantity <= 0) {
-      return res.status(400).json({ message: "Branch, product, customer name, and quantity are required." });
+      return res
+        .status(400)
+        .json({
+          message: "Branch, product, customer name, and quantity are required.",
+        });
     }
 
     const [branchExists, productExists] = await Promise.all([
       Branch.findOne({ _id: branch, isActive: true }),
       Product.findOne({ _id: product, isActive: true }),
     ]);
-    if (!branchExists || !productExists) return res.status(404).json({ message: "Active branch or product not found." });
+    if (!branchExists || !productExists)
+      return res
+        .status(404)
+        .json({ message: "Active branch or product not found." });
 
     await releaseExpiredReservations();
     const inventory = await BranchInventory.findOneAndUpdate(
@@ -76,22 +91,34 @@ const createReservation = async (req, res) => {
         branch,
         product,
         $expr: {
-          $gte: [{ $subtract: ["$quantity", { $ifNull: ["$reservedQuantity", 0] }] }, reservationQuantity],
+          $gte: [
+            { $subtract: ["$quantity", { $ifNull: ["$reservedQuantity", 0] }] },
+            reservationQuantity,
+          ],
         },
       },
       { $inc: { reservedQuantity: reservationQuantity } },
-      { new: true }
+      { new: true },
     );
 
-    if (!inventory) return res.status(409).json({ message: "Not enough available stock at this branch." });
+    if (!inventory)
+      return res
+        .status(409)
+        .json({ message: "Not enough available stock at this branch." });
 
     heldInventoryId = inventory._id;
     heldQuantity = reservationQuantity;
 
-    const expiry = expiresAt ? new Date(expiresAt) : new Date(Date.now() + 2 * 60 * 60 * 1000);
+    const expiry = expiresAt
+      ? new Date(expiresAt)
+      : new Date(Date.now() + 2 * 60 * 60 * 1000);
     if (Number.isNaN(expiry.getTime()) || expiry <= new Date()) {
-      await BranchInventory.findByIdAndUpdate(inventory._id, { $inc: { reservedQuantity: -reservationQuantity } });
-      return res.status(400).json({ message: "Reservation expiry must be in the future." });
+      await BranchInventory.findByIdAndUpdate(inventory._id, {
+        $inc: { reservedQuantity: -reservationQuantity },
+      });
+      return res
+        .status(400)
+        .json({ message: "Reservation expiry must be in the future." });
     }
 
     const reservation = await Reservation.create({
@@ -114,7 +141,9 @@ const createReservation = async (req, res) => {
         $inc: { reservedQuantity: -heldQuantity },
       });
     }
-    res.status(500).json({ message: "Failed to create reservation.", error: error.message });
+    res
+      .status(500)
+      .json({ message: "Failed to create reservation.", error: error.message });
   }
 };
 
@@ -127,22 +156,38 @@ const updateReservationStatus = async (req, res) => {
     }
 
     const reservation = await Reservation.findById(req.params.id);
-    if (!reservation) return res.status(404).json({ message: "Reservation not found." });
+    if (!reservation)
+      return res.status(404).json({ message: "Reservation not found." });
     if (!["ACTIVE", "READY_FOR_PICKUP"].includes(reservation.status)) {
-      return res.status(400).json({ message: "Reservation is no longer active." });
+      return res
+        .status(400)
+        .json({ message: "Reservation is no longer active." });
     }
 
     if (status === "COMPLETED") {
       const inventory = await BranchInventory.findOneAndUpdate(
-        { branch: reservation.branch, product: reservation.product, quantity: { $gte: reservation.quantity }, reservedQuantity: { $gte: reservation.quantity } },
-        { $inc: { quantity: -reservation.quantity, reservedQuantity: -reservation.quantity } },
-        { new: true }
+        {
+          branch: reservation.branch,
+          product: reservation.product,
+          quantity: { $gte: reservation.quantity },
+          reservedQuantity: { $gte: reservation.quantity },
+        },
+        {
+          $inc: {
+            quantity: -reservation.quantity,
+            reservedQuantity: -reservation.quantity,
+          },
+        },
+        { new: true },
       );
-      if (!inventory) return res.status(409).json({ message: "Inventory cannot fulfill this reservation." });
+      if (!inventory)
+        return res
+          .status(409)
+          .json({ message: "Inventory cannot fulfill this reservation." });
     } else if (status === "CANCELLED") {
       await BranchInventory.findOneAndUpdate(
         { branch: reservation.branch, product: reservation.product },
-        { $inc: { reservedQuantity: -reservation.quantity } }
+        { $inc: { reservedQuantity: -reservation.quantity } },
       );
     }
 
@@ -155,4 +200,8 @@ const updateReservationStatus = async (req, res) => {
   }
 };
 
-module.exports = { getReservations, createReservation, updateReservationStatus };
+module.exports = {
+  getReservations,
+  createReservation,
+  updateReservationStatus,
+};

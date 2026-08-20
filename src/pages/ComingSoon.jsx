@@ -252,9 +252,7 @@ const ComingSoon = ({
       </style>
 
       <div className="coming-soon-page">
-
         <div className="coming-soon-card">
-
           <div className="coming-soon-icon">
             <ToolOutlined />
           </div>
@@ -264,13 +262,9 @@ const ComingSoon = ({
             <span>UNDER DEVELOPMENT</span>
           </div>
 
-          <Title className="coming-soon-title">
-            {title}
-          </Title>
+          <Title className="coming-soon-title">{title}</Title>
 
-          <Text className="coming-soon-description">
-            {description}
-          </Text>
+          <Text className="coming-soon-description">{description}</Text>
 
           <div className="coming-soon-divider" />
 
@@ -278,9 +272,8 @@ const ComingSoon = ({
             <strong>We're working on it.</strong>
 
             <span>
-              This feature is planned for the Hardware
-              Store Management System and will be available
-              in a future update.
+              This feature is planned for the Hardware Store Management System
+              and will be available in a future update.
             </span>
           </div>
 
@@ -292,9 +285,7 @@ const ComingSoon = ({
           >
             Back to Dashboard
           </Button>
-
         </div>
-
       </div>
     </>
   );

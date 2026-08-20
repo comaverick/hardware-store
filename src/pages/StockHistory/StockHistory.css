@@ -33,18 +33,14 @@
 }
 
 .history-stat-card {
-  border: 1px solid
-    rgba(0, 0, 0, 0.06);
+  border: 1px solid rgba(0, 0, 0, 0.06);
 
   border-radius: 16px;
 
-  box-shadow:
-    0 4px 16px
-      rgba(0, 0, 0, 0.04);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.04);
 }
 
-.history-stat-card
-  .ant-card-body {
+.history-stat-card .ant-card-body {
   padding: 20px;
 }
 
@@ -55,14 +51,11 @@
 .history-filter-card {
   margin-bottom: 20px;
 
-  border: 1px solid
-    rgba(0, 0, 0, 0.06);
+  border: 1px solid rgba(0, 0, 0, 0.06);
 
   border-radius: 16px;
 
-  box-shadow:
-    0 4px 16px
-      rgba(0, 0, 0, 0.04);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.04);
 }
 
 /* =========================
@@ -70,14 +63,11 @@
 ========================= */
 
 .history-table-card {
-  border: 1px solid
-    rgba(0, 0, 0, 0.06);
+  border: 1px solid rgba(0, 0, 0, 0.06);
 
   border-radius: 16px;
 
-  box-shadow:
-    0 4px 16px
-      rgba(0, 0, 0, 0.04);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.04);
 }
 
 .history-table-header {
@@ -88,22 +78,15 @@
   margin: 0 0 4px;
 }
 
-.history-table-card
-  .ant-table {
+.history-table-card .ant-table {
   background: transparent;
 }
 
-.history-table-card
-  .ant-table-thead
-  > tr
-  > th {
+.history-table-card .ant-table-thead > tr > th {
   background: #fafafa;
 }
 
-.history-table-card
-  .ant-table-tbody
-  > tr
-  > td {
+.history-table-card .ant-table-tbody > tr > td {
   padding-top: 14px;
   padding-bottom: 14px;
 }

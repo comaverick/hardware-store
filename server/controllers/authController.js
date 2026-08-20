@@ -12,19 +12,13 @@ const generateToken = (user) => {
     process.env.JWT_SECRET,
     {
       expiresIn: "1d",
-    }
+    },
   );
 };
 
 const registerUser = async (req, res) => {
   try {
-    const {
-      name,
-      email,
-      password,
-      role,
-      branch,
-    } = req.body;
+    const { name, email, password, role, branch } = req.body;
 
     const existingUser = await User.findOne({
       email: email.toLowerCase(),
@@ -78,10 +72,7 @@ const loginUser = async (req, res) => {
       });
     }
 
-    const passwordMatch = await bcrypt.compare(
-      password,
-      user.password
-    );
+    const passwordMatch = await bcrypt.compare(password, user.password);
 
     if (!passwordMatch) {
       return res.status(401).json({

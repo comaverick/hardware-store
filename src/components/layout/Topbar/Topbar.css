@@ -21,32 +21,18 @@
 
   box-sizing: border-box;
 
-  background: rgba(
-    255,
-    255,
-    255,
-    0.92
-  );
+  background: rgba(255, 255, 255, 0.92);
 
   backdrop-filter: blur(18px);
 
   -webkit-backdrop-filter: blur(18px);
 
-  border-bottom:
-    1px solid #eeeeee;
+  border-bottom: 1px solid #eeeeee;
 
   z-index: 90;
 
-  transition:
-    left 0.22s
-    cubic-bezier(
-      0.4,
-      0,
-      0.2,
-      1
-    );
+  transition: left 0.22s cubic-bezier(0.4, 0, 0.2, 1);
 }
-
 
 /* ========================================
    SIDEBAR STATES
@@ -59,7 +45,6 @@
 .topbar-expanded {
   left: 250px;
 }
-
 
 /* ========================================
    LEFT
@@ -86,8 +71,7 @@
 
   font-weight: 650;
 
-  letter-spacing:
-    -0.3px;
+  letter-spacing: -0.3px;
 
   line-height: 22px;
 }
@@ -100,7 +84,6 @@
   line-height: 16px;
 }
 
-
 /* ========================================
    RIGHT
 ======================================== */
@@ -112,7 +95,6 @@
 
   gap: 10px;
 }
-
 
 /* ========================================
    NOTIFICATION
@@ -150,7 +132,6 @@
   color: #111111;
 }
 
-
 /* ========================================
    BRANCH
 ======================================== */
@@ -170,8 +151,7 @@
 
   cursor: pointer;
 
-  transition:
-    background 0.18s ease;
+  transition: background 0.18s ease;
 }
 
 .topbar-branch:hover {
@@ -238,7 +218,6 @@
   font-size: 9px;
 }
 
-
 /* ========================================
    DIVIDER
 ======================================== */
@@ -252,7 +231,6 @@
 
   background: #e8e8e8;
 }
-
 
 /* ========================================
    USER
@@ -279,14 +257,12 @@
 
   font-family: inherit;
 
-  transition:
-    background 0.18s ease;
+  transition: background 0.18s ease;
 }
 
 .topbar-user:hover {
   background: #f6f6f6;
 }
-
 
 /* ========================================
    AVATAR
@@ -303,7 +279,6 @@
 
   font-size: 13px;
 }
-
 
 /* ========================================
    USER INFO
@@ -352,7 +327,6 @@
 
   font-size: 9px;
 }
-
 
 /* ========================================
    RESPONSIVE

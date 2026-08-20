@@ -1,8 +1,6 @@
-const InventoryTransaction =
-  require("../models/InventoryTransaction");
+const InventoryTransaction = require("../models/InventoryTransaction");
 
-const Inventory =
-  require("../models/BranchInventory");
+const Inventory = require("../models/BranchInventory");
 
 // =========================
 // GET ALL TRANSACTIONS
@@ -10,31 +8,20 @@ const Inventory =
 
 const getTransactions = async (req, res) => {
   try {
-    const transactions =
-      await InventoryTransaction.find()
-        .populate(
-          "product",
-          "name sku barcode unit"
-        )
-        .populate(
-          "branch",
-          "name code"
-        )
-        .populate(
-          "performedBy",
-          "name email role"
-        )
-        .sort({
-          createdAt: -1,
-        });
+    const transactions = await InventoryTransaction.find()
+      .populate("product", "name sku barcode unit")
+      .populate("branch", "name code")
+      .populate("performedBy", "name email role")
+      .sort({
+        createdAt: -1,
+      });
 
     res.json(transactions);
   } catch (error) {
     console.error(error);
 
     res.status(500).json({
-      message:
-        "Failed to retrieve inventory transactions.",
+      message: "Failed to retrieve inventory transactions.",
     });
   }
 };
@@ -45,109 +32,80 @@ const getTransactions = async (req, res) => {
 
 const receiveStock = async (req, res) => {
   try {
-    const {
-      inventoryId,
-      quantity,
-      reason,
-      notes,
-    } = req.body;
+    const { inventoryId, quantity, reason, notes } = req.body;
 
     if (!inventoryId) {
       return res.status(400).json({
-        message:
-          "Inventory ID is required.",
+        message: "Inventory ID is required.",
       });
     }
 
-    if (
-      !quantity ||
-      Number(quantity) <= 0
-    ) {
+    if (!quantity || Number(quantity) <= 0) {
       return res.status(400).json({
-        message:
-          "Quantity must be greater than zero.",
+        message: "Quantity must be greater than zero.",
       });
     }
 
-    const inventory =
-      await Inventory.findById(
-        inventoryId
-      );
+    const inventory = await Inventory.findById(inventoryId);
 
     if (!inventory) {
       return res.status(404).json({
-        message:
-          "Inventory record not found.",
+        message: "Inventory record not found.",
       });
     }
 
-    const previousQuantity =
-      inventory.quantity;
+    const previousQuantity = inventory.quantity;
 
-    const newQuantity =
-      previousQuantity +
-      Number(quantity);
+    const newQuantity = previousQuantity + Number(quantity);
 
     inventory.quantity = newQuantity;
 
     await inventory.save();
 
-    const transaction =
-      await InventoryTransaction.create({
-        product: inventory.product,
-        branch: inventory.branch,
+    const transaction = await InventoryTransaction.create({
+      product: inventory.product,
+      branch: inventory.branch,
 
-        type: "STOCK_IN",
+      type: "STOCK_IN",
 
-        quantity: Number(quantity),
+      quantity: Number(quantity),
 
-        previousQuantity,
+      previousQuantity,
 
-        newQuantity,
+      newQuantity,
 
-        reason:
-          reason ||
-          "Stock received",
+      reason: reason || "Stock received",
 
-        notes,
+      notes,
 
-        performedBy: req.user._id,
-      });
+      performedBy: req.user._id,
+    });
 
-    const populatedTransaction =
-      await transaction.populate([
-        {
-          path: "product",
-          select:
-            "name sku barcode unit",
-        },
-        {
-          path: "branch",
-          select: "name code",
-        },
-        {
-          path: "performedBy",
-          select:
-            "name email role",
-        },
-      ]);
+    const populatedTransaction = await transaction.populate([
+      {
+        path: "product",
+        select: "name sku barcode unit",
+      },
+      {
+        path: "branch",
+        select: "name code",
+      },
+      {
+        path: "performedBy",
+        select: "name email role",
+      },
+    ]);
 
     res.status(201).json({
-      message:
-        "Stock received successfully.",
+      message: "Stock received successfully.",
       inventory,
-      transaction:
-        populatedTransaction,
+      transaction: populatedTransaction,
     });
   } catch (error) {
-    console.error(
-      "Receive stock error:",
-      error
-    );
+    console.error("Receive stock error:", error);
 
     res.status(500).json({
-      message:
-        "Failed to receive stock.",
+      message: "Failed to receive stock.",
     });
   }
 };
@@ -158,128 +116,92 @@ const receiveStock = async (req, res) => {
 
 const adjustStock = async (req, res) => {
   try {
-    const {
-      inventoryId,
-      newQuantity,
-      reason,
-      notes,
-    } = req.body;
+    const { inventoryId, newQuantity, reason, notes } = req.body;
 
     if (!inventoryId) {
       return res.status(400).json({
-        message:
-          "Inventory ID is required.",
+        message: "Inventory ID is required.",
       });
     }
 
-    if (
-      newQuantity === undefined ||
-      Number(newQuantity) < 0
-    ) {
+    if (newQuantity === undefined || Number(newQuantity) < 0) {
       return res.status(400).json({
-        message:
-          "New quantity must be zero or greater.",
+        message: "New quantity must be zero or greater.",
       });
     }
 
     if (!reason) {
       return res.status(400).json({
-        message:
-          "Adjustment reason is required.",
+        message: "Adjustment reason is required.",
       });
     }
 
-    const inventory =
-      await Inventory.findById(
-        inventoryId
-      );
+    const inventory = await Inventory.findById(inventoryId);
 
     if (!inventory) {
       return res.status(404).json({
-        message:
-          "Inventory record not found.",
+        message: "Inventory record not found.",
       });
     }
 
-    const previousQuantity =
-      inventory.quantity;
+    const previousQuantity = inventory.quantity;
 
-    const updatedQuantity =
-      Number(newQuantity);
+    const updatedQuantity = Number(newQuantity);
 
-    if (
-      previousQuantity ===
-      updatedQuantity
-    ) {
+    if (previousQuantity === updatedQuantity) {
       return res.status(400).json({
-        message:
-          "New quantity must be different from the current quantity.",
+        message: "New quantity must be different from the current quantity.",
       });
     }
 
-    inventory.quantity =
-      updatedQuantity;
+    inventory.quantity = updatedQuantity;
 
     await inventory.save();
 
-    const transaction =
-      await InventoryTransaction.create({
-        product: inventory.product,
-        branch: inventory.branch,
+    const transaction = await InventoryTransaction.create({
+      product: inventory.product,
+      branch: inventory.branch,
 
-        type: "ADJUSTMENT",
+      type: "ADJUSTMENT",
 
-        quantity: Math.abs(
-          updatedQuantity -
-            previousQuantity
-        ),
+      quantity: Math.abs(updatedQuantity - previousQuantity),
 
-        previousQuantity,
+      previousQuantity,
 
-        newQuantity:
-          updatedQuantity,
+      newQuantity: updatedQuantity,
 
-        reason,
+      reason,
 
-        notes,
+      notes,
 
-        performedBy: req.user._id,
-      });
+      performedBy: req.user._id,
+    });
 
-    const populatedTransaction =
-      await transaction.populate([
-        {
-          path: "product",
-          select:
-            "name sku barcode unit",
-        },
-        {
-          path: "branch",
-          select: "name code",
-        },
-        {
-          path: "performedBy",
-          select:
-            "name email role",
-        },
-      ]);
+    const populatedTransaction = await transaction.populate([
+      {
+        path: "product",
+        select: "name sku barcode unit",
+      },
+      {
+        path: "branch",
+        select: "name code",
+      },
+      {
+        path: "performedBy",
+        select: "name email role",
+      },
+    ]);
 
     res.json({
-      message:
-        "Stock adjusted successfully.",
+      message: "Stock adjusted successfully.",
       inventory,
-      transaction:
-        populatedTransaction,
+      transaction: populatedTransaction,
     });
   } catch (error) {
-    console.error(
-      "Adjust stock error:",
-      error
-    );
+    console.error("Adjust stock error:", error);
 
     res.status(500).json({
-      message:
-        "Failed to adjust stock.",
+      message: "Failed to adjust stock.",
     });
   }
 };
@@ -290,212 +212,140 @@ const adjustStock = async (req, res) => {
 
 const transferStock = async (req, res) => {
   try {
-    const {
-      fromInventoryId,
-      toInventoryId,
-      quantity,
-      reason,
-      notes,
-    } = req.body;
+    const { fromInventoryId, toInventoryId, quantity, reason, notes } =
+      req.body;
 
-    if (
-      !fromInventoryId ||
-      !toInventoryId
-    ) {
+    if (!fromInventoryId || !toInventoryId) {
       return res.status(400).json({
-        message:
-          "Source and destination inventory are required.",
+        message: "Source and destination inventory are required.",
       });
     }
 
-    if (
-      fromInventoryId ===
-      toInventoryId
-    ) {
+    if (fromInventoryId === toInventoryId) {
       return res.status(400).json({
-        message:
-          "Source and destination cannot be the same.",
+        message: "Source and destination cannot be the same.",
       });
     }
 
-    if (
-      !quantity ||
-      Number(quantity) <= 0
-    ) {
+    if (!quantity || Number(quantity) <= 0) {
       return res.status(400).json({
-        message:
-          "Transfer quantity must be greater than zero.",
+        message: "Transfer quantity must be greater than zero.",
       });
     }
 
-    const fromInventory =
-      await Inventory.findById(
-        fromInventoryId
-      );
+    const fromInventory = await Inventory.findById(fromInventoryId);
 
-    const toInventory =
-      await Inventory.findById(
-        toInventoryId
-      );
+    const toInventory = await Inventory.findById(toInventoryId);
 
     if (!fromInventory) {
       return res.status(404).json({
-        message:
-          "Source inventory not found.",
+        message: "Source inventory not found.",
       });
     }
 
     if (!toInventory) {
       return res.status(404).json({
-        message:
-          "Destination inventory not found.",
+        message: "Destination inventory not found.",
       });
     }
 
-    if (
-      String(fromInventory.product) !==
-      String(toInventory.product)
-    ) {
+    if (String(fromInventory.product) !== String(toInventory.product)) {
       return res.status(400).json({
-        message:
-          "Source and destination must contain the same product.",
+        message: "Source and destination must contain the same product.",
       });
     }
 
-    if (
-      fromInventory.quantity <
-      Number(quantity)
-    ) {
+    if (fromInventory.quantity < Number(quantity)) {
       return res.status(400).json({
-        message:
-          "Insufficient stock at source branch.",
+        message: "Insufficient stock at source branch.",
       });
     }
 
-    const transferQuantity =
-      Number(quantity);
+    const transferQuantity = Number(quantity);
 
-    const sourcePrevious =
-      fromInventory.quantity;
+    const sourcePrevious = fromInventory.quantity;
 
-    const destinationPrevious =
-      toInventory.quantity;
+    const destinationPrevious = toInventory.quantity;
 
-    const sourceNew =
-      sourcePrevious -
-      transferQuantity;
+    const sourceNew = sourcePrevious - transferQuantity;
 
-    const destinationNew =
-      destinationPrevious +
-      transferQuantity;
+    const destinationNew = destinationPrevious + transferQuantity;
 
-    fromInventory.quantity =
-      sourceNew;
+    fromInventory.quantity = sourceNew;
 
-    toInventory.quantity =
-      destinationNew;
+    toInventory.quantity = destinationNew;
 
     await fromInventory.save();
     await toInventory.save();
 
-    const transferReference =
-      `TRF-${Date.now()}`;
+    const transferReference = `TRF-${Date.now()}`;
 
-    const transferOut =
-      await InventoryTransaction.create({
-        product: fromInventory.product,
-        branch: fromInventory.branch,
+    const transferOut = await InventoryTransaction.create({
+      product: fromInventory.product,
+      branch: fromInventory.branch,
 
-        type: "TRANSFER_OUT",
+      type: "TRANSFER_OUT",
 
-        quantity:
-          transferQuantity,
+      quantity: transferQuantity,
 
-        previousQuantity:
-          sourcePrevious,
+      previousQuantity: sourcePrevious,
 
-        newQuantity:
-          sourceNew,
+      newQuantity: sourceNew,
 
-        reason:
-          reason ||
-          "Branch transfer",
+      reason: reason || "Branch transfer",
 
-        reference:
-          transferReference,
+      reference: transferReference,
 
-        notes,
+      notes,
 
-        performedBy: req.user._id,
-      });
+      performedBy: req.user._id,
+    });
 
-    const transferIn =
-      await InventoryTransaction.create({
-        product: toInventory.product,
-        branch: toInventory.branch,
+    const transferIn = await InventoryTransaction.create({
+      product: toInventory.product,
+      branch: toInventory.branch,
 
-        type: "TRANSFER_IN",
+      type: "TRANSFER_IN",
 
-        quantity:
-          transferQuantity,
+      quantity: transferQuantity,
 
-        previousQuantity:
-          destinationPrevious,
+      previousQuantity: destinationPrevious,
 
-        newQuantity:
-          destinationNew,
+      newQuantity: destinationNew,
 
-        reason:
-          reason ||
-          "Branch transfer",
+      reason: reason || "Branch transfer",
 
-        reference:
-          transferReference,
+      reference: transferReference,
 
-        notes,
+      notes,
 
-        performedBy: req.user._id,
-      });
+      performedBy: req.user._id,
+    });
 
     res.json({
-      message:
-        "Stock transferred successfully.",
+      message: "Stock transferred successfully.",
 
-      reference:
-        transferReference,
+      reference: transferReference,
 
       source: {
-        inventoryId:
-          fromInventory._id,
-        previousQuantity:
-          sourcePrevious,
-        newQuantity:
-          sourceNew,
+        inventoryId: fromInventory._id,
+        previousQuantity: sourcePrevious,
+        newQuantity: sourceNew,
       },
 
       destination: {
-        inventoryId:
-          toInventory._id,
-        previousQuantity:
-          destinationPrevious,
-        newQuantity:
-          destinationNew,
+        inventoryId: toInventory._id,
+        previousQuantity: destinationPrevious,
+        newQuantity: destinationNew,
       },
 
-      transactions: [
-        transferOut,
-        transferIn,
-      ],
+      transactions: [transferOut, transferIn],
     });
   } catch (error) {
-    console.error(
-      "Transfer stock error:",
-      error
-    );
+    console.error("Transfer stock error:", error);
 
     res.status(500).json({
-      message:
-        "Failed to transfer stock.",
+      message: "Failed to transfer stock.",
     });
   }
 };
@@ -504,39 +354,24 @@ const transferStock = async (req, res) => {
 // PRODUCT TRANSACTIONS
 // =========================
 
-const getProductTransactions = async (
-  req,
-  res
-) => {
+const getProductTransactions = async (req, res) => {
   try {
-    const transactions =
-      await InventoryTransaction.find({
-        product:
-          req.params.productId,
-      })
-        .populate(
-          "product",
-          "name sku barcode unit"
-        )
-        .populate(
-          "branch",
-          "name code"
-        )
-        .populate(
-          "performedBy",
-          "name email role"
-        )
-        .sort({
-          createdAt: -1,
-        });
+    const transactions = await InventoryTransaction.find({
+      product: req.params.productId,
+    })
+      .populate("product", "name sku barcode unit")
+      .populate("branch", "name code")
+      .populate("performedBy", "name email role")
+      .sort({
+        createdAt: -1,
+      });
 
     res.json(transactions);
   } catch (error) {
     console.error(error);
 
     res.status(500).json({
-      message:
-        "Failed to retrieve product transactions.",
+      message: "Failed to retrieve product transactions.",
     });
   }
 };
@@ -545,39 +380,24 @@ const getProductTransactions = async (
 // BRANCH TRANSACTIONS
 // =========================
 
-const getBranchTransactions = async (
-  req,
-  res
-) => {
+const getBranchTransactions = async (req, res) => {
   try {
-    const transactions =
-      await InventoryTransaction.find({
-        branch:
-          req.params.branchId,
-      })
-        .populate(
-          "product",
-          "name sku barcode unit"
-        )
-        .populate(
-          "branch",
-          "name code"
-        )
-        .populate(
-          "performedBy",
-          "name email role"
-        )
-        .sort({
-          createdAt: -1,
-        });
+    const transactions = await InventoryTransaction.find({
+      branch: req.params.branchId,
+    })
+      .populate("product", "name sku barcode unit")
+      .populate("branch", "name code")
+      .populate("performedBy", "name email role")
+      .sort({
+        createdAt: -1,
+      });
 
     res.json(transactions);
   } catch (error) {
     console.error(error);
 
     res.status(500).json({
-      message:
-        "Failed to retrieve branch transactions.",
+      message: "Failed to retrieve branch transactions.",
     });
   }
 };

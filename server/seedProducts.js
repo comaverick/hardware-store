@@ -515,14 +515,12 @@ const seedProducts = async () => {
         {
           new: true,
           upsert: true,
-        }
+        },
       );
 
       categoryMap[category.name] = category._id;
 
-      console.log(
-        `Category ready: ${category.name}`
-      );
+      console.log(`Category ready: ${category.name}`);
     }
 
     // =========================
@@ -540,21 +538,16 @@ const seedProducts = async () => {
 
     const existingProducts = await Product.find({
       sku: {
-        $in: productData.map(
-          (product) => product.sku
-        ),
+        $in: productData.map((product) => product.sku),
       },
     }).select("sku");
 
     const existingSkuSet = new Set(
-      existingProducts.map(
-        (product) => product.sku
-      )
+      existingProducts.map((product) => product.sku),
     );
 
     const newProducts = productData.filter(
-      (product) =>
-        !existingSkuSet.has(product.sku)
+      (product) => !existingSkuSet.has(product.sku),
     );
 
     // =========================
@@ -562,9 +555,7 @@ const seedProducts = async () => {
     // =========================
 
     if (newProducts.length === 0) {
-      console.log(
-        "All seed products already exist."
-      );
+      console.log("All seed products already exist.");
 
       await mongoose.connection.close();
 
@@ -573,15 +564,10 @@ const seedProducts = async () => {
 
     await Product.insertMany(newProducts);
 
-    console.log(
-      `Added ${newProducts.length} new products.`
-    );
+    console.log(`Added ${newProducts.length} new products.`);
 
     console.log(
-      `Skipped ${
-        productData.length -
-        newProducts.length
-      } existing products.`
+      `Skipped ${productData.length - newProducts.length} existing products.`,
     );
 
     await mongoose.connection.close();

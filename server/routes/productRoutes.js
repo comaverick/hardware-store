@@ -8,10 +8,7 @@ const {
   deleteProduct,
 } = require("../controllers/productController");
 
-const {
-  protect,
-  authorize,
-} = require("../middleware/authMiddleware");
+const { protect, authorize } = require("../middleware/authMiddleware");
 
 const router = express.Router();
 
@@ -24,21 +21,21 @@ router.post(
   "/",
   protect,
   authorize("SUPER_ADMIN", "ADMIN", "MANAGER"),
-  createProduct
+  createProduct,
 );
 
 router.put(
   "/:id",
   protect,
   authorize("SUPER_ADMIN", "ADMIN", "MANAGER"),
-  updateProduct
+  updateProduct,
 );
 
 router.delete(
   "/:id",
   protect,
   authorize("SUPER_ADMIN", "ADMIN"),
-  deleteProduct
+  deleteProduct,
 );
 
 module.exports = router;

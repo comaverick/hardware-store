@@ -43,17 +43,13 @@ const Products = () => {
   const [saving, setSaving] = useState(false);
 
   const [search, setSearch] = useState("");
-  const [categoryFilter, setCategoryFilter] =
-    useState("all");
+  const [categoryFilter, setCategoryFilter] = useState("all");
 
-  const [modalOpen, setModalOpen] =
-    useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
 
-  const [detailsOpen, setDetailsOpen] =
-    useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
 
-  const [selectedProduct, setSelectedProduct] =
-    useState(null);
+  const [selectedProduct, setSelectedProduct] = useState(null);
 
   const [form] = Form.useForm();
 
@@ -65,28 +61,21 @@ const Products = () => {
     try {
       setLoading(true);
 
-      const [
-        productsResponse,
-        inventoryResponse,
-        categoriesResponse,
-      ] = await Promise.all([
-        api.get("/products"),
-        api.get("/inventory"),
-        api.get("/categories"),
-      ]);
+      const [productsResponse, inventoryResponse, categoriesResponse] =
+        await Promise.all([
+          api.get("/products"),
+          api.get("/inventory"),
+          api.get("/categories"),
+        ]);
 
       setProducts(productsResponse.data);
       setInventory(inventoryResponse.data);
       setCategories(categoriesResponse.data);
     } catch (error) {
-      console.error(
-        "Products fetch error:",
-        error
-      );
+      console.error("Products fetch error:", error);
 
       message.error(
-        error.response?.data?.message ||
-          "Failed to load products."
+        error.response?.data?.message || "Failed to load products.",
       );
     } finally {
       setLoading(false);
@@ -103,15 +92,8 @@ const Products = () => {
 
   const getProductStock = (productId) => {
     return inventory
-      .filter(
-        (item) =>
-          item.product?._id === productId
-      )
-      .reduce(
-        (total, item) =>
-          total + item.quantity,
-        0
-      );
+      .filter((item) => item.product?._id === productId)
+      .reduce((total, item) => total + item.quantity, 0);
   };
 
   // =========================
@@ -120,36 +102,20 @@ const Products = () => {
 
   const filteredProducts = useMemo(() => {
     return products.filter((product) => {
-      const searchValue =
-        search.toLowerCase().trim();
+      const searchValue = search.toLowerCase().trim();
 
       const matchesSearch =
         !searchValue ||
-        product.name
-          ?.toLowerCase()
-          .includes(searchValue) ||
-        product.sku
-          ?.toLowerCase()
-          .includes(searchValue) ||
-        product.barcode
-          ?.toLowerCase()
-          .includes(searchValue);
+        product.name?.toLowerCase().includes(searchValue) ||
+        product.sku?.toLowerCase().includes(searchValue) ||
+        product.barcode?.toLowerCase().includes(searchValue);
 
       const matchesCategory =
-        categoryFilter === "all" ||
-        product.category?._id ===
-          categoryFilter;
+        categoryFilter === "all" || product.category?._id === categoryFilter;
 
-      return (
-        matchesSearch &&
-        matchesCategory
-      );
+      return matchesSearch && matchesCategory;
     });
-  }, [
-    products,
-    search,
-    categoryFilter,
-  ]);
+  }, [products, search, categoryFilter]);
 
   // =========================
   // ADD PRODUCT
@@ -161,9 +127,7 @@ const Products = () => {
 
       await api.post("/products", values);
 
-      message.success(
-        "Product added successfully."
-      );
+      message.success("Product added successfully.");
 
       form.resetFields();
 
@@ -171,15 +135,9 @@ const Products = () => {
 
       await fetchData();
     } catch (error) {
-      console.error(
-        "Add product error:",
-        error
-      );
+      console.error("Add product error:", error);
 
-      message.error(
-        error.response?.data?.message ||
-          "Failed to add product."
-      );
+      message.error(error.response?.data?.message || "Failed to add product.");
     } finally {
       setSaving(false);
     }
@@ -205,22 +163,15 @@ const Products = () => {
 
       render: (_, product) => (
         <div className="product-cell">
-
           <div className="product-icon">
             <AppstoreOutlined />
           </div>
 
           <div>
-            <div className="product-name">
-              {product.name}
-            </div>
+            <div className="product-name">{product.name}</div>
 
-            <div className="product-brand">
-              {product.brand ||
-                "No brand"}
-            </div>
+            <div className="product-brand">{product.brand || "No brand"}</div>
           </div>
-
         </div>
       ),
     },
@@ -230,11 +181,7 @@ const Products = () => {
       dataIndex: "sku",
       key: "sku",
 
-      render: (sku) => (
-        <Text code>
-          {sku}
-        </Text>
-      ),
+      render: (sku) => <Text code>{sku}</Text>,
     },
 
     {
@@ -242,10 +189,7 @@ const Products = () => {
       key: "category",
 
       render: (_, product) => (
-        <Tag>
-          {product.category?.name ||
-            "Uncategorized"}
-        </Tag>
+        <Tag>{product.category?.name || "Uncategorized"}</Tag>
       ),
     },
 
@@ -256,9 +200,7 @@ const Products = () => {
       render: (_, product) => (
         <strong>
           ₱
-          {Number(
-            product.sellingPrice || 0
-          ).toLocaleString("en-PH", {
+          {Number(product.sellingPrice || 0).toLocaleString("en-PH", {
             minimumFractionDigits: 2,
           })}
         </strong>
@@ -270,28 +212,21 @@ const Products = () => {
       key: "stock",
 
       render: (_, product) => {
-        const stock =
-          getProductStock(
-            product._id
-          );
+        const stock = getProductStock(product._id);
 
-        const reorder =
-          product.reorderLevel || 0;
+        const reorder = product.reorderLevel || 0;
 
         let status = "green";
 
         if (stock <= reorder) {
           status = "red";
-        } else if (
-          stock <= reorder * 2
-        ) {
+        } else if (stock <= reorder * 2) {
           status = "orange";
         }
 
         return (
           <Tag color={status}>
-            {stock}{" "}
-            {product.unit || "pcs"}
+            {stock} {product.unit || "pcs"}
           </Tag>
         );
       },
@@ -305,9 +240,7 @@ const Products = () => {
         <Button
           type="text"
           icon={<EyeOutlined />}
-          onClick={() =>
-            handleViewProduct(product)
-          }
+          onClick={() => handleViewProduct(product)}
         >
           View
         </Button>
@@ -319,14 +252,9 @@ const Products = () => {
   // SELECTED PRODUCT INVENTORY
   // =========================
 
-  const selectedProductInventory =
-    selectedProduct
-      ? inventory.filter(
-          (item) =>
-            item.product?._id ===
-            selectedProduct._id
-        )
-      : [];
+  const selectedProductInventory = selectedProduct
+    ? inventory.filter((item) => item.product?._id === selectedProduct._id)
+    : [];
 
   // =========================
   // RENDER
@@ -334,35 +262,25 @@ const Products = () => {
 
   return (
     <div className="products-page">
-
       {/* =========================
           PAGE HEADER
       ========================= */}
 
       <div className="products-header">
-
         <div>
-          <Title level={2}>
-            Products
-          </Title>
+          <Title level={2}>Products</Title>
 
-          <Text type="secondary">
-            Manage your hardware
-            product catalog
-          </Text>
+          <Text type="secondary">Manage your hardware product catalog</Text>
         </div>
 
         <Button
           type="primary"
           icon={<PlusOutlined />}
           size="large"
-          onClick={() =>
-            setModalOpen(true)
-          }
+          onClick={() => setModalOpen(true)}
         >
           Add Product
         </Button>
-
       </div>
 
       {/* =========================
@@ -370,35 +288,19 @@ const Products = () => {
       ========================= */}
 
       <Card className="products-filter-card">
-
         <Row gutter={[12, 12]}>
-
-          <Col
-            xs={24}
-            md={14}
-            lg={16}
-          >
+          <Col xs={24} md={14} lg={16}>
             <Input
               size="large"
-              prefix={
-                <SearchOutlined />
-              }
+              prefix={<SearchOutlined />}
               placeholder="Search by product name, SKU, or barcode..."
               value={search}
-              onChange={(event) =>
-                setSearch(
-                  event.target.value
-                )
-              }
+              onChange={(event) => setSearch(event.target.value)}
               allowClear
             />
           </Col>
 
-          <Col
-            xs={24}
-            md={10}
-            lg={8}
-          >
+          <Col xs={24} md={10} lg={8}>
             <Select
               size="large"
               value={categoryFilter}
@@ -407,25 +309,16 @@ const Products = () => {
                 width: "100%",
               }}
             >
-              <Select.Option value="all">
-                All Categories
-              </Select.Option>
+              <Select.Option value="all">All Categories</Select.Option>
 
-              {categories.map(
-                (category) => (
-                  <Select.Option
-                    key={category._id}
-                    value={category._id}
-                  >
-                    {category.name}
-                  </Select.Option>
-                )
-              )}
+              {categories.map((category) => (
+                <Select.Option key={category._id} value={category._id}>
+                  {category.name}
+                </Select.Option>
+              ))}
             </Select>
           </Col>
-
         </Row>
-
       </Card>
 
       {/* =========================
@@ -433,30 +326,21 @@ const Products = () => {
       ========================= */}
 
       <Card className="products-table-card">
-
         <Table
           columns={columns}
-          dataSource={
-            filteredProducts
-          }
+          dataSource={filteredProducts}
           rowKey="_id"
           loading={loading}
           pagination={{
             pageSize: 10,
             showSizeChanger: true,
 
-            showTotal: (total) =>
-              `${total} products`,
+            showTotal: (total) => `${total} products`,
           }}
           locale={{
-            emptyText: (
-              <Empty
-                description="No products found"
-              />
-            ),
+            emptyText: <Empty description="No products found" />,
           }}
         />
-
       </Card>
 
       {/* =========================
@@ -476,22 +360,19 @@ const Products = () => {
         width={650}
         destroyOnClose
       >
-
         <Form
           form={form}
           layout="vertical"
           onFinish={handleAddProduct}
           requiredMark="optional"
         >
-
           <Form.Item
             label="Product Name"
             name="name"
             rules={[
               {
                 required: true,
-                message:
-                  "Please enter a product name.",
+                message: "Please enter a product name.",
               },
             ]}
           >
@@ -502,7 +383,6 @@ const Products = () => {
           </Form.Item>
 
           <Row gutter={16}>
-
             <Col span={12}>
               <Form.Item
                 label="SKU"
@@ -510,43 +390,25 @@ const Products = () => {
                 rules={[
                   {
                     required: true,
-                    message:
-                      "Please enter a SKU.",
+                    message: "Please enter a SKU.",
                   },
                 ]}
               >
-                <Input
-                  placeholder="e.g. BOSCH-GSB120"
-                  size="large"
-                />
+                <Input placeholder="e.g. BOSCH-GSB120" size="large" />
               </Form.Item>
             </Col>
 
             <Col span={12}>
-              <Form.Item
-                label="Barcode"
-                name="barcode"
-              >
-                <Input
-                  placeholder="Barcode"
-                  size="large"
-                />
+              <Form.Item label="Barcode" name="barcode">
+                <Input placeholder="Barcode" size="large" />
               </Form.Item>
             </Col>
-
           </Row>
 
           <Row gutter={16}>
-
             <Col span={12}>
-              <Form.Item
-                label="Brand"
-                name="brand"
-              >
-                <Input
-                  placeholder="e.g. Bosch"
-                  size="large"
-                />
+              <Form.Item label="Brand" name="brand">
+                <Input placeholder="e.g. Bosch" size="large" />
               </Form.Item>
             </Col>
 
@@ -557,43 +419,26 @@ const Products = () => {
                 rules={[
                   {
                     required: true,
-                    message:
-                      "Please select a category.",
+                    message: "Please select a category.",
                   },
                 ]}
               >
-                <Select
-                  placeholder="Select category"
-                  size="large"
-                >
-                  {categories.map(
-                    (category) => (
-                      <Select.Option
-                        key={category._id}
-                        value={category._id}
-                      >
-                        {category.name}
-                      </Select.Option>
-                    )
-                  )}
+                <Select placeholder="Select category" size="large">
+                  {categories.map((category) => (
+                    <Select.Option key={category._id} value={category._id}>
+                      {category.name}
+                    </Select.Option>
+                  ))}
                 </Select>
               </Form.Item>
             </Col>
-
           </Row>
 
-          <Form.Item
-            label="Description"
-            name="description"
-          >
-            <Input.TextArea
-              rows={3}
-              placeholder="Product description..."
-            />
+          <Form.Item label="Description" name="description">
+            <Input.TextArea rows={3} placeholder="Product description..." />
           </Form.Item>
 
           <Row gutter={16}>
-
             <Col span={8}>
               <Form.Item
                 label="Cost Price"
@@ -601,8 +446,7 @@ const Products = () => {
                 rules={[
                   {
                     required: true,
-                    message:
-                      "Enter cost price.",
+                    message: "Enter cost price.",
                   },
                 ]}
               >
@@ -624,8 +468,7 @@ const Products = () => {
                 rules={[
                   {
                     required: true,
-                    message:
-                      "Enter selling price.",
+                    message: "Enter selling price.",
                   },
                 ]}
               >
@@ -655,7 +498,6 @@ const Products = () => {
                 />
               </Form.Item>
             </Col>
-
           </Row>
 
           <Form.Item
@@ -665,48 +507,30 @@ const Products = () => {
             rules={[
               {
                 required: true,
-                message:
-                  "Please select a unit.",
+                message: "Please select a unit.",
               },
             ]}
           >
             <Select size="large">
+              <Select.Option value="piece">Piece</Select.Option>
 
-              <Select.Option value="piece">
-                Piece
-              </Select.Option>
+              <Select.Option value="box">Box</Select.Option>
 
-              <Select.Option value="box">
-                Box
-              </Select.Option>
+              <Select.Option value="pack">Pack</Select.Option>
 
-              <Select.Option value="pack">
-                Pack
-              </Select.Option>
+              <Select.Option value="meter">Meter</Select.Option>
 
-              <Select.Option value="meter">
-                Meter
-              </Select.Option>
+              <Select.Option value="roll">Roll</Select.Option>
 
-              <Select.Option value="roll">
-                Roll
-              </Select.Option>
+              <Select.Option value="liter">Liter</Select.Option>
 
-              <Select.Option value="liter">
-                Liter
-              </Select.Option>
-
-              <Select.Option value="kg">
-                Kilogram
-              </Select.Option>
-
+              <Select.Option value="kg">Kilogram</Select.Option>
             </Select>
           </Form.Item>
 
           {/* MODAL BUTTONS */}
 
           <div className="product-modal-footer">
-
             <Button
               onClick={() => {
                 form.resetFields();
@@ -717,18 +541,11 @@ const Products = () => {
               Cancel
             </Button>
 
-            <Button
-              type="primary"
-              htmlType="submit"
-              loading={saving}
-            >
+            <Button type="primary" htmlType="submit" loading={saving}>
               Add Product
             </Button>
-
           </div>
-
         </Form>
-
       </Modal>
 
       {/* =========================
@@ -745,183 +562,111 @@ const Products = () => {
         footer={null}
         width={700}
       >
-
         {selectedProduct && (
           <div className="product-details">
-
             {/* PRODUCT HEADER */}
 
             <div className="product-details-header">
-
               <div className="product-details-icon">
                 <AppstoreOutlined />
               </div>
 
               <div>
+                <Title level={3}>{selectedProduct.name}</Title>
 
-                <Title level={3}>
-                  {selectedProduct.name}
-                </Title>
-
-                <Text type="secondary">
-                  {selectedProduct.sku}
-                </Text>
-
+                <Text type="secondary">{selectedProduct.sku}</Text>
               </div>
-
             </div>
 
             {/* PRODUCT INFORMATION */}
 
             <Row gutter={[16, 16]}>
-
               <Col span={8}>
                 <Card size="small">
-
-                  <Text type="secondary">
-                    Cost Price
-                  </Text>
+                  <Text type="secondary">Cost Price</Text>
 
                   <div className="detail-value">
                     ₱
-                    {Number(
-                      selectedProduct.costPrice ||
-                        0
-                    ).toLocaleString(
+                    {Number(selectedProduct.costPrice || 0).toLocaleString(
                       "en-PH",
                       {
                         minimumFractionDigits: 2,
-                      }
+                      },
                     )}
                   </div>
-
                 </Card>
               </Col>
 
               <Col span={8}>
                 <Card size="small">
-
-                  <Text type="secondary">
-                    Selling Price
-                  </Text>
+                  <Text type="secondary">Selling Price</Text>
 
                   <div className="detail-value">
                     ₱
-                    {Number(
-                      selectedProduct.sellingPrice ||
-                        0
-                    ).toLocaleString(
+                    {Number(selectedProduct.sellingPrice || 0).toLocaleString(
                       "en-PH",
                       {
                         minimumFractionDigits: 2,
-                      }
+                      },
                     )}
                   </div>
-
                 </Card>
               </Col>
 
               <Col span={8}>
                 <Card size="small">
-
-                  <Text type="secondary">
-                    Reorder Level
-                  </Text>
+                  <Text type="secondary">Reorder Level</Text>
 
                   <div className="detail-value">
-                    {selectedProduct.reorderLevel ||
-                      0}
+                    {selectedProduct.reorderLevel || 0}
                   </div>
-
                 </Card>
               </Col>
-
             </Row>
 
             {/* BRANCH STOCK */}
 
             <div className="branch-stock-title">
-
-              <Title level={5}>
-                Branch Stock
-              </Title>
-
+              <Title level={5}>Branch Stock</Title>
             </div>
 
             <div className="branch-stock-list">
-
-              {selectedProductInventory.length ===
-              0 ? (
-                <Empty
-                  description="No branch inventory found"
-                />
+              {selectedProductInventory.length === 0 ? (
+                <Empty description="No branch inventory found" />
               ) : (
-                selectedProductInventory.map(
-                  (item) => {
+                selectedProductInventory.map((item) => {
+                  const isLow = item.quantity <= item.reorderLevel;
 
-                    const isLow =
-                      item.quantity <=
-                      item.reorderLevel;
-
-                    return (
-                      <div
-                        className="branch-stock-row"
-                        key={item._id}
-                      >
+                  return (
+                    <div className="branch-stock-row" key={item._id}>
+                      <div>
+                        <strong>{item.branch?.name || "Unknown Branch"}</strong>
 
                         <div>
-
-                          <strong>
-                            {item.branch?.name ||
-                              "Unknown Branch"}
-                          </strong>
-
-                          <div>
-                            <Text type="secondary">
-                              {item.branch?.code ||
-                                "N/A"}
-                            </Text>
-                          </div>
-
-                        </div>
-
-                        <div className="branch-stock-right">
-
-                          <Tag
-                            color={
-                              isLow
-                                ? "red"
-                                : "green"
-                            }
-                          >
-                            {item.quantity}{" "}
-                            {item.product
-                              ?.unit ||
-                              selectedProduct.unit ||
-                              "pcs"}
-                          </Tag>
-
                           <Text type="secondary">
-                            Shelf:{" "}
-                            {item.shelfLocation ||
-                              "Not assigned"}
+                            {item.branch?.code || "N/A"}
                           </Text>
-
                         </div>
-
                       </div>
-                    );
-                  }
-                )
+
+                      <div className="branch-stock-right">
+                        <Tag color={isLow ? "red" : "green"}>
+                          {item.quantity}{" "}
+                          {item.product?.unit || selectedProduct.unit || "pcs"}
+                        </Tag>
+
+                        <Text type="secondary">
+                          Shelf: {item.shelfLocation || "Not assigned"}
+                        </Text>
+                      </div>
+                    </div>
+                  );
+                })
               )}
-
             </div>
-
           </div>
         )}
-
       </Modal>
-
     </div>
   );
 };
