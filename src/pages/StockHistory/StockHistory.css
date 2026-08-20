@@ -1,0 +1,173 @@
+.stock-history-page {
+  max-width: 1600px;
+  margin: 0 auto;
+}
+
+/* =========================
+   HEADER
+========================= */
+
+.stock-history-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+
+  margin-bottom: 24px;
+}
+
+.stock-history-header h2 {
+  margin: 0 0 4px;
+}
+
+.history-count-tag {
+  padding: 6px 12px;
+  border-radius: 10px;
+}
+
+/* =========================
+   STATISTICS
+========================= */
+
+.history-stats {
+  margin-bottom: 20px;
+}
+
+.history-stat-card {
+  border: 1px solid
+    rgba(0, 0, 0, 0.06);
+
+  border-radius: 16px;
+
+  box-shadow:
+    0 4px 16px
+      rgba(0, 0, 0, 0.04);
+}
+
+.history-stat-card
+  .ant-card-body {
+  padding: 20px;
+}
+
+/* =========================
+   FILTERS
+========================= */
+
+.history-filter-card {
+  margin-bottom: 20px;
+
+  border: 1px solid
+    rgba(0, 0, 0, 0.06);
+
+  border-radius: 16px;
+
+  box-shadow:
+    0 4px 16px
+      rgba(0, 0, 0, 0.04);
+}
+
+/* =========================
+   TABLE
+========================= */
+
+.history-table-card {
+  border: 1px solid
+    rgba(0, 0, 0, 0.06);
+
+  border-radius: 16px;
+
+  box-shadow:
+    0 4px 16px
+      rgba(0, 0, 0, 0.04);
+}
+
+.history-table-header {
+  margin-bottom: 16px;
+}
+
+.history-table-header h5 {
+  margin: 0 0 4px;
+}
+
+.history-table-card
+  .ant-table {
+  background: transparent;
+}
+
+.history-table-card
+  .ant-table-thead
+  > tr
+  > th {
+  background: #fafafa;
+}
+
+.history-table-card
+  .ant-table-tbody
+  > tr
+  > td {
+  padding-top: 14px;
+  padding-bottom: 14px;
+}
+
+/* =========================
+   DATE
+========================= */
+
+.history-date {
+  display: flex;
+  flex-direction: column;
+
+  gap: 2px;
+}
+
+/* =========================
+   PRODUCT
+========================= */
+
+.history-product {
+  font-weight: 600;
+}
+
+.history-branch {
+  font-weight: 500;
+}
+
+/* =========================
+   QUANTITY
+========================= */
+
+.quantity-in {
+  font-size: 15px;
+}
+
+.quantity-out {
+  font-size: 15px;
+}
+
+.quantity-adjustment {
+  font-size: 15px;
+}
+
+/* =========================
+   STOCK CHANGE
+========================= */
+
+.stock-change {
+  display: flex;
+  align-items: center;
+
+  gap: 7px;
+}
+
+/* =========================
+   MOBILE
+========================= */
+
+@media (max-width: 768px) {
+  .stock-history-header {
+    align-items: flex-start;
+
+    flex-direction: column;
+
+    gap: 16px;
+  }
+}

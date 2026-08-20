@@ -1,0 +1,387 @@
+/* ========================================
+   TOPBAR
+======================================== */
+
+.topbar {
+  height: 72px;
+
+  position: fixed;
+
+  top: 0;
+
+  right: 0;
+
+  display: flex;
+
+  align-items: center;
+
+  justify-content: space-between;
+
+  padding: 0 28px;
+
+  box-sizing: border-box;
+
+  background: rgba(
+    255,
+    255,
+    255,
+    0.92
+  );
+
+  backdrop-filter: blur(18px);
+
+  -webkit-backdrop-filter: blur(18px);
+
+  border-bottom:
+    1px solid #eeeeee;
+
+  z-index: 90;
+
+  transition:
+    left 0.22s
+    cubic-bezier(
+      0.4,
+      0,
+      0.2,
+      1
+    );
+}
+
+
+/* ========================================
+   SIDEBAR STATES
+======================================== */
+
+.topbar-collapsed {
+  left: 72px;
+}
+
+.topbar-expanded {
+  left: 250px;
+}
+
+
+/* ========================================
+   LEFT
+======================================== */
+
+.topbar-left {
+  min-width: 0;
+}
+
+.page-heading {
+  display: flex;
+
+  flex-direction: column;
+
+  gap: 2px;
+}
+
+.page-title {
+  margin: 0;
+
+  color: #171717;
+
+  font-size: 17px;
+
+  font-weight: 650;
+
+  letter-spacing:
+    -0.3px;
+
+  line-height: 22px;
+}
+
+.page-description {
+  color: #999999;
+
+  font-size: 11px;
+
+  line-height: 16px;
+}
+
+
+/* ========================================
+   RIGHT
+======================================== */
+
+.topbar-right {
+  display: flex;
+
+  align-items: center;
+
+  gap: 10px;
+}
+
+
+/* ========================================
+   NOTIFICATION
+======================================== */
+
+.topbar-icon-button {
+  width: 38px;
+  height: 38px;
+
+  display: flex;
+
+  align-items: center;
+  justify-content: center;
+
+  border: none;
+
+  border-radius: 10px;
+
+  background: transparent;
+
+  color: #666666;
+
+  font-size: 17px;
+
+  cursor: pointer;
+
+  transition:
+    background 0.18s ease,
+    color 0.18s ease;
+}
+
+.topbar-icon-button:hover {
+  background: #f5f5f5;
+
+  color: #111111;
+}
+
+
+/* ========================================
+   BRANCH
+======================================== */
+
+.topbar-branch {
+  min-width: 145px;
+
+  display: flex;
+
+  align-items: center;
+
+  gap: 9px;
+
+  padding: 7px 9px;
+
+  border-radius: 10px;
+
+  cursor: pointer;
+
+  transition:
+    background 0.18s ease;
+}
+
+.topbar-branch:hover {
+  background: #f6f6f6;
+}
+
+.branch-icon {
+  width: 30px;
+  height: 30px;
+
+  flex-shrink: 0;
+
+  display: flex;
+
+  align-items: center;
+  justify-content: center;
+
+  border-radius: 8px;
+
+  background: #f0f0f0;
+
+  color: #555555;
+
+  font-size: 14px;
+}
+
+.branch-info {
+  min-width: 0;
+
+  flex: 1;
+
+  display: flex;
+
+  flex-direction: column;
+
+  gap: 1px;
+}
+
+.branch-label {
+  color: #999999;
+
+  font-size: 9px;
+
+  line-height: 12px;
+}
+
+.branch-value {
+  color: #222222;
+
+  font-size: 11px;
+
+  font-weight: 650;
+
+  white-space: nowrap;
+
+  overflow: hidden;
+
+  text-overflow: ellipsis;
+}
+
+.branch-arrow {
+  color: #999999;
+
+  font-size: 9px;
+}
+
+
+/* ========================================
+   DIVIDER
+======================================== */
+
+.topbar-divider {
+  width: 1px;
+
+  height: 28px;
+
+  margin: 0 4px;
+
+  background: #e8e8e8;
+}
+
+
+/* ========================================
+   USER
+======================================== */
+
+.topbar-user {
+  height: 44px;
+
+  display: flex;
+
+  align-items: center;
+
+  gap: 9px;
+
+  padding: 4px 7px;
+
+  border: none;
+
+  border-radius: 11px;
+
+  background: transparent;
+
+  cursor: pointer;
+
+  font-family: inherit;
+
+  transition:
+    background 0.18s ease;
+}
+
+.topbar-user:hover {
+  background: #f6f6f6;
+}
+
+
+/* ========================================
+   AVATAR
+======================================== */
+
+.topbar-avatar {
+  width: 34px !important;
+
+  height: 34px !important;
+
+  background: #111111 !important;
+
+  color: #ffffff;
+
+  font-size: 13px;
+}
+
+
+/* ========================================
+   USER INFO
+======================================== */
+
+.topbar-user-info {
+  min-width: 80px;
+
+  display: flex;
+
+  flex-direction: column;
+
+  align-items: flex-start;
+
+  gap: 1px;
+}
+
+.topbar-user-name {
+  max-width: 130px;
+
+  overflow: hidden;
+
+  text-overflow: ellipsis;
+
+  white-space: nowrap;
+
+  color: #222222;
+
+  font-size: 11px;
+
+  font-weight: 650;
+}
+
+.topbar-user-role {
+  color: #999999;
+
+  font-size: 9px;
+
+  text-transform: capitalize;
+}
+
+.topbar-user-arrow {
+  margin-left: 2px;
+
+  color: #999999;
+
+  font-size: 9px;
+}
+
+
+/* ========================================
+   RESPONSIVE
+======================================== */
+
+@media (max-width: 900px) {
+  .topbar {
+    padding: 0 18px;
+  }
+
+  .branch-info {
+    display: none;
+  }
+
+  .topbar-branch {
+    min-width: auto;
+  }
+}
+
+@media (max-width: 650px) {
+  .page-description {
+    display: none;
+  }
+
+  .topbar-user-info {
+    display: none;
+  }
+
+  .topbar-divider {
+    display: none;
+  }
+}
