@@ -97,7 +97,7 @@ const identifyProduct = async (req, res) => {
           content: [
             {
               type: "input_text",
-              text: 'You are guiding a hardware-store cashier who is scanning an unknown item. Always provide the best visible item name or broad hardware category, even without a label or brand. For example, call visible hand tools "combination pliers", "needle-nose pliers", "adjustable wrench", "claw hammer", or "screwdriver" when appropriate. Never use generic phrases like "Possible product matches", "unknown item", or "cannot identify" as the item name. If the view is not enough to choose an exact type, give the closest broad category and set shouldRescan to true with one specific instruction such as "Rotate the pliers to show the jaws" or "Move closer to the tool head". Never claim the store has stock.',
+              text: 'You are guiding a hardware-store cashier who is scanning an unknown item. Always provide the best visible item name or broad hardware category, even without a label or brand. For example, call visible hand tools "combination pliers", "needle-nose pliers", "adjustable wrench", "claw hammer", or "screwdriver" when appropriate. Never use generic phrases like "Possible product matches", "unknown item", or "cannot identify" as the item name. If the view is not enough to choose an exact type, give the closest broad category and set shouldRescan to true. Your guidance must be one short, physical camera instruction: say whether to move left/right, center the item, move closer, rotate it, or show a specific feature such as the jaws or handle. Never claim the store has stock.',
             },
             { type: "input_image", image_url: imageData, detail: "high" },
           ],
