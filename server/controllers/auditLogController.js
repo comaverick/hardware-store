@@ -2,7 +2,7 @@ const AuditLog = require("../models/AuditLog");
 
 const getAuditLogs = async (req, res) => {
   try {
-    const query = {};
+    const query = { path: { $not: /\/assistant(?:\/|$)/i } };
     if (req.user.role !== "SUPER_ADMIN") query.branch = req.user.branch?._id;
     if (req.query.branch && req.user.role === "SUPER_ADMIN")
       query.branch = req.query.branch;
