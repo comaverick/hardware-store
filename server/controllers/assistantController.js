@@ -1,4 +1,5 @@
 const Product = require("../models/Product");
+const Branch = require("../models/Branch");
 const BranchInventory = require("../models/BranchInventory");
 const Sale = require("../models/Sale");
 
@@ -90,7 +91,7 @@ const getAssistantContext = async (req) => {
   const since = new Date();
   since.setDate(since.getDate() - 30);
 
-  const [inventory, products, sales] = await Promise.all([
+  const [inventory, products, sales, branches] = await Promise.all([
     BranchInventory.find(branchFilter)
       .populate("product", "name sku brand category sellingPrice unit isActive")
       .populate("branch", "name code")
@@ -98,6 +99,9 @@ const getAssistantContext = async (req) => {
     Product.find({ isActive: true })
       .populate("category", "name")
       .select("name sku barcode brand category sellingPrice unit reorderLevel")
+      .lean(),
+    Branch.find(req.user?.role === "SUPER_ADMIN" ? {} : { _id: req.user?.branch?._id })
+      .select("name code")
       .lean(),
     Sale.find({
       ...saleFilter,
@@ -141,6 +145,38 @@ const getAssistantContext = async (req) => {
     stockByProduct.set(row.sku, current);
   });
 
+  const inventoryByBranchSku = new Map(
+    inventory.map((row) => [
+      String(row.branch?._id) + ":" + String(row.product?._id),
+      row,
+    ]),
+  );
+
+  const outOfStockByBranch = branches.map((branch) => {
+    const productsOut = products
+      .filter((product) => {
+        const row = inventoryByBranchSku.get(
+          String(branch._id) + ":" + String(product._id),
+        );
+        const available = row
+          ? Math.max((row.quantity || 0) - (row.reservedQuantity || 0), 0)
+          : 0;
+        return available === 0;
+      })
+      .map((product) => ({
+        product: product.name,
+        sku: product.sku,
+        category: product.category?.name || "Uncategorized",
+        available: 0,
+      }));
+
+    return {
+      branch: branch.name,
+      code: branch.code,
+      outOfStockCount: productsOut.length,
+      products: productsOut,
+    };
+  });
   const productCatalog = products.map((product) => ({
     product: product.name,
     sku: product.sku,
@@ -265,6 +301,7 @@ const getAssistantContext = async (req) => {
     salesByDate,
     cashierLeaderboard,
     lowStock,
+    outOfStockByBranch,
     salesLast30Days: salesSummary,
   };
 };
@@ -303,6 +340,7 @@ const askAssistant = async (req, res) => {
       "For questions about today, today's sales, or sales so far today, use the salesToday object and currentDateManila. Do not substitute the last 30 days summary.",
       "For yesterday use salesYesterday. For this week or weekly sales use salesThisWeek. These summaries are already calculated in Manila time; do not say data is unavailable when the relevant object is present, including when its totals are zero.",
       "For custom date ranges such as today until last Friday, use the daily salesByDate object and include only dates in the requested range. For questions about who sold the most, use cashierLeaderboard; rank by totalSales unless the user asks for transactions or units sold. Follow-up questions should use the conversation context plus these live summaries.",
+      "For out-of-stock questions, use outOfStockByBranch. It includes every active product in every permitted branch, including products with no inventory record. Do not answer none unless every branch has an empty products array. Group the answer by branch and include the product names and SKUs.",
       "Never invent stock, sales, prices, branches, employees, or transactions.",
       "Use Philippine peso formatting such as PHP 1,250. Keep answers easy to scan with short paragraphs or bullets.",
       "The assistant is read-only. Never claim that you created, deleted, edited, reserved, refunded, or reordered anything.",
