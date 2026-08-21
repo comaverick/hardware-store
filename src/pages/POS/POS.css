@@ -948,3 +948,64 @@
     max-height: 360px;
   }
 }
+
+/* POS content skeleton */
+.pos-loading {
+  display: block;
+  min-height: 0;
+  padding: 4px 0 36px;
+}
+.pos-loading-header {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  min-height: 44px;
+  margin-bottom: 18px;
+}
+.pos-loading-header .ant-skeleton-button {
+  width: 150px;
+}
+.pos-loading-main > .ant-col {
+  display: flex;
+}
+.pos-loading-card {
+  width: 100%;
+  min-height: 620px;
+  overflow: hidden;
+  border: 1px solid #e5e5e5;
+  border-radius: 10px;
+  box-shadow: none;
+}
+.pos-loading-card .ant-card-body {
+  padding: 22px;
+}
+.pos-loading-search {
+  margin: 18px 0;
+}
+.pos-loading-search .ant-skeleton-input {
+  width: 100%;
+}
+.pos-loading-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+.pos-loading-grid .ant-skeleton-button {
+  width: 100%;
+  height: 105px;
+}
+.pos-loading-cart .ant-skeleton {
+  width: 100%;
+}
+@media (max-width: 600px) {
+  .pos-loading-header {
+    justify-content: stretch;
+    flex-wrap: wrap;
+  }
+  .pos-loading-header .ant-skeleton-button {
+    flex: 1 1 130px;
+  }
+  .pos-loading-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

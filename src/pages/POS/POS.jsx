@@ -14,6 +14,7 @@ import {
 import {
   Button,
   Card,
+  Skeleton,
   Col,
   Empty,
   Input,
@@ -932,9 +933,31 @@ const POS = () => {
   if (loading) {
     return (
       <div className="pos-loading">
-        <Spin size="large" />
-
-        <Text type="secondary">Loading POS...</Text>
+        <div className="pos-loading-header">
+          <Skeleton.Button active size="large" />
+          <Skeleton.Button active size="large" />
+          <Skeleton.Button active size="large" />
+        </div>
+        <Row gutter={[20, 20]} className="pos-loading-main">
+          <Col xs={24} lg={15}>
+            <Card className="pos-loading-card">
+              <Skeleton active paragraph={{ rows: 1 }} title={{ width: "25%" }} />
+              <div className="pos-loading-search"><Skeleton.Input active size="large" /></div>
+              <div className="pos-loading-grid">
+                {Array.from({ length: 8 }).map((_, index) => (
+                  <Skeleton.Button active block key={index} />
+                ))}
+              </div>
+            </Card>
+          </Col>
+          <Col xs={24} lg={9}>
+            <Card className="pos-loading-card pos-loading-cart">
+              <Skeleton active paragraph={{ rows: 1 }} title={{ width: "35%" }} />
+              <Skeleton active paragraph={{ rows: 5 }} title={false} />
+              <Skeleton.Button active block size="large" />
+            </Card>
+          </Col>
+        </Row>
       </div>
     );
   }
