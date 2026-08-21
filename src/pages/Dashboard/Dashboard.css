@@ -1957,3 +1957,71 @@
 .sales-overview-summary .comparison-note.negative {
   color: #777;
 }
+
+.dashboard-loading {
+  width: 100%;
+  padding: 4px 0 36px;
+}
+.dashboard-loading-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 22px;
+}
+.dashboard-loading-heading .ant-skeleton-input:first-child {
+  width: 260px;
+}
+.dashboard-loading-heading .ant-skeleton-input:last-child {
+  width: 340px;
+}
+.dashboard-loading-kpis {
+  margin-bottom: 20px;
+}
+.dashboard-loading-main {
+  margin-bottom: 20px;
+}
+.dashboard-skeleton-card {
+  overflow: hidden;
+  min-height: 150px;
+  border: 1px solid #e5e5e5;
+  border-radius: 10px;
+  box-shadow: none;
+}
+.dashboard-skeleton-card .ant-card-body {
+  padding: 18px;
+}
+.dashboard-skeleton-card .ant-skeleton-paragraph {
+  margin-top: 18px;
+}
+@media (max-width: 600px) {
+  .dashboard-loading-heading .ant-skeleton-input {
+    max-width: 100%;
+  }
+}
+
+
+/* Align dashboard skeleton with the real page layout */
+.dashboard-loading {
+  display: block;
+  min-height: 0;
+  align-items: initial;
+  justify-content: initial;
+  gap: 0;
+}
+.dashboard-loading-kpis > .ant-col,
+.dashboard-loading-main > .ant-col {
+  display: flex;
+}
+.dashboard-loading-kpis .dashboard-skeleton-card,
+.dashboard-loading-main .dashboard-skeleton-card {
+  width: 100%;
+}
+.dashboard-loading-kpis .dashboard-skeleton-card {
+  min-height: 148px;
+}
+.dashboard-loading-main .dashboard-skeleton-card {
+  min-height: 390px;
+}
+.dashboard-loading-main .ant-skeleton {
+  width: 100%;
+}

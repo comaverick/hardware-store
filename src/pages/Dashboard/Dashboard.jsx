@@ -16,7 +16,7 @@ import {
   DownOutlined,
 } from "@ant-design/icons";
 
-import { Alert, Card, Col, Row, Spin, Typography } from "antd";
+import { Alert, Card, Col, Row, Skeleton, Spin, Typography } from "antd";
 
 import {
   BarChart,
@@ -549,9 +549,31 @@ const Dashboard = () => {
   if (loading) {
     return (
       <div className="dashboard-loading">
-        <Spin size="large" />
-
-        <Text>Preparing your dashboard...</Text>
+        <div className="dashboard-loading-heading">
+          <Skeleton.Input active size="large" />
+          <Skeleton.Input active size="small" />
+        </div>
+        <Row gutter={[16, 16]} className="dashboard-loading-kpis">
+          {[1, 2, 3, 4].map((item) => (
+            <Col xs={24} sm={12} lg={6} key={item}>
+              <Card className="dashboard-skeleton-card">
+                <Skeleton active paragraph={{ rows: 2 }} title={{ width: "55%" }} />
+              </Card>
+            </Col>
+          ))}
+        </Row>
+        <Row gutter={[16, 16]} className="dashboard-loading-main">
+          <Col xs={24} lg={16}>
+            <Card className="dashboard-skeleton-card">
+              <Skeleton active paragraph={{ rows: 7 }} title={{ width: "35%" }} />
+            </Card>
+          </Col>
+          <Col xs={24} lg={8}>
+            <Card className="dashboard-skeleton-card">
+              <Skeleton active paragraph={{ rows: 7 }} title={{ width: "45%" }} />
+            </Card>
+          </Col>
+        </Row>
       </div>
     );
   }
