@@ -40,7 +40,7 @@ const PRINTER_SERVER = (process.env.REACT_APP_PRINTER_SERVER_URL || "http://loca
 const printerFetch = (path, options = {}) =>
   fetch(`${PRINTER_SERVER}${path}`, {
     ...options,
-    targetAddressSpace: "local",
+    targetAddressSpace: "loopback",
   });
 
 const POS = () => {
