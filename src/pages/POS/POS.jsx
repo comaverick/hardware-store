@@ -1507,6 +1507,16 @@ const POS = () => {
               render: (_, sale) => new Date(sale.createdAt).toLocaleString("en-PH"),
             },
             {
+              title: "Branch",
+              key: "branch",
+              render: (_, sale) => sale.branch?.name || "-",
+            },
+            {
+              title: "Sold By",
+              key: "cashier",
+              render: (_, sale) => sale.cashier?.name || "-",
+            },
+            {
               title: "Total",
               key: "totalAmount",
               render: (_, sale) => `\u20B1${Number(sale.totalAmount).toLocaleString("en-PH", { minimumFractionDigits: 2 })}`,
