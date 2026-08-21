@@ -1,4 +1,4 @@
-﻿const express = require("express");
+const express = require("express");
 const cors = require("cors");
 const dotenv = require("dotenv");
 const connectDB = require("./config/db");
@@ -31,6 +31,7 @@ app.use("/api/sales", saleRoutes);
 app.use("/api/smart-inventory", smartInventoryRoutes);
 app.use("/api/reservations", reservationRoutes);
 app.use("/api/product-finder", require("./routes/productFinderRoutes"));
+app.use("/api/assistant", require("./routes/assistantRoutes"));
 app.use("/api/audit-logs", require("./routes/auditLogRoutes"));
 
 app.get("/", (req, res) => {

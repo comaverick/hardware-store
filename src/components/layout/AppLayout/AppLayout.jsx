@@ -3,6 +3,7 @@ import { useState } from "react";
 
 import Sidebar from "../Sidebar/Sidebar";
 import Topbar from "../Topbar/Topbar";
+import Assistant from "../../../pages/Assistant/Assistant";
 
 import "./AppLayout.css";
 
@@ -22,6 +23,7 @@ const AppLayout = ({ children }) => {
       >
         {children}
       </main>
+      <Assistant />
     </Layout>
   );
 };

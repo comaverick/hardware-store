@@ -47,7 +47,6 @@ const Topbar = ({ sidebarExpanded }) => {
       title: "Reservations",
       description: "Manage product holds for pickup",
     },
-
     "/product-finder": {
       title: "AI Product Finder",
       description: "Find products with guided scanning",

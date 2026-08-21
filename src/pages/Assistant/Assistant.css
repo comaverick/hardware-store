@@ -1,0 +1,282 @@
+.assistant-float-launcher {
+  position: fixed;
+  z-index: 1001;
+  right: 25px;
+  bottom: 24px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 54px;
+  padding: 5px 16px 5px 5px;
+  border: 1px solid #111;
+  border-radius: 999px;
+  background: #111;
+  color: #fff;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .22);
+  cursor: pointer;
+  transition: transform .18s ease, box-shadow .18s ease;
+}
+.assistant-float-launcher:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 14px 32px rgba(0, 0, 0, .28);
+}
+.assistant-float-launcher-open {
+  padding-right: 5px;
+}
+.assistant-launcher-avatar,
+.assistant-agent-avatar,
+.assistant-message-avatar {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #fff;
+  color: #111;
+}
+.assistant-launcher-avatar {
+  width: 44px;
+  height: 44px;
+  font-size: 22px;
+}
+.assistant-launcher-label {
+  padding-right: 2px;
+  font-size: 13px;
+  font-weight: 700;
+}
+.assistant-float-panel {
+  position: fixed;
+  z-index: 1000;
+  right: 25px;
+  bottom: 90px;
+  display: flex;
+  width: min(410px, calc(100vw - 32px));
+  height: min(650px, calc(100vh - 120px));
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid #dedede;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 18px 55px rgba(0, 0, 0, .2);
+}
+.assistant-float-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 70px;
+  padding: 11px 12px 11px 16px;
+  border-bottom: 1px solid #e5e5e5;
+  background: #f5f5f5;
+}
+.assistant-agent {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.assistant-agent > div:last-child {
+  display: flex;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 2px;
+}
+.assistant-agent-avatar {
+  width: 42px;
+  height: 42px;
+  background: #111;
+  color: #fff;
+  font-size: 21px;
+}
+.assistant-agent span {
+  color: #777;
+  font-size: 12px;
+}
+.assistant-float-actions {
+  display: flex;
+  align-items: center;
+}
+.assistant-float-actions .ant-btn {
+  color: #777;
+}
+.assistant-float-actions .ant-btn:hover {
+  color: #111;
+  background: #e9e9e9;
+}
+.assistant-float-messages {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 14px;
+  overflow-y: auto;
+  padding: 18px 15px;
+  background: #fff;
+}
+.assistant-message {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  max-width: 92%;
+}
+.assistant-message-user {
+  align-self: flex-end;
+}
+.assistant-message-avatar {
+  width: 27px;
+  height: 27px;
+  background: #111;
+  color: #fff;
+  font-size: 14px;
+}
+.assistant-message-bubble {
+  white-space: pre-wrap;
+  line-height: 1.5;
+  padding: 10px 12px;
+  border: 1px solid #e6e6e6;
+  border-radius: 13px 13px 13px 4px;
+  background: #f7f7f7;
+  font-size: 13px;
+}
+.assistant-message-user .assistant-message-bubble {
+  border-color: #111;
+  border-radius: 13px 13px 4px 13px;
+  background: #111;
+  color: #fff;
+}
+.assistant-thinking {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #777;
+}
+.assistant-float-prompts {
+  display: grid;
+  max-height: 168px;
+  gap: 6px;
+  overflow-y: auto;
+  padding: 9px 12px 5px;
+  border-top: 1px solid #eee;
+}
+.assistant-prompt {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border: 1px solid #e7e7e7;
+  border-radius: 8px;
+  background: #fff;
+  color: #171717;
+  text-align: left;
+  cursor: pointer;
+}
+.assistant-prompt:hover:not(:disabled) {
+  border-color: #111;
+  background: #f7f7f7;
+}
+.assistant-prompt:disabled {
+  cursor: not-allowed;
+  opacity: .55;
+}
+.assistant-prompt-icon {
+  display: grid;
+  width: 25px;
+  height: 25px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 6px;
+  background: #f0f0f0;
+  color: #111;
+}
+.assistant-prompt > span:last-child {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+.assistant-prompt strong {
+  font-size: 12px;
+}
+.assistant-prompt small {
+  overflow: hidden;
+  color: #777;
+  font-size: 10px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.assistant-error {
+  margin: 8px 12px 0;
+}
+.assistant-composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 7px;
+  padding: 10px 12px 4px;
+  border-top: 1px solid #e5e5e5;
+}
+.assistant-composer .ant-input {
+  resize: none;
+  border-color: #d9d9d9;
+  border-radius: 8px;
+  box-shadow: none;
+  font-size: 13px;
+}
+.assistant-composer .ant-input:focus {
+  border-color: #111;
+}
+.assistant-composer .ant-btn-primary {
+  width: 38px;
+  height: 38px;
+  border-color: #111;
+  background: #111;
+  box-shadow: none;
+}
+.assistant-composer-hint {
+  display: block;
+  padding: 0 12px 10px;
+  color: #999;
+  font-size: 10px;
+}
+@media (max-width: 560px) {
+  .assistant-float-launcher {
+    right: 16px;
+    bottom: 16px;
+  }
+  .assistant-float-panel {
+    right: 16px;
+    bottom: 78px;
+    width: calc(100vw - 32px);
+    height: min(600px, calc(100vh - 100px));
+  }
+  .assistant-launcher-label {
+    display: none;
+  }
+}
+
+/* Prevent long SKUs and assistant responses from creating horizontal scroll */
+.assistant-float-panel,
+.assistant-float-messages,
+.assistant-float-prompts,
+.assistant-composer {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+.assistant-message,
+.assistant-message-bubble,
+.assistant-prompt,
+.assistant-prompt > span:last-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Give the assistant composer a more comfortable typing area */
+.assistant-composer .ant-input {
+  min-height: 44px;
+  padding: 10px 12px;
+  line-height: 1.45;
+}
+
+.assistant-composer .ant-input-textarea-show-count::after {
+  margin-bottom: 8px;
+}
