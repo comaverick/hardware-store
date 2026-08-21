@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { EditOutlined, PlusOutlined } from "@ant-design/icons";
+import { useEffect, useMemo, useState } from "react";
+import { EditOutlined, PlusOutlined, SearchOutlined } from "@ant-design/icons";
 import {
   Button,
   Card,
@@ -19,7 +19,7 @@ import api from "../../services/api";
 
 import "./UserManagement.css";
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 
 const roles = ["SUPER_ADMIN", "ADMIN", "MANAGER", "CASHIER", "INVENTORY_STAFF"];
 
@@ -28,6 +28,8 @@ const UserManagement = () => {
   const [branches, setBranches] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [search, setSearch] = useState("");
+  const [branchFilter, setBranchFilter] = useState("ALL");
   const [editingUser, setEditingUser] = useState(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [form] = Form.useForm();
@@ -99,6 +101,15 @@ const UserManagement = () => {
     }
   };
 
+  const filteredUsers = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    return users.filter((user) => {
+      const searchable = [user.name, user.email, user.role, user.branch?.name, user.branch?.code].filter(Boolean).join(" ").toLowerCase();
+      const matchesSearch = !query || searchable.includes(query);
+      const matchesBranch = branchFilter === "ALL" || user.branch?._id === branchFilter;
+      return matchesSearch && matchesBranch;
+    });
+  }, [users, search, branchFilter]);
   const columns = [
     {
       title: "Account",
@@ -146,23 +157,31 @@ const UserManagement = () => {
   return (
     <div className="user-management-page">
       <div className="user-management-header">
-        <div>
-          <Title level={2}>User Management</Title>
-          <Text type="secondary">
-            Create accounts, assign roles, and place employees at their branch.
-          </Text>
-        </div>
+
         <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
           New user
         </Button>
       </div>
 
-      <Card>
+      <Card className="user-filter-card" title="Find accounts">
+        <div className="user-filters">
+          <Input size="large" prefix={<SearchOutlined />} placeholder="Search name, email, role, or branch..." value={search} onChange={(event) => setSearch(event.target.value)} allowClear />
+          <Select size="large" value={branchFilter} onChange={setBranchFilter} options={[
+            { value: "ALL", label: "All branches" },
+            ...branches.map((branch) => ({
+              value: branch._id,
+              label: `${branch.name} (${branch.code})`,
+            })),
+          ]} />
+        </div>
+      </Card>
+
+      <Card className="user-table-card" title="User accounts">
         <Table
           rowKey="_id"
           loading={loading}
           columns={columns}
-          dataSource={users}
+          dataSource={filteredUsers}
           pagination={{ pageSize: 10 }}
         />
       </Card>

@@ -40,3 +40,94 @@
     flex-direction: column;
   }
 }
+
+
+/* Dashboard theme */
+.user-management-page {
+  width: 100%;
+  max-width: none;
+  color: #1d1d1f;
+}
+.user-management-page .user-management-header {
+  align-items: center;
+  min-height: 44px;
+  margin-bottom: 18px;
+}
+.user-management-page .user-table-card {
+  overflow: hidden;
+  border: 1px solid #e5e5e5;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: none;
+}
+.user-management-page .user-table-card .ant-card-head {
+  min-height: 46px;
+  padding: 0 18px;
+  border-bottom: 1px solid #e5e5e5;
+  background: #f5f5f5;
+}
+.user-management-page .user-table-card .ant-card-head-title {
+  color: #262626;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.1px;
+  text-transform: uppercase;
+}
+.user-management-page .user-table-card .ant-card-body {
+  padding: 0;
+}
+.user-management-page .user-table-card .ant-table-thead > tr > th {
+  color: #555;
+  background: #fafafa;
+  border-bottom: 1px solid #e5e5e5;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+.user-management-page .user-table-card .ant-table-tbody > tr:hover > td {
+  background: #fafafa;
+}
+@media (max-width: 600px) {
+  .user-management-page .user-management-header {
+    align-items: stretch;
+  }
+  .user-management-page .user-management-header .ant-btn {
+    width: 100%;
+  }
+}
+
+
+.user-management-page .user-filter-card {
+  margin-bottom: 20px;
+  overflow: hidden;
+  border: 1px solid #e5e5e5;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: none;
+}
+.user-management-page .user-filter-card .ant-card-head {
+  min-height: 46px;
+  padding: 0 18px;
+  border-bottom: 1px solid #e5e5e5;
+  background: #f5f5f5;
+}
+.user-management-page .user-filter-card .ant-card-head-title {
+  color: #262626;
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.user-management-page .user-filter-card .ant-card-body {
+  padding: 18px;
+}
+.user-management-page .user-filters {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(220px, 1fr);
+  gap: 12px;
+}
+@media (max-width: 600px) {
+  .user-management-page .user-filters {
+    grid-template-columns: 1fr;
+  }
+}
