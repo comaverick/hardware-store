@@ -25,6 +25,7 @@ import {
   Space,
   Spin,
   Tag,
+  Table,
   Typography,
   message,
 } from "antd";
@@ -106,6 +107,11 @@ const POS = () => {
   const [selectedPrinter, setSelectedPrinter] = useState("");
   const [printerLoading, setPrinterLoading] = useState(true);
   const [printerOnline, setPrinterOnline] = useState(false);
+
+  const [salesHistory, setSalesHistory] = useState([]);
+  const [salesHistoryOpen, setSalesHistoryOpen] = useState(false);
+  const [salesHistoryLoading, setSalesHistoryLoading] = useState(false);
+  const [salesHistorySearch, setSalesHistorySearch] = useState("");
 
   // =========================
   // INITIAL DATA
@@ -593,11 +599,43 @@ const POS = () => {
     }
   }, [total, paymentMethod]);
 
+  const fetchSalesHistory = async () => {
+    try {
+      setSalesHistoryLoading(true);
+      const response = await api.get("/sales");
+      setSalesHistory(response.data || []);
+    } catch (error) {
+      console.error("Sales history error:", error);
+      message.error(error.response?.data?.message || "Failed to load transaction history.");
+    } finally {
+      setSalesHistoryLoading(false);
+    }
+  };
+
+  const openSalesHistory = async () => {
+    setSalesHistoryOpen(true);
+    await fetchSalesHistory();
+  };
+
+  const filteredSalesHistory = useMemo(() => {
+    const query = salesHistorySearch.trim().toLowerCase();
+    if (!query) return salesHistory;
+    return salesHistory.filter((sale) => {
+      const searchable = [
+        sale.receiptNumber,
+        sale.branch?.name,
+        sale.cashier?.name,
+        sale.paymentMethod,
+      ].filter(Boolean).join(" ").toLowerCase();
+      return searchable.includes(query);
+    });
+  }, [salesHistory, salesHistorySearch]);
+
   // =========================
   // PRINT RECEIPT
   // =========================
 
-  const printReceipt = async (sale) => {
+  const printReceipt = async (sale, isReprint = false) => {
     try {
       const response = await printerFetch("/print", {
         method: "POST",
@@ -654,7 +692,7 @@ const POS = () => {
 
       setPrinterOnline(false);
 
-      message.warning("Sale completed, but the receipt could not be printed.");
+      message.warning(isReprint ? "Receipt could not be printed." : "Sale completed, but the receipt could not be printed.");
 
       return false;
     }
@@ -917,7 +955,7 @@ const POS = () => {
   const reprintReceipt = async () => {
     if (!receipt) return;
 
-    await printReceipt(receipt);
+    await printReceipt(receipt, true);
   };
 
   // =========================
@@ -952,6 +990,9 @@ const POS = () => {
         </div>
 
         <div className="pos-header-controls">
+          <Button icon={<HistoryOutlined />} onClick={openSalesHistory}>
+            Transaction History
+          </Button>
           {/* BRANCH */}
 
           <div className="pos-branch">
@@ -1431,6 +1472,70 @@ const POS = () => {
           </Card>
         </Col>
       </Row>
+
+      {/* TRANSACTION HISTORY */}
+
+      <Modal
+        title="Transaction History"
+        open={salesHistoryOpen}
+        onCancel={() => setSalesHistoryOpen(false)}
+        footer={null}
+        width={900}
+      >
+        <Input
+          allowClear
+          placeholder="Search receipt number, branch, cashier, or payment method"
+          value={salesHistorySearch}
+          onChange={(event) => setSalesHistorySearch(event.target.value)}
+          style={{ marginBottom: 16 }}
+        />
+        <Table
+          rowKey="_id"
+          loading={salesHistoryLoading}
+          dataSource={filteredSalesHistory}
+          pagination={{ pageSize: 8 }}
+          scroll={{ x: 720 }}
+          columns={[
+            {
+              title: "Receipt",
+              dataIndex: "receiptNumber",
+              key: "receiptNumber",
+            },
+            {
+              title: "Date",
+              key: "createdAt",
+              render: (_, sale) => new Date(sale.createdAt).toLocaleString("en-PH"),
+            },
+            {
+              title: "Total",
+              key: "totalAmount",
+              render: (_, sale) => `\u20B1${Number(sale.totalAmount).toLocaleString("en-PH", { minimumFractionDigits: 2 })}`,
+            },
+            {
+              title: "Payment",
+              dataIndex: "paymentMethod",
+              key: "paymentMethod",
+            },
+            {
+              title: "Action",
+              key: "action",
+              render: (_, sale) => (
+                <Button
+                  icon={<PrinterOutlined />}
+                  disabled={!printerOnline}
+                  onClick={() => {
+                    setReceipt(sale);
+                    setReceiptOpen(true);
+                    printReceipt(sale, true);
+                  }}
+                >
+                  Reprint
+                </Button>
+              ),
+            },
+          ]}
+        />
+      </Modal>
 
       {/* RECEIPT */}
 

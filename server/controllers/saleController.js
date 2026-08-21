@@ -1,4 +1,4 @@
-﻿const mongoose = require("mongoose");
+const mongoose = require("mongoose");
 
 const Sale = require("../models/Sale");
 
@@ -165,7 +165,7 @@ const createSale = async (req, res) => {
 
     if (paid < totalAmount) {
       return res.status(400).json({
-        message: `Insufficient payment. Total is ₱${totalAmount.toFixed(2)}.`,
+        message: `Insufficient payment. Total is â‚±${totalAmount.toFixed(2)}.`,
       });
     }
 
@@ -294,9 +294,18 @@ const createSale = async (req, res) => {
 
 const getSales = async (req, res) => {
   try {
-    const sales = await Sale.find(
-      req.user?.role === "SUPER_ADMIN" ? {} : { branch: req.user?.branch?._id },
-    )
+    const privilegedRoles = ["SUPER_ADMIN", "ADMIN", "MANAGER"];
+    const canViewBranchHistory = privilegedRoles.includes(req.user?.role);
+    const salesFilter = canViewBranchHistory
+      ? (req.user?.role === "SUPER_ADMIN"
+        ? {}
+        : { branch: req.user?.branch?._id })
+      : {
+          cashier: req.user?._id,
+          ...(req.user?.branch?._id ? { branch: req.user.branch._id } : {}),
+        };
+
+    const sales = await Sale.find(salesFilter)
       .populate("branch", "name code")
       .populate("cashier", "name email role")
       .populate("items.product", "name sku barcode unit")
@@ -314,18 +323,22 @@ const getSales = async (req, res) => {
   }
 };
 
-// =========================
 // GET ONE SALE
 // =========================
 
 const getSaleById = async (req, res) => {
   try {
-    const sale = await Sale.findOne({
+    const privilegedRoles = ["SUPER_ADMIN", "ADMIN", "MANAGER"];
+    const canViewBranchHistory = privilegedRoles.includes(req.user?.role);
+    const saleFilter = {
       _id: req.params.id,
-      ...(req.user?.role === "SUPER_ADMIN"
-        ? {}
-        : { branch: req.user?.branch?._id }),
-    })
+      ...(canViewBranchHistory && req.user?.role !== "SUPER_ADMIN"
+        ? { branch: req.user?.branch?._id }
+        : {}),
+      ...(!canViewBranchHistory ? { cashier: req.user?._id } : {}),
+    };
+
+    const sale = await Sale.findOne(saleFilter)
       .populate("branch", "name code")
       .populate("cashier", "name email role")
       .populate("items.product", "name sku barcode unit sellingPrice");

@@ -1,4 +1,4 @@
-﻿import json
+import json
 import os
 import platform
 import subprocess
@@ -587,21 +587,25 @@ class PrintServer(
 
     def _headers(self):
 
-        self.send_header(
-            "Access-Control-Allow-Origin",
-            "*"
-        )
+        origin = self.headers.get("Origin")
+        allowed_origins = {
+            value.strip()
+            for value in os.environ.get(
+                "PRINTER_ALLOWED_ORIGINS",
+                "https://hardware-store-rho.vercel.app,http://localhost:3000"
+            ).split(",")
+            if value.strip()
+        }
 
-        self.send_header(
-            "Access-Control-Allow-Methods",
-            "GET, POST, OPTIONS"
-        )
+        if origin and origin in allowed_origins:
+            self.send_header("Access-Control-Allow-Origin", origin)
+        elif not origin:
+            self.send_header("Access-Control-Allow-Origin", "*")
 
-        self.send_header(
-            "Access-Control-Allow-Headers",
-            "Content-Type"
-        )
-
+        self.send_header("Vary", "Origin")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Private-Network", "true")
     def send_json(
         self,
         status,
