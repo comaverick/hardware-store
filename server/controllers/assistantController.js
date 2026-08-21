@@ -312,16 +312,31 @@ const askAssistant = async (req, res) => {
 
     const identificationQuestion = /what is this|identify|brought in|product identifier|unknown item|what item/i.test(question);
     const navigationToFinder = /bring me there|take me there|go there|open (the )?product finder|use (the )?product finder/i.test(question);
+    const navigationMatch = question.match(/(?:bring me to|take me to|go to|open)(?: the)? (pos|point of sale|products|inventory|product finder)/i);
+    const navigationPath = navigationMatch
+      ? ({ pos: "/pos", "point of sale": "/pos", products: "/products", inventory: "/inventory", "product finder": "/product-finder" }[navigationMatch[1].toLowerCase()] || "")
+      : "";
     const hasExactCatalogMatch = context.products.some((product) => {
       const query = question.toLowerCase();
       return [product.sku, product.barcode, product.product].filter(Boolean).some((value) => query.includes(String(value).toLowerCase()));
     });
-    const actionPath = (identificationQuestion || navigationToFinder) && !hasExactCatalogMatch
-      ? "/product-finder"
-      : (allowedPaths.has(structured.actionPath) ? structured.actionPath : "");
-    const actionLabel = (identificationQuestion || navigationToFinder) && !hasExactCatalogMatch
-      ? "Use AI Product Finder"
-      : String(structured.actionLabel || "");
+    const defaultActionPath = allowedPaths.has(structured.actionPath)
+      ? structured.actionPath
+      : "";
+    const requiresFinder =
+      (identificationQuestion || navigationToFinder) && !hasExactCatalogMatch;
+    const actionPath = navigationPath || (requiresFinder ? "/product-finder" : defaultActionPath);
+    const actionLabel = navigationPath
+      ? "Open " + (navigationPath === "/pos"
+          ? "POS"
+          : navigationPath === "/inventory"
+            ? "Inventory"
+            : navigationPath === "/products"
+              ? "Products"
+              : "Product Finder")
+      : requiresFinder
+        ? "Use AI Product Finder"
+        : String(structured.actionLabel || "");
     const answer = String(structured.answer || outputText || "").trim();
 
     if (!answer) {
