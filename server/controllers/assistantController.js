@@ -47,6 +47,13 @@ const assistantResponseSchema = {
     },
   },
 };
+const getManilaDateKey = (value) => new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Asia/Manila",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+}).format(new Date(value));
+
 const buildScope = (req) => {
   const isPrivileged = privilegedRoles.includes(req.user?.role);
   const branchFilter =
@@ -154,6 +161,19 @@ const getAssistantContext = async (req) => {
     });
   });
 
+  const todayKey = getManilaDateKey(new Date());
+  const todaySales = sales.filter((sale) => getManilaDateKey(sale.createdAt) === todayKey);
+  const salesToday = {
+    date: todayKey,
+    transactionCount: todaySales.length,
+    totalSales: todaySales.reduce((sum, sale) => sum + (sale.totalAmount || 0), 0),
+    byBranch: {},
+  };
+  todaySales.forEach((sale) => {
+    const branchName = sale.branch?.name || "Unknown branch";
+    salesToday.byBranch[branchName] = (salesToday.byBranch[branchName] || 0) + (sale.totalAmount || 0);
+  });
+
   const lowStock = stockRows
     .filter((row) => row.available <= row.reorderLevel)
     .sort((a, b) => a.available - b.available)
@@ -168,7 +188,9 @@ const getAssistantContext = async (req) => {
       role: req.user.role,
       branch: req.user.branch?.name || "No assigned branch",
     },
+    currentDateManila: todayKey,
     products: productCatalog.slice(0, 300),
+    salesToday,
     lowStock,
     salesLast30Days: salesSummary,
   };
@@ -205,6 +227,7 @@ const askAssistant = async (req, res) => {
     const systemPrompt = [
       "You are Hardware Store Bolt, a concise and practical assistant inside a hardware-store management system.",
       "Answer only from the supplied live store context. If the context does not contain the answer, say that you do not have enough data.",
+      "For questions about today, today's sales, or sales so far today, use the salesToday object and currentDateManila. Do not substitute the last 30 days summary.",
       "Never invent stock, sales, prices, branches, employees, or transactions.",
       "Use Philippine peso formatting such as PHP 1,250. Keep answers easy to scan with short paragraphs or bullets.",
       "The assistant is read-only. Never claim that you created, deleted, edited, reserved, refunded, or reordered anything.",
@@ -288,14 +311,15 @@ const askAssistant = async (req, res) => {
       .filter(Boolean);
 
     const identificationQuestion = /what is this|identify|brought in|product identifier|unknown item|what item/i.test(question);
+    const navigationToFinder = /bring me there|take me there|go there|open (the )?product finder|use (the )?product finder/i.test(question);
     const hasExactCatalogMatch = context.products.some((product) => {
       const query = question.toLowerCase();
       return [product.sku, product.barcode, product.product].filter(Boolean).some((value) => query.includes(String(value).toLowerCase()));
     });
-    const actionPath = identificationQuestion && !hasExactCatalogMatch
+    const actionPath = (identificationQuestion || navigationToFinder) && !hasExactCatalogMatch
       ? "/product-finder"
       : (allowedPaths.has(structured.actionPath) ? structured.actionPath : "");
-    const actionLabel = identificationQuestion && !hasExactCatalogMatch
+    const actionLabel = (identificationQuestion || navigationToFinder) && !hasExactCatalogMatch
       ? "Use AI Product Finder"
       : String(structured.actionLabel || "");
     const answer = String(structured.answer || outputText || "").trim();

@@ -58,6 +58,12 @@ const Assistant = () => {
       });
       setMessages((current) => [...current, { role: "assistant", content: response.data.answer, recommendations: response.data.recommendations || [], action: response.data.action || null }]);
       if ((response.data.recommendations || []).length > 0) setExpanded(true);
+      if (response.data.action?.path && /bring me there|take me there|go there|open (the )?product finder|use (the )?product finder/i.test(cleanQuestion)) {
+        window.setTimeout(() => {
+          navigate(response.data.action.path);
+          setOpen(false);
+        }, 250);
+      }
     } catch (requestError) {
       setError(requestError.response?.data?.message || "I could not connect to the assistant. Please try again.");
     } finally {
