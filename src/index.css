@@ -13,6 +13,163 @@ body {
   font-family:
     -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", sans-serif;
 
-  background: #f5f5f7;
+  background: #ffffff;
   color: #1d1d1f;
+}
+
+/* ========================================
+   SHARED BLACK-ACCENT APPLICATION THEME
+======================================== */
+
+:root {
+  --app-ink: #111111;
+  --app-muted: #737373;
+  --app-border: #e2e2e2;
+  --app-surface: #ffffff;
+  --app-header: #f6f6f6;
+}
+
+body {
+  background: var(--app-surface);
+  color: var(--app-ink);
+}
+
+.ant-card {
+  border: 1px solid var(--app-border) !important;
+  border-radius: 16px !important;
+  background: var(--app-surface) !important;
+  box-shadow: none !important;
+}
+
+.ant-card-head {
+  min-height: 56px;
+  border-bottom: 1px solid var(--app-border) !important;
+  background: var(--app-header);
+}
+
+.ant-card-head-title {
+  color: var(--app-ink);
+  font-weight: 700;
+}
+
+.ant-btn {
+  border-radius: 9px;
+  border-color: #d4d4d4;
+  color: var(--app-ink);
+  box-shadow: none;
+}
+
+.ant-btn:hover,
+.ant-btn:focus-visible {
+  border-color: var(--app-ink) !important;
+  color: var(--app-ink) !important;
+}
+
+.ant-btn-primary,
+.ant-btn-primary:hover,
+.ant-btn-primary:focus-visible {
+  border-color: var(--app-ink) !important;
+  background: var(--app-ink) !important;
+  color: #ffffff !important;
+}
+
+.ant-input,
+.ant-input-affix-wrapper,
+.ant-select-selector,
+.ant-picker,
+.ant-input-number,
+.ant-input-number-input {
+  border-color: #d8d8d8 !important;
+  border-radius: 9px !important;
+  box-shadow: none !important;
+}
+
+.ant-input:hover,
+.ant-input-affix-wrapper:hover,
+.ant-select:hover .ant-select-selector,
+.ant-picker:hover,
+.ant-input-number:hover {
+  border-color: #999999 !important;
+}
+
+.ant-input:focus,
+.ant-input-affix-wrapper-focused,
+.ant-select-focused .ant-select-selector,
+.ant-picker-focused,
+.ant-input-number-focused {
+  border-color: var(--app-ink) !important;
+  box-shadow: 0 0 0 2px rgba(17, 17, 17, 0.08) !important;
+}
+
+.ant-table {
+  border: 1px solid var(--app-border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.ant-table-thead > tr > th {
+  background: var(--app-header) !important;
+  border-bottom: 1px solid var(--app-border) !important;
+  color: #444444 !important;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ant-table-tbody > tr > td {
+  border-bottom-color: #eeeeee !important;
+}
+
+.ant-table-tbody > tr:hover > td {
+  background: #fafafa !important;
+}
+
+.ant-pagination-item-active {
+  border-color: var(--app-ink) !important;
+  background: var(--app-ink) !important;
+}
+
+.ant-pagination-item-active a {
+  color: #ffffff !important;
+}
+
+.ant-tabs-tab-btn,
+.ant-tabs-tab:hover,
+.ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: var(--app-ink) !important;
+}
+
+.ant-tabs-ink-bar {
+  background: var(--app-ink) !important;
+}
+
+.ant-modal-content,
+.ant-drawer-content {
+  border: 1px solid var(--app-border);
+  border-radius: 16px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.14);
+}
+
+.ant-modal-header,
+.ant-drawer-header {
+  border-bottom: 1px solid var(--app-border) !important;
+  background: var(--app-header);
+}
+
+.ant-tag {
+  border-radius: 6px;
+}
+
+.ant-switch-checked {
+  background: var(--app-ink) !important;
+}
+
+.ant-checkbox-checked .ant-checkbox-inner,
+.ant-radio-checked .ant-radio-inner {
+  border-color: var(--app-ink) !important;
+  background: var(--app-ink) !important;
+}
+
+.ant-checkbox-wrapper:hover .ant-checkbox-inner,
+.ant-radio-wrapper:hover .ant-radio-inner {
+  border-color: var(--app-ink) !important;
 }

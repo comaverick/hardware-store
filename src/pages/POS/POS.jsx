@@ -19,7 +19,7 @@ import {
   Input,
   InputNumber,
   Modal,
-  Radio,
+  
   Row,
   Select,
   Space,
@@ -46,6 +46,7 @@ const printerFetch = (path, options = {}) =>
 
 const POS = () => {
   const searchRef = useRef(null);
+  const cartItemsRef = useRef(null);
 
   // =========================
   // DATA
@@ -84,12 +85,23 @@ const POS = () => {
 
   const [cart, setCart] = useState([]);
 
+  useEffect(() => {
+    if (!selectedCartProductId) return;
+
+    const itemElement = cartItemsRef.current?.querySelector(
+      `[data-cart-product-id="${selectedCartProductId}"]`,
+    );
+
+    itemElement?.scrollIntoView({
+      behavior: "smooth",
+      block: "nearest",
+    });
+  }, [cart, selectedCartProductId]);
+
   // =========================
   // PAYMENT
   // =========================
-
-  const [discount, setDiscount] = useState(0);
-  const [paymentMethod, setPaymentMethod] = useState("CASH");
+  const paymentMethod = "CASH";
   const [amountPaid, setAmountPaid] = useState(0);
 
   // =========================
@@ -332,7 +344,6 @@ const POS = () => {
     }
 
     setCart([]);
-    setDiscount(0);
     setAmountPaid(0);
   }, [selectedBranch]);
 
@@ -571,9 +582,7 @@ const POS = () => {
     return cart.reduce((total, item) => total + item.subtotal, 0);
   }, [cart]);
 
-  const discountAmount = Math.min(Math.max(Number(discount) || 0, 0), subtotal);
-
-  const total = Math.max(subtotal - discountAmount, 0);
+  const total = subtotal;
 
   const change = Math.max((Number(amountPaid) || 0) - total, 0);
 
@@ -582,22 +591,6 @@ const POS = () => {
   // =========================
   // PAYMENT
   // =========================
-
-  const handlePaymentMethodChange = (value) => {
-    setPaymentMethod(value);
-
-    if (value !== "CASH") {
-      setAmountPaid(total);
-    } else {
-      setAmountPaid(0);
-    }
-  };
-
-  useEffect(() => {
-    if (paymentMethod !== "CASH") {
-      setAmountPaid(total);
-    }
-  }, [total, paymentMethod]);
 
   const fetchSalesHistory = async () => {
     try {
@@ -729,7 +722,7 @@ const POS = () => {
           quantity: item.quantity,
         })),
 
-        discount: discountAmount,
+        discount: 0,
 
         paymentMethod,
 
@@ -766,10 +759,7 @@ const POS = () => {
       // =========================
 
       setCart([]);
-      setDiscount(0);
-      setAmountPaid(0);
-      setPaymentMethod("CASH");
-
+        setAmountPaid(0);
       // =========================
       // PRINT
       // =========================
@@ -810,30 +800,9 @@ const POS = () => {
 
       onOk: () => {
         setCart([]);
-        setDiscount(0);
-        setAmountPaid(0);
+            setAmountPaid(0);
       },
     });
-  };
-
-  const handleDiscountChange = (value) => {
-    const nextDiscount = Number(value) || 0;
-
-    if (
-      subtotal > 0 &&
-      nextDiscount > subtotal * 0.1 &&
-      nextDiscount > discount
-    ) {
-      Modal.confirm({
-        title: "Confirm discount",
-        content: `This discount is over 10% of the sale (\u20B1${subtotal.toLocaleString("en-PH", { minimumFractionDigits: 2 })}).`,
-        okText: "Apply discount",
-        onOk: () => setDiscount(nextDiscount),
-      });
-      return;
-    }
-
-    setDiscount(nextDiscount);
   };
 
   const startNewSale = () => {
@@ -862,9 +831,7 @@ const POS = () => {
 
       if (isTyping(event.target)) return;
 
-      if (event.key === "F4") handlePaymentMethodChange("CASH");
-      if (event.key === "F5") handlePaymentMethodChange("GCASH");
-      if (event.key === "F6") handlePaymentMethodChange("CARD");
+      if (event.key === "F4") setAmountPaid(total);
       if (event.key === "F9" && cart.length > 0 && !processing) completeSale();
 
       if (selectedCartProductId && event.key === "+") {
@@ -983,14 +950,9 @@ const POS = () => {
       ========================= */}
 
       <div className="pos-header">
-        <div className="pos-title">
-          <Title level={2}>Point of Sale</Title>
-
-          <Text type="secondary">Hardware Store Sales</Text>
-        </div>
-
         <div className="pos-header-controls">
-          <Button icon={<HistoryOutlined />} onClick={openSalesHistory}>
+          <div className="pos-header-left">
+            <Button icon={<HistoryOutlined />} onClick={openSalesHistory}>
             Transaction History
           </Button>
           {/* BRANCH */}
@@ -1012,6 +974,8 @@ const POS = () => {
                 label: `${branch.code} - ${branch.name}`,
               }))}
             />
+          </div>
+
           </div>
 
           {/* PRINTER */}
@@ -1120,16 +1084,28 @@ const POS = () => {
             />
 
             <div className="pos-product-tools">
-              <Select
-                value={selectedCategory}
-                onChange={setSelectedCategory}
-                options={categories.map((category) => ({
-                  value: category,
-                  label: category,
-                }))}
-                aria-label="Filter products by category"
+              <div
                 className="category-filter"
-              />
+                role="group"
+                aria-label="Filter products by category"
+              >
+                {categories.map((category) => (
+                  <Button
+                    key={category}
+                    size="small"
+                    type={selectedCategory === category ? "primary" : "default"}
+                    className={
+                      selectedCategory === category
+                        ? "category-button active"
+                        : "category-button"
+                    }
+                    onClick={() => setSelectedCategory(category)}
+                    aria-pressed={selectedCategory === category}
+                  >
+                    {category}
+                  </Button>
+                ))}
+              </div>
               {recentProductIds.length > 0 && (
                 <div
                   className="recent-products"
@@ -1267,12 +1243,13 @@ const POS = () => {
                 className="cart-empty"
               />
             ) : (
-              <div className="cart-items">
+              <div ref={cartItemsRef} className="cart-items">
                 {cart.map((item) => (
                   <div
                     className="cart-item"
                     onClick={() => setSelectedCartProductId(item.product)}
                     data-selected={selectedCartProductId === item.product}
+                    data-cart-product-id={item.product}
                     key={item.product}
                   >
                     <div className="cart-item-main">
@@ -1344,26 +1321,7 @@ const POS = () => {
                     minimumFractionDigits: 2,
                   })}
                 </strong>
-              </div>
-
-              <div className="summary-row">
-                <Text>Discount</Text>
-
-                <InputNumber
-                  min={0}
-                  max={subtotal}
-                  precision={2}
-                  prefix={"\u20B1"}
-                  value={discount}
-                  onChange={(value) => handleDiscountChange(value)}
-                  size="small"
-                  style={{
-                    width: 140,
-                  }}
-                />
-              </div>
-
-              <div className="summary-total">
+              </div><div className="summary-total">
                 <span>TOTAL</span>
 
                 <strong>
@@ -1378,21 +1336,6 @@ const POS = () => {
             {/* PAYMENT */}
 
             <div className="payment-section">
-              <Text strong>Payment Method</Text>
-
-              <Radio.Group
-                value={paymentMethod}
-                onChange={(event) =>
-                  handlePaymentMethodChange(event.target.value)
-                }
-                className="payment-methods"
-              >
-                <Radio.Button value="CASH">Cash</Radio.Button>
-
-                <Radio.Button value="GCASH">GCash</Radio.Button>
-
-                <Radio.Button value="CARD">Card</Radio.Button>
-              </Radio.Group>
 
               <div className="amount-row">
                 <div>
@@ -1405,7 +1348,6 @@ const POS = () => {
                     prefix={"\u20B1"}
                     value={amountPaid}
                     onChange={(value) => setAmountPaid(value || 0)}
-                    disabled={paymentMethod !== "CASH"}
                     style={{
                       width: "100%",
                     }}
@@ -1455,13 +1397,13 @@ const POS = () => {
               disabled={
                 cart.length === 0 ||
                 !selectedBranch ||
-                (paymentMethod === "CASH" && amountPaid < total)
+                amountPaid < total
               }
               onClick={completeSale}
             >
               {cart.length === 0
                 ? "ADD ITEMS TO START"
-                : paymentMethod === "CASH" && amountPaid < total
+                : amountPaid < total
                   ? "ENTER SUFFICIENT CASH"
                   : `PAY \u20B1${total.toLocaleString("en-PH", { minimumFractionDigits: 2 })}`}
             </Button>
@@ -1648,20 +1590,7 @@ const POS = () => {
                   minimumFractionDigits: 2,
                 })}
               </span>
-            </div>
-
-            <div className="receipt-total-row">
-              <span>Discount</span>
-
-              <span>
-                &#8369;
-                {Number(receipt.discount).toLocaleString("en-PH", {
-                  minimumFractionDigits: 2,
-                })}
-              </span>
-            </div>
-
-            <div className="receipt-grand-total">
+            </div><div className="receipt-grand-total">
               <span>TOTAL</span>
 
               <strong>

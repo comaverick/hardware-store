@@ -157,7 +157,34 @@
 }
 
 .category-filter {
-  min-width: 150px;
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  flex-wrap: wrap;
+}
+
+.category-button {
+  flex: 0 0 auto;
+  border-radius: 6px;
+  color: #262626;
+  border-color: #d9d9d9;
+  background: #fff;
+}
+
+.category-button:hover,
+.category-button:focus-visible {
+  color: #000;
+  border-color: #000;
+}
+
+.category-button.active,
+.category-button.active:hover,
+.category-button.active:focus-visible {
+  color: #fff;
+  border-color: #000;
+  background: #000;
 }
 
 .recent-products {
@@ -796,5 +823,128 @@
 
   .cart-item-subtotal {
     grid-column: 1;
+  }
+}
+
+/* Dashboard-matched POS theme */
+.pos-page {
+  width: 100%;
+  max-width: none;
+  color: #111111;
+}
+
+.pos-header {
+  align-items: center;
+  margin-bottom: 20px;
+  padding: 16px 18px;
+  border: 1px solid #dedede;
+  border-radius: 16px;
+  background: #f6f6f6;
+}
+
+.pos-title {
+  display: none;
+}
+
+.pos-header-controls {
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.pos-branch,
+.pos-printer {
+  align-items: center;
+}
+
+.pos-products-card,
+.pos-cart-card {
+  border: 1px solid #dedede !important;
+  border-radius: 16px !important;
+  box-shadow: none !important;
+  background: #ffffff !important;
+}
+
+.pos-card-title {
+  color: #111111;
+}
+
+.pos-product-card {
+  border: 1px solid #e2e2e2;
+  box-shadow: none;
+  background: #ffffff;
+}
+
+.pos-product-card:hover {
+  border-color: #111111;
+  box-shadow: none;
+}
+
+.pos-product-card:focus-visible {
+  outline-color: #111111;
+}
+
+.printer-status {
+  border-color: #d8d8d8;
+  background: #ffffff;
+}
+
+@media (max-width: 900px) {
+  .pos-header-controls {
+    justify-content: flex-start;
+  }
+}
+.pos-header-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+@media (max-width: 900px) {
+  .pos-header-controls {
+    justify-content: space-between;
+  }
+
+  .pos-header-left {
+    flex-wrap: wrap;
+  }
+}
+/* Keep checkout controls visible while the cart list scrolls */
+.pos-cart-card {
+  height: calc(100vh - 150px);
+  min-height: 620px;
+}
+
+.pos-cart-card .ant-card-body {
+  height: calc(100% - 56px);
+  box-sizing: border-box;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.pos-cart-card .cart-items {
+  flex: 1 1 auto;
+  min-height: 80px;
+  max-height: none;
+}
+
+.pos-cart-card .pos-summary,
+.pos-cart-card .payment-section,
+.pos-cart-card .complete-sale-button,
+.pos-cart-card .checkout-help {
+  flex-shrink: 0;
+}
+
+@media (max-width: 991px) {
+  .pos-cart-card {
+    height: auto;
+    min-height: 0;
+  }
+
+  .pos-cart-card .cart-items {
+    max-height: 360px;
   }
 }
