@@ -35,7 +35,13 @@ import "./POS.css";
 
 const { Title, Text } = Typography;
 
-const PRINTER_SERVER = (process.env.REACT_APP_PRINTER_SERVER_URL || "http://127.0.0.1:5100").replace(/\/+$/, "");
+const PRINTER_SERVER = (process.env.REACT_APP_PRINTER_SERVER_URL || "http://localhost:5100").replace(/\/+$/, "");
+
+const printerFetch = (path, options = {}) =>
+  fetch(`${PRINTER_SERVER}${path}`, {
+    ...options,
+    targetAddressSpace: "local",
+  });
 
 const POS = () => {
   const searchRef = useRef(null);
@@ -148,7 +154,7 @@ const POS = () => {
     try {
       setPrinterLoading(true);
 
-      const response = await fetch(`${PRINTER_SERVER}/printers`);
+      const response = await printerFetch("/printers");
 
       if (!response.ok) {
         throw new Error("Printer service unavailable.");
@@ -182,7 +188,7 @@ const POS = () => {
 
   const checkPrinterStatus = async () => {
     try {
-      const response = await fetch(`${PRINTER_SERVER}/status`);
+      const response = await printerFetch("/status");
 
       if (!response.ok) {
         throw new Error("Printer offline.");
@@ -212,7 +218,7 @@ const POS = () => {
 
     const checkStatus = async () => {
       try {
-        const response = await fetch(`${PRINTER_SERVER}/status`, {
+        const response = await printerFetch("/status", {
           cache: "no-store",
         });
 
@@ -254,7 +260,7 @@ const POS = () => {
 
   const handlePrinterChange = async (printer) => {
     try {
-      const response = await fetch(`${PRINTER_SERVER}/printer/select`, {
+      const response = await printerFetch("/printer/select", {
         method: "POST",
 
         headers: {
@@ -593,7 +599,7 @@ const POS = () => {
 
   const printReceipt = async (sale) => {
     try {
-      const response = await fetch(`${PRINTER_SERVER}/print`, {
+      const response = await printerFetch("/print", {
         method: "POST",
 
         headers: {
@@ -849,7 +855,7 @@ const POS = () => {
 
   const testPrint = async () => {
     try {
-      const response = await fetch(`${PRINTER_SERVER}/print`, {
+      const response = await printerFetch("/print", {
         method: "POST",
 
         headers: {

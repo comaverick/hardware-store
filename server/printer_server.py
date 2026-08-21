@@ -1,4 +1,4 @@
-import json
+﻿import json
 import os
 import platform
 import subprocess
@@ -27,8 +27,6 @@ selected_printer = None
 # =========================
 
 def get_default_printer():
-    if win32print is None:
-        return None
     return win32print.GetDefaultPrinter()
 
 
@@ -633,13 +631,7 @@ class PrintServer(
 
     def do_GET(self):
 
-        if self.path == "/" or self.path == "/health":
-            self.send_json(200, {
-                "ok": True,
-                "service": "hardware-store-printer",
-                "printerSupport": "windows-usb" if win32print else "unavailable-on-host",
-            })
-            return
+        # =========================
         # PRINTERS
         # =========================
 
@@ -1035,3 +1027,4 @@ print(
 print("--------------------------------")
 
 server.serve_forever()
+
