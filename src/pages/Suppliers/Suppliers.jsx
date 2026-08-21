@@ -30,7 +30,7 @@ import api from "../../services/api";
 
 import "./Suppliers.css";
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 
 const Suppliers = () => {
   const [suppliers, setSuppliers] = useState([]);
@@ -240,7 +240,7 @@ const Suppliers = () => {
       title: "Contact Person",
       dataIndex: "contactPerson",
 
-      render: (value) => value || "—",
+      render: (value) => value || "â€”",
     },
 
     {
@@ -309,11 +309,7 @@ const Suppliers = () => {
       {/* HEADER */}
 
       <div className="suppliers-header">
-        <div>
-          <Title level={2}>Suppliers</Title>
 
-          <Text type="secondary">Manage suppliers and purchasing partners</Text>
-        </div>
 
         <Button
           type="primary"
@@ -349,8 +345,8 @@ const Suppliers = () => {
 
       {/* FILTERS */}
 
-      <Card className="supplier-filter-card">
-        <Row gutter={[12, 12]}>
+      <Card className="supplier-filter-card" title="Filter suppliers">
+        <Row gutter={[12, 12]} align="middle">
           <Col xs={24} md={17}>
             <Input
               size="large"
@@ -383,7 +379,7 @@ const Suppliers = () => {
 
       {/* TABLE */}
 
-      <Card className="supplier-table-card">
+      <Card className="supplier-table-card" title="Supplier directory">
         <Table
           columns={columns}
           dataSource={filteredSuppliers}
