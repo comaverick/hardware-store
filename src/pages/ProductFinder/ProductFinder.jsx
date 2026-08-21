@@ -53,15 +53,24 @@ const ProductFinder = () => {
 
   useEffect(() => {
     const video = videoRef.current;
-    if (!cameraOpen || !video || !streamRef.current) return;
+    if (!cameraOpen || !video || !streamRef.current) return undefined;
+
     video.srcObject = streamRef.current;
-    video
-      .play()
-      .catch(() =>
-        message.error(
-          "The camera preview could not start. Try opening it again.",
-        ),
-      );
+    const startPreview = () => {
+      video.play().catch(() => {
+        message.error("The camera preview could not start. Try opening it again.");
+      });
+    };
+
+    if (video.readyState >= 1) {
+      startPreview();
+    } else {
+      video.onloadedmetadata = startPreview;
+    }
+
+    return () => {
+      video.onloadedmetadata = null;
+    };
   }, [cameraOpen]);
 
   const openCamera = async () => {
@@ -184,7 +193,7 @@ const ProductFinder = () => {
       return (
         <Card className="finder-loading">
           <Spin size="large" />
-          <strong>Analysing this viewâ€¦</strong>
+          <strong>Analyzing this view...</strong>
           <Text type="secondary">
             We will give you a camera instruction if another scan is needed.
           </Text>
@@ -230,7 +239,7 @@ const ProductFinder = () => {
               image={Empty.PRESENTED_IMAGE_SIMPLE}
               description={
                 recognisedName
-                  ? `${recognisedName} â€” not in our catalogue`
+                  ? `${recognisedName} - not in our catalogue`
                   : "Item not clear enough yet"
               }
             />
@@ -257,8 +266,8 @@ const ProductFinder = () => {
                   <div>
                     <Title level={4}>{match.product.name}</Title>
                     <Text type="secondary">
-                      {match.product.brand || "Hardware"} Â· {match.product.sku}{" "}
-                      Â· â‚±
+                      {match.product.brand || "Hardware"} - {match.product.sku}{" "}
+                      - &#8369;
                       {Number(match.product.sellingPrice).toLocaleString(
                         "en-PH",
                         { minimumFractionDigits: 2 },
@@ -284,7 +293,7 @@ const ProductFinder = () => {
                         <div>
                           <strong>{item.branch.name}</strong>
                           <span>
-                            {item.branch.code} Â·{" "}
+                            {item.branch.code} -{" "}
                             {item.available > 0
                               ? `${item.available} ${match.product.unit} available`
                               : "Out of stock"}
@@ -332,6 +341,7 @@ const ProductFinder = () => {
             {cameraOpen ? (
               <video
                 ref={videoRef}
+                muted
                 autoPlay
                 playsInline
                 className="finder-video"
@@ -434,7 +444,7 @@ const ProductFinder = () => {
             <div className="finder-reserve-summary">
               <strong>{reserveTarget.product.name}</strong>
               <span>
-                {reserveTarget.branch.name} Â· {reserveTarget.available}{" "}
+                {reserveTarget.branch.name} - {reserveTarget.available}{" "}
                 available
               </span>
             </div>
