@@ -1,14 +1,39 @@
-import { useEffect, useState } from "react";
-import { Card, Empty, Spin, Table, Tag, Typography, message } from "antd";
+import { useEffect, useMemo, useState } from "react";
+
+import { Card, Col, Empty, Input, Row, Select, Spin, Table, Tag, Typography, message } from "antd";
 import api from "../../services/api";
 
 import "./AuditLogs.css";
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
+
+const formatAction = (value = "") => {
+  const [method, ...pathParts] = value.split(" ");
+  const path = pathParts.join(" ").replace(/^\/api\//, "").replaceAll("/", " > ").replaceAll("-", " ");
+  const resource = path || "system";
+  const verbs = {
+    GET: "Viewed",
+    POST: "Created",
+    PUT: "Updated",
+    PATCH: "Updated",
+    DELETE: "Deleted",
+  };
+  return `${verbs[method] || method || "Performed action"} ${resource}`;
+};
+
+const localDateKey = (value) => {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+};
 
 const AuditLogs = () => {
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [actionFilter, setActionFilter] = useState("ALL");
+  const [accountFilter, setAccountFilter] = useState("ALL");
+  const [dateFilter, setDateFilter] = useState("");
 
   useEffect(() => {
     api
@@ -22,11 +47,47 @@ const AuditLogs = () => {
       .finally(() => setLoading(false));
   }, []);
 
+  const actionOptions = useMemo(
+    () => Array.from(new Set(logs.map((log) => log.action).filter(Boolean))),
+    [logs],
+  );
+
+  const accountOptions = useMemo(
+    () =>
+      Array.from(
+        new Map(
+          logs
+            .filter((log) => log.actor?._id)
+            .map((log) => [log.actor._id, log.actor]),
+        ).values(),
+      ),
+    [logs],
+  );
+
+  const filteredLogs = useMemo(
+    () =>
+      logs.filter((log) => {
+        const query = search.trim().toLowerCase();
+        const searchable = [log.action, log.actor?.name, log.actor?.email, log.branch?.code, log.branch?.name, log.statusCode].filter(Boolean).join(" ").toLowerCase();
+        const matchesSearch = !query || searchable.includes(query);
+        const matchesAction = actionFilter === "ALL" || log.action === actionFilter;
+        const matchesAccount = accountFilter === "ALL" || log.actor?._id === accountFilter;
+        const matchesDate = !dateFilter || localDateKey(log.createdAt) === dateFilter;
+        return matchesSearch && matchesAction && matchesAccount && matchesDate;
+      }),
+    [logs, search, actionFilter, accountFilter, dateFilter],
+  );
+
   const columns = [
     {
       title: "Time",
       dataIndex: "createdAt",
-      render: (value) => new Date(value).toLocaleString(),
+      render: (value) => (
+        <div className="audit-time">
+          <strong>{new Date(value).toLocaleDateString()}</strong>
+          <Text type="secondary">{new Date(value).toLocaleTimeString()}</Text>
+        </div>
+      ),
     },
     {
       title: "Account",
@@ -34,54 +95,117 @@ const AuditLogs = () => {
       render: (actor) => (
         <div className="audit-actor">
           <strong>{actor?.name || "Unknown account"}</strong>
-          <Text type="secondary">{actor?.email}</Text>
+          <Text type="secondary">{actor?.email || "No email"}</Text>
         </div>
       ),
     },
     {
       title: "Action",
       dataIndex: "action",
-      render: (value) => <Text code>{value}</Text>,
+      render: (value) => (
+        <div className="audit-action">
+          <strong>{formatAction(value)}</strong>
+          <Text type="secondary">{value}</Text>
+        </div>
+      ),
     },
     {
       title: "Branch",
       dataIndex: "branch",
-      render: (branch) => branch?.code || branch?.name || "—",
+      render: (branch) => branch?.code || branch?.name || "N/A",
     },
     {
       title: "Result",
       dataIndex: "statusCode",
-      render: (value) => (
-        <Tag color={value < 400 ? "green" : "red"}>{value}</Tag>
-      ),
+      render: (value) => {
+        const success = Number(value) < 400;
+        return (
+          <div className="audit-result">
+            <Tag color={success ? "green" : "red"}>
+              {success ? "Success" : "Failed"}
+            </Tag>
+            <Text type="secondary">HTTP {value}</Text>
+          </div>
+        );
+      },
     },
   ];
 
   return (
     <div className="audit-page">
       <div className="audit-header">
-        <div>
-          <Title level={2}>Audit Logs</Title>
-          <Text type="secondary">
-            Review account actions and branch activity.
-          </Text>
-        </div>
-        <Tag color="blue">Account activity</Tag>
+        <Tag className="audit-count-tag">{logs.length} activity records</Tag>
       </div>
-      <Card>
+
+      <Card className="audit-filter-card" title="Filter account activity">
+        <Row gutter={[12, 12]} align="middle">
+          <Col xs={24} md={6}>
+            <Input
+              size="large"
+              placeholder="Search activity, account, or branch"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              allowClear
+            />
+          </Col>
+          <Col xs={24} md={6}>
+            <Select
+              size="large"
+              value={actionFilter}
+              onChange={setActionFilter}
+              style={{ width: "100%" }}
+              placeholder="Filter by action"
+              options={[
+                { value: "ALL", label: "All actions" },
+                ...actionOptions.map((action) => ({
+                  value: action,
+                  label: formatAction(action),
+                })),
+              ]}
+            />
+          </Col>
+          <Col xs={24} md={6}>
+            <Select
+              size="large"
+              value={accountFilter}
+              onChange={setAccountFilter}
+              style={{ width: "100%" }}
+              placeholder="Filter by account"
+              options={[
+                { value: "ALL", label: "All accounts" },
+                ...accountOptions.map((account) => ({
+                  value: account._id,
+                  label: `${account.name} (${account.role || "User"})`,
+                })),
+              ]}
+            />
+          </Col>
+          <Col xs={24} md={6}>
+            <Input
+              size="large"
+              type="date"
+              value={dateFilter}
+              onChange={(event) => setDateFilter(event.target.value)}
+              aria-label="Filter by date"
+              suffix={dateFilter ? <button type="button" className="audit-clear-date" onClick={() => setDateFilter("")}>Clear</button> : null}
+            />
+          </Col>
+        </Row>
+      </Card>
+
+      <Card className="audit-table-card" title="Account activity log">
         {loading ? (
-          <div className="audit-loading">
-            <Spin />
-          </div>
-        ) : logs.length ? (
+          <div className="audit-loading"><Spin /></div>
+        ) : filteredLogs.length ? (
           <Table
             rowKey="_id"
             columns={columns}
-            dataSource={logs}
-            pagination={{ pageSize: 20 }}
+            dataSource={filteredLogs}
+            scroll={{ x: 900 }}
+            pagination={{ pageSize: 20, showTotal: (total) => `${total} records` }}
           />
         ) : (
-          <Empty description="No account actions have been logged yet." />
+          <Empty description="No account actions match these filters." />
         )}
       </Card>
     </div>
