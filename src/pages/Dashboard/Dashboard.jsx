@@ -29,6 +29,7 @@ import {
 } from "recharts";
 
 import api from "../../services/api";
+import { useAuth } from "../../context/AuthContext";
 
 import "./Dashboard.css";
 
@@ -56,6 +57,9 @@ const getSaleDate = (sale) => {
 };
 
 const Dashboard = () => {
+  const { user } = useAuth();
+  const currentHour = new Date().getHours();
+  const greeting = currentHour < 12 ? "Good morning" : currentHour < 18 ? "Good afternoon" : "Good evening";
   const [inventory, setInventory] = useState([]);
   const [sales, setSales] = useState([]);
   const [smartData, setSmartData] = useState(null);
@@ -212,18 +216,41 @@ const Dashboard = () => {
   const salesPeriodData = useMemo(() => {
     const now = new Date();
 
+    if (salesPeriod === "TODAY") {
+      const startDate = new Date(now);
+      startDate.setHours(0, 0, 0, 0);
+
+      return Array.from({ length: 24 }, (_, hour) => {
+        const bucketStart = new Date(startDate);
+        bucketStart.setHours(hour, 0, 0, 0);
+        const bucketEnd = new Date(bucketStart);
+        bucketEnd.setHours(hour + 1, 0, 0, 0);
+
+        const hourSales = filteredSales.filter((sale) => {
+          if (!isCompletedSale(sale)) return false;
+          const saleDate = getSaleDate(sale);
+          return saleDate && saleDate >= bucketStart && saleDate < bucketEnd;
+        });
+
+        return {
+          date: bucketStart.toISOString(),
+          label: bucketStart.toLocaleTimeString("en-US", {
+            hour: "numeric",
+          }),
+          sales: hourSales.reduce(
+            (total, sale) => total + Number(sale.totalAmount || 0),
+            0,
+          ),
+          transactions: hourSales.length,
+        };
+      });
+    }
+
     let startDate;
     let numberOfDays;
 
-    if (salesPeriod === "TODAY") {
-      startDate = new Date(now);
-
-      startDate.setHours(0, 0, 0, 0);
-
-      numberOfDays = 1;
-    } else if (salesPeriod === "MONTH") {
+    if (salesPeriod === "MONTH") {
       startDate = new Date(now.getFullYear(), now.getMonth(), 1);
-
       numberOfDays = new Date(
         now.getFullYear(),
         now.getMonth() + 1,
@@ -231,55 +258,34 @@ const Dashboard = () => {
       ).getDate();
     } else {
       startDate = new Date(now);
-
       startDate.setDate(now.getDate() - 6);
-
       startDate.setHours(0, 0, 0, 0);
-
       numberOfDays = 7;
     }
 
-    const data = [];
-
-    for (let i = 0; i < numberOfDays; i++) {
+    return Array.from({ length: numberOfDays }, (_, i) => {
       const date = new Date(startDate);
-
       date.setDate(startDate.getDate() + i);
-
       const dateKey = localDateKey(date);
 
       const daySales = filteredSales.filter((sale) => {
-        if (!isCompletedSale(sale)) {
-          return false;
-        }
-
+        if (!isCompletedSale(sale)) return false;
         const saleDate = getSaleDate(sale);
-
         return saleDate && localDateKey(saleDate) === dateKey;
       });
 
-      const amount = daySales.reduce(
-        (total, sale) => total + Number(sale.totalAmount || 0),
-        0,
-      );
-
-      data.push({
+      return {
         date: dateKey,
-
-        label:
-          salesPeriod === "MONTH"
-            ? date.getDate()
-            : date.toLocaleDateString("en-US", {
-                weekday: "short",
-              }),
-
-        sales: amount,
-
+        label: salesPeriod === "MONTH"
+          ? date.getDate()
+          : date.toLocaleDateString("en-US", { weekday: "short" }),
+        sales: daySales.reduce(
+          (total, sale) => total + Number(sale.totalAmount || 0),
+          0,
+        ),
         transactions: daySales.length,
-      });
-    }
-
-    return data;
+      };
+    });
   }, [filteredSales, salesPeriod]);
 
   const periodSalesTotal = salesPeriodData.reduce(
@@ -500,7 +506,7 @@ const Dashboard = () => {
       <section className="dashboard-header">
         <div className="dashboard-heading">
 
-          <Title level={1}>Dashboard</Title>
+          <Title level={1}>{greeting}, {user?.name || "there"}</Title>
 
           <Text className="dashboard-subtitle">
             Here's what's happening across your store today.
@@ -602,11 +608,11 @@ const Dashboard = () => {
               <div className="kpi-top">
                 <span className="kpi-label">Today's Sales</span>
 
-                <span className="kpi-icon sales">₱</span>
+                <span className="kpi-icon sales">&#8369;</span>
               </div>
 
               <div className="kpi-value">
-                ₱
+                &#8369;
                 {todaySalesAmount.toLocaleString(undefined, {
                   minimumFractionDigits: 2,
                 })}
@@ -746,7 +752,7 @@ const Dashboard = () => {
               <span>SALES</span>
 
               <strong>
-                ₱
+                &#8369;
                 {periodSalesTotal.toLocaleString(undefined, {
                   minimumFractionDigits: 2,
                 })}
@@ -779,9 +785,9 @@ const Dashboard = () => {
                     x2="0"
                     y2="1"
                   >
-                    <stop offset="0%" stopColor="#007aff" stopOpacity={0.2} />
+                    <stop offset="0%" stopColor="#111111" stopOpacity={0.2} />
 
-                    <stop offset="100%" stopColor="#007aff" stopOpacity={0} />
+                    <stop offset="100%" stopColor="#111111" stopOpacity={0} />
                   </linearGradient>
                 </defs>
 
@@ -807,8 +813,8 @@ const Dashboard = () => {
                   }}
                   tickFormatter={(value) =>
                     value >= 1000
-                      ? `₱${(value / 1000).toFixed(0)}k`
-                      : `₱${value}`
+                      ? `\u20B1${(value / 1000).toFixed(0)}k`
+                      : `\u20B1${value}`
                   }
                   width={45}
                 />
@@ -824,7 +830,7 @@ const Dashboard = () => {
                   }}
                   formatter={(value, name) => [
                     name === "sales"
-                      ? `₱${Number(value).toLocaleString(undefined, {
+                      ? `\u20B1${Number(value).toLocaleString(undefined, {
                           minimumFractionDigits: 2,
                         })}`
                       : value,
@@ -835,7 +841,7 @@ const Dashboard = () => {
                 <Area
                   type="monotone"
                   dataKey="sales"
-                  stroke="#007aff"
+                  stroke="#111111"
                   strokeWidth={2.5}
                   fill="url(#salesGradient)"
                   dot={false}
@@ -992,7 +998,7 @@ const Dashboard = () => {
                   <div className="sale-branch">{sale.branch?.code}</div>
 
                   <strong className="sale-amount">
-                    ₱
+                    &#8369;
                     {Number(sale.totalAmount || 0).toLocaleString(undefined, {
                       minimumFractionDigits: 2,
                     })}
@@ -1028,7 +1034,7 @@ const Dashboard = () => {
                     <strong>{branch.name}</strong>
 
                     <span>
-                      {branch.code} · {branch.stock.toLocaleString()} units
+                      {branch.code} &middot; {branch.stock.toLocaleString()} units
                     </span>
                   </div>
 
