@@ -203,3 +203,103 @@
   color: #8e8e93;
   font-size: 18px;
 }
+
+/* Dashboard theme */
+.inventory-page {
+  width: 100%;
+  max-width: none;
+  color: #1d1d1f;
+}
+
+.inventory-page .inventory-header {
+  align-items: center;
+  min-height: 44px;
+  margin-bottom: 18px;
+}
+
+.inventory-page .inventory-header .ant-space {
+  justify-content: flex-end;
+}
+
+.inventory-page .inventory-stat-card,
+.inventory-page .inventory-filter-card,
+.inventory-page .inventory-table-card {
+  overflow: hidden;
+  border: 1px solid #e5e5e5;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: none;
+}
+
+.inventory-page .inventory-stat-card {
+  min-height: 112px;
+}
+
+.inventory-page .inventory-stat-card .ant-card-body {
+  padding: 18px;
+}
+
+.inventory-page .inventory-filter-card,
+.inventory-page .inventory-table-card {
+  margin-bottom: 20px;
+}
+
+.inventory-page .ant-card-head {
+  min-height: 46px;
+  padding: 0 18px;
+  border-bottom: 1px solid #e5e5e5;
+  background: #f5f5f5;
+}
+
+.inventory-page .ant-card-head-title {
+  color: #262626;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.1px;
+  text-transform: uppercase;
+}
+
+.inventory-page .inventory-filter-card .ant-card-body {
+  padding: 18px;
+}
+
+.inventory-page .inventory-table-card .ant-card-body {
+  padding: 0;
+}
+
+.inventory-page .ant-table-thead > tr > th {
+  color: #555;
+  background: #fafafa;
+  border-bottom: 1px solid #e5e5e5;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+
+.inventory-page .ant-table-tbody > tr:hover > td {
+  background: #fafafa;
+}
+
+.inventory-page .inventory-product-icon {
+  background: #f5f5f5;
+  color: #262626;
+}
+
+.inventory-page .inventory-warning {
+  border-color: #e5e5e5;
+}
+
+@media (max-width: 768px) {
+  .inventory-page .inventory-header {
+    align-items: stretch;
+  }
+
+  .inventory-page .inventory-header .ant-space {
+    justify-content: flex-start;
+  }
+
+  .inventory-page .inventory-filter-card .ant-card-body {
+    padding: 14px;
+  }
+}

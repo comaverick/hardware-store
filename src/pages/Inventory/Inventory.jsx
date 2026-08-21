@@ -422,7 +422,7 @@ const Inventory = () => {
       dataIndex: "reason",
       key: "reason",
 
-      render: (value) => value || "—",
+      render: (value) => value || "Ã¢â‚¬â€",
     },
 
     {
@@ -430,7 +430,7 @@ const Inventory = () => {
       dataIndex: "reference",
       key: "reference",
 
-      render: (value) => value || "—",
+      render: (value) => value || "Ã¢â‚¬â€",
     },
   ];
 
@@ -443,11 +443,7 @@ const Inventory = () => {
       {/* HEADER */}
 
       <div className="inventory-header">
-        <div>
-          <Title level={2}>Inventory</Title>
 
-          <Text type="secondary">Manage stock across all four branches</Text>
-        </div>
 
         <Space wrap>
           <Button
@@ -528,8 +524,8 @@ const Inventory = () => {
 
       {/* FILTERS */}
 
-      <Card className="inventory-filter-card">
-        <Row gutter={[12, 12]}>
+      <Card className="inventory-filter-card" title="Filter inventory">
+        <Row gutter={[12, 12]} align="middle">
           <Col xs={24} md={12} lg={14}>
             <Input
               size="large"
@@ -585,7 +581,7 @@ const Inventory = () => {
 
       {/* TABLE */}
 
-      <Card className="inventory-table-card">
+      <Card className="inventory-table-card" title="Inventory records">
         <Table
           columns={columns}
           dataSource={filteredInventory}
