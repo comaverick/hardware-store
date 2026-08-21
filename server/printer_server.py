@@ -6,7 +6,7 @@ try:
     import win32print
 except ImportError:
     win32print = None
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from datetime import datetime
 
 
@@ -27,6 +27,8 @@ selected_printer = None
 # =========================
 
 def get_default_printer():
+    if win32print is None:
+        return None
     return win32print.GetDefaultPrinter()
 
 
@@ -204,7 +206,7 @@ def get_printer_status():
             "status": None,
 
             "messages": [
-                "GEZHI USB printer disconnected"
+                "GEZHI USB printing is only available on the Windows computer connected to the printer" if win32print is None else "GEZHI USB printer disconnected"
             ]
         }
 
@@ -631,7 +633,13 @@ class PrintServer(
 
     def do_GET(self):
 
-        # =========================
+        if self.path == "/" or self.path == "/health":
+            self.send_json(200, {
+                "ok": True,
+                "service": "hardware-store-printer",
+                "printerSupport": "windows-usb" if win32print else "unavailable-on-host",
+            })
+            return
         # PRINTERS
         # =========================
 
@@ -1001,7 +1009,7 @@ class PrintServer(
 # START SERVER
 # =========================
 
-server = HTTPServer(
+server = ThreadingHTTPServer(
     (os.environ.get("HOST", "0.0.0.0"), PORT),
     PrintServer
 )

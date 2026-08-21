@@ -1,0 +1,1 @@
+﻿# Standard library only. Render cannot access a Windows USB printer attached to a different computer.

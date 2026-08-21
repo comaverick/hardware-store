@@ -1,4 +1,12 @@
-﻿services:
+services:
+  - type: web
+    name: hardware-store-printer
+    runtime: python
+    rootDir: server
+    buildCommand: pip install -r requirements.txt
+    startCommand: python printer_server.py
+    healthCheckPath: /
+
   - type: web
     name: hardware-store-api
     runtime: node
@@ -16,7 +24,7 @@
       - key: REACT_APP_API_URL
         value: https://hardware-store-nffe.onrender.com
       - key: REACT_APP_PRINTER_SERVER_URL
-        value: http://localhost:5100
+        value: https://hardware-store-printer.onrender.com
     routes:
       - type: rewrite
         source: /*
