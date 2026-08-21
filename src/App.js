@@ -19,6 +19,7 @@ import Reservations from "./pages/Reservations/Reservations";
 import ProductFinder from "./pages/ProductFinder/ProductFinder";
 import AuditLogs from "./pages/AuditLogs/AuditLogs";
 import UserManagement from "./pages/UserManagement/UserManagement";
+import Reports from "./pages/Reports/Reports";
 import ComingSoon from "./pages/ComingSoon";
 
 function App() {
@@ -183,10 +184,7 @@ function App() {
             element={
               <ProtectedRoute>
                 <AppLayout>
-                  <ComingSoon
-                    title="Reports"
-                    description="Analyze sales, inventory, purchasing, and branch performance."
-                  />
+                  <Reports />
                 </AppLayout>
               </ProtectedRoute>
             }

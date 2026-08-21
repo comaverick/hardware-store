@@ -44,6 +44,17 @@ const localDateKey = (value) => {
   return `${year}-${month}-${day}`;
 };
 
+const isCompletedSale = (sale) => {
+  const status = String(sale?.status || "COMPLETED").toUpperCase();
+  return status === "COMPLETED";
+};
+
+const getSaleDate = (sale) => {
+  const timestamp = sale?.createdAt || sale?.date || sale?.updatedAt;
+  const parsedDate = new Date(timestamp);
+  return Number.isNaN(parsedDate.getTime()) ? null : parsedDate;
+};
+
 const Dashboard = () => {
   const [inventory, setInventory] = useState([]);
   const [sales, setSales] = useState([]);
@@ -178,13 +189,13 @@ const Dashboard = () => {
   tomorrowStart.setDate(tomorrowStart.getDate() + 1);
 
   const todaySales = filteredSales.filter((sale) => {
-    if (sale.status !== "COMPLETED") {
+    if (!isCompletedSale(sale)) {
       return false;
     }
 
-    const saleDate = new Date(sale.createdAt);
+    const saleDate = getSaleDate(sale);
 
-    return saleDate >= todayStart && saleDate < tomorrowStart;
+    return saleDate && saleDate >= todayStart && saleDate < tomorrowStart;
   });
 
   const todaySalesAmount = todaySales.reduce(
@@ -238,13 +249,13 @@ const Dashboard = () => {
       const dateKey = localDateKey(date);
 
       const daySales = filteredSales.filter((sale) => {
-        if (sale.status !== "COMPLETED") {
+        if (!isCompletedSale(sale)) {
           return false;
         }
 
-        const saleDate = new Date(sale.createdAt);
+        const saleDate = getSaleDate(sale);
 
-        return localDateKey(saleDate) === dateKey;
+        return saleDate && localDateKey(saleDate) === dateKey;
       });
 
       const amount = daySales.reduce(
@@ -441,7 +452,7 @@ const Dashboard = () => {
   // ========================================
 
   const recentSales = filteredSales
-    .filter((sale) => sale.status === "COMPLETED")
+    .filter((sale) => isCompletedSale(sale))
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
     .slice(0, 5);
 
@@ -488,7 +499,6 @@ const Dashboard = () => {
 
       <section className="dashboard-header">
         <div className="dashboard-heading">
-          <Text className="dashboard-eyebrow">STORE OVERVIEW</Text>
 
           <Title level={1}>Dashboard</Title>
 

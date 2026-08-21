@@ -35,7 +35,7 @@ import "./POS.css";
 
 const { Title, Text } = Typography;
 
-const PRINTER_SERVER = "http://localhost:5100";
+const PRINTER_SERVER = (process.env.REACT_APP_PRINTER_SERVER_URL || "http://localhost:5100").replace(/\/+$/, "");
 
 const POS = () => {
   const searchRef = useRef(null);

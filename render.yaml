@@ -1,0 +1,23 @@
+﻿services:
+  - type: web
+    name: hardware-store-api
+    runtime: node
+    rootDir: server
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /
+
+  - type: web
+    name: hardware-store-web
+    runtime: static
+    buildCommand: npm ci && npm run build
+    staticPublishPath: build
+    envVars:
+      - key: REACT_APP_API_URL
+        value: https://hardware-store-nffe.onrender.com
+      - key: REACT_APP_PRINTER_SERVER_URL
+        value: http://localhost:5100
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html

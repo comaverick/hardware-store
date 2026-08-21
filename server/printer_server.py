@@ -1,11 +1,16 @@
 import json
+import os
+import platform
 import subprocess
-import win32print
+try:
+    import win32print
+except ImportError:
+    win32print = None
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from datetime import datetime
 
 
-PORT = 5100
+PORT = int(os.environ.get("PORT", "5100"))
 
 # =========================
 # GEZHI USB DEVICE
@@ -26,6 +31,9 @@ def get_default_printer():
 
 
 def get_printers():
+
+    if win32print is None:
+        return []
 
     printers = []
 
@@ -75,6 +83,9 @@ def get_selected_printer():
 # =========================
 
 def is_gezhi_usb_connected():
+
+    if win32print is None or platform.system() != "Windows":
+        return False
 
     try:
 
@@ -991,7 +1002,7 @@ class PrintServer(
 # =========================
 
 server = HTTPServer(
-    ("localhost", PORT),
+    (os.environ.get("HOST", "0.0.0.0"), PORT),
     PrintServer
 )
 
@@ -999,7 +1010,7 @@ print("--------------------------------")
 print("HARDWARE STORE PRINT SERVER")
 print("--------------------------------")
 print(
-    f"Server: http://localhost:{PORT}"
+    f"Server listening on {os.environ.get('HOST', '0.0.0.0')}:{PORT}"
 )
 print(
     "GEZHI USB VID: 28E9"
@@ -1008,7 +1019,7 @@ print(
     "GEZHI USB PID: 0289"
 )
 print(
-    "Physical USB detection: ENABLED"
+    f"Physical USB detection: {'ENABLED' if win32print else 'UNAVAILABLE (non-Windows host)'}"
 )
 print(
     "Waiting for print requests..."
