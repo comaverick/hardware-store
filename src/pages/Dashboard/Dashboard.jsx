@@ -19,8 +19,8 @@ import {
 import { Alert, Card, Col, Row, Spin, Typography } from "antd";
 
 import {
-  AreaChart,
-  Area,
+  BarChart,
+  Bar,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -287,6 +287,41 @@ const Dashboard = () => {
       };
     });
   }, [filteredSales, salesPeriod]);
+  const salesChartData = salesPeriodData.map((bucket) => {
+    const bucketStart = salesPeriod === "TODAY"
+      ? new Date(bucket.date)
+      : new Date(`${bucket.date}T00:00:00`);
+    const previousStart = new Date(bucketStart);
+
+    if (salesPeriod === "TODAY") {
+      previousStart.setDate(previousStart.getDate() - 1);
+    } else if (salesPeriod === "WEEK") {
+      previousStart.setDate(previousStart.getDate() - 7);
+    } else {
+      previousStart.setMonth(previousStart.getMonth() - 1);
+    }
+
+    const previousEnd = new Date(previousStart);
+    if (salesPeriod === "TODAY") {
+      previousEnd.setHours(previousEnd.getHours() + 1);
+    } else {
+      previousEnd.setDate(previousEnd.getDate() + 1);
+    }
+
+    const previousSales = filteredSales.filter((sale) => {
+      if (!isCompletedSale(sale)) return false;
+      const saleDate = getSaleDate(sale);
+      return saleDate && saleDate >= previousStart && saleDate < previousEnd;
+    });
+
+    return {
+      ...bucket,
+      previousSales: previousSales.reduce(
+        (total, sale) => total + Number(sale.totalAmount || 0),
+        0,
+      ),
+    };
+  });
 
   const periodSalesTotal = salesPeriodData.reduce(
     (total, day) => total + day.sales,
@@ -297,6 +332,51 @@ const Dashboard = () => {
     (total, day) => total + day.transactions,
     0,
   );
+  const periodComparison = useMemo(() => {
+    const now = new Date();
+    let previousStart;
+    let previousEnd;
+    let comparisonLabel;
+
+    if (salesPeriod === "TODAY") {
+      const todayStart = new Date(now);
+      todayStart.setHours(0, 0, 0, 0);
+      previousEnd = todayStart;
+      previousStart = new Date(todayStart);
+      previousStart.setDate(previousStart.getDate() - 1);
+      comparisonLabel = "vs yesterday";
+    } else if (salesPeriod === "WEEK") {
+      const weekStart = new Date(now);
+      weekStart.setHours(0, 0, 0, 0);
+      weekStart.setDate(weekStart.getDate() - 6);
+      previousEnd = new Date(weekStart);
+      previousStart = new Date(weekStart);
+      previousStart.setDate(previousStart.getDate() - 7);
+      comparisonLabel = "vs last week";
+    } else {
+      previousEnd = new Date(now.getFullYear(), now.getMonth(), 1);
+      previousStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      comparisonLabel = "vs last month";
+    }
+
+    const previousSales = filteredSales.filter((sale) => {
+      if (!isCompletedSale(sale)) return false;
+      const saleDate = getSaleDate(sale);
+      return saleDate && saleDate >= previousStart && saleDate < previousEnd;
+    });
+    const previousTotal = previousSales.reduce(
+      (total, sale) => total + Number(sale.totalAmount || 0),
+      0,
+    );
+    const salesChange = previousTotal
+      ? ((periodSalesTotal - previousTotal) / previousTotal) * 100
+      : periodSalesTotal > 0 ? 100 : 0;
+    const transactionChange = previousSales.length
+      ? ((periodTransactions - previousSales.length) / previousSales.length) * 100
+      : periodTransactions > 0 ? 100 : 0;
+
+    return { comparisonLabel, salesChange, transactionChange };
+  }, [filteredSales, periodSalesTotal, periodTransactions, salesPeriod]);
 
   // ========================================
   // BRANCH OVERVIEW
@@ -757,19 +837,28 @@ const Dashboard = () => {
                   minimumFractionDigits: 2,
                 })}
               </strong>
+
+              <span className={`comparison-note ${periodComparison.salesChange >= 0 ? "\u2191" : "\u2193"}`}>
+                {periodComparison.salesChange >= 0 ? "\u2191" : "\u2193"} {Math.abs(periodComparison.salesChange).toFixed(1)}% {periodComparison.comparisonLabel}
+              </span>
             </div>
 
             <div>
               <span>TRANSACTIONS</span>
 
               <strong>{periodTransactions}</strong>
+
+              <span className={`comparison-note ${periodComparison.transactionChange >= 0 ? "\u2191" : "\u2193"}`}>
+                {periodComparison.transactionChange >= 0 ? "\u2191" : "\u2193"} {Math.abs(periodComparison.transactionChange).toFixed(1)}% {periodComparison.comparisonLabel}
+              </span>
             </div>
           </div>
 
           <div className="sales-chart">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart
-                data={salesPeriodData}
+              <BarChart
+                data={salesChartData}
+                barGap={-28}
                 margin={{
                   top: 10,
                   right: 5,
@@ -777,21 +866,7 @@ const Dashboard = () => {
                   bottom: 0,
                 }}
               >
-                <defs>
-                  <linearGradient
-                    id="salesGradient"
-                    x1="0"
-                    y1="0"
-                    x2="0"
-                    y2="1"
-                  >
-                    <stop offset="0%" stopColor="#111111" stopOpacity={0.2} />
-
-                    <stop offset="100%" stopColor="#111111" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-
-                <CartesianGrid vertical={false} stroke="#eeeeee" />
+<CartesianGrid vertical={false} stroke="#eeeeee" />
 
                 <XAxis
                   dataKey="label"
@@ -829,29 +904,29 @@ const Dashboard = () => {
                     boxShadow: "0 8px 24px rgba(0,0,0,0.08)",
                   }}
                   formatter={(value, name) => [
-                    name === "sales"
-                      ? `\u20B1${Number(value).toLocaleString(undefined, {
+                    (name === "sales" || name === "Previous period") ? `\u20B1${Number(value).toLocaleString(undefined, {
                           minimumFractionDigits: 2,
                         })}`
                       : value,
-                    name === "sales" ? "Sales" : "Transactions",
+                    name === "sales" ? "Sales" : name === "Previous period" ? "Previous period" : "Transactions",
                   ]}
                 />
 
-                <Area
-                  type="monotone"
-                  dataKey="sales"
-                  stroke="#111111"
-                  strokeWidth={2.5}
-                  fill="url(#salesGradient)"
-                  dot={false}
-                  activeDot={{
-                    r: 5,
-                    strokeWidth: 3,
-                    stroke: "#ffffff",
-                  }}
+                <Bar
+                  dataKey="previousSales"
+                  name="Previous period"
+                  fill="#eeeeee"
+                  radius={[4, 4, 0, 0]}
+                  maxBarSize={32}
                 />
-              </AreaChart>
+
+                <Bar
+                  dataKey="sales"
+                  fill="#111111"
+                  radius={[4, 4, 0, 0]}
+                  maxBarSize={22}
+                />
+              </BarChart>
             </ResponsiveContainer>
           </div>
         </Card>
