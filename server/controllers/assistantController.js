@@ -91,7 +91,7 @@ const getAssistantContext = async (req) => {
   const since = new Date();
   since.setDate(since.getDate() - 30);
 
-  const [inventory, products, sales, branches] = await Promise.all([
+  const [inventory, products, branches, sales] = await Promise.all([
     BranchInventory.find(branchFilter)
       .populate("product", "name sku brand category sellingPrice unit isActive")
       .populate("branch", "name code")
@@ -460,7 +460,8 @@ const askAssistant = async (req, res) => {
 
     res.json({
       answer,
-      recommendations,
+      recommendations: (navigationPath || requiresFinder) ? [] : recommendations,
+      action: actionPath ? { path: actionPath, label: actionLabel } : null,
       scope: context.accessScope,
       generatedAt: new Date().toISOString(),
     });
