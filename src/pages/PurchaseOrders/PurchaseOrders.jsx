@@ -387,7 +387,7 @@ const PurchaseOrders = () => {
       key: "total",
 
       render: (value) =>
-        `₱${Number(value).toLocaleString("en-PH", {
+        `Ã¢â€šÂ±${Number(value).toLocaleString("en-PH", {
           minimumFractionDigits: 2,
         })}`,
     },
@@ -455,13 +455,7 @@ const PurchaseOrders = () => {
       ========================= */}
 
       <div className="purchase-orders-header">
-        <div>
-          <Title level={2}>Purchase Orders</Title>
 
-          <Text type="secondary">
-            Manage supplier orders and incoming stock
-          </Text>
-        </div>
 
         <Button
           type="primary"
@@ -507,8 +501,8 @@ const PurchaseOrders = () => {
           FILTERS
       ========================= */}
 
-      <Card className="po-filter-card">
-        <Row gutter={[12, 12]}>
+      <Card className="po-filter-card" title="Filter purchase orders">
+        <Row gutter={[12, 12]} align="middle">
           <Col xs={24} md={16}>
             <Input
               size="large"
@@ -551,7 +545,7 @@ const PurchaseOrders = () => {
           TABLE
       ========================= */}
 
-      <Card className="po-table-card">
+      <Card className="po-table-card" title="Purchase order directory">
         <Table
           columns={columns}
           dataSource={filteredOrders}
@@ -704,7 +698,7 @@ const PurchaseOrders = () => {
                           <InputNumber
                             min={0}
                             precision={2}
-                            prefix="₱"
+                            prefix="Ã¢â€šÂ±"
                             style={{
                               width: "100%",
                             }}
@@ -719,7 +713,7 @@ const PurchaseOrders = () => {
                           disabled={fields.length === 1}
                           onClick={() => remove(field.name)}
                         >
-                          ×
+                          Ãƒâ€”
                         </Button>
                       </Col>
                     </Row>
@@ -846,7 +840,7 @@ const PurchaseOrders = () => {
                   dataIndex: "unitCost",
 
                   render: (value) =>
-                    `₱${Number(value).toLocaleString("en-PH", {
+                    `Ã¢â€šÂ±${Number(value).toLocaleString("en-PH", {
                       minimumFractionDigits: 2,
                     })}`,
                 },
@@ -856,7 +850,7 @@ const PurchaseOrders = () => {
                   dataIndex: "subtotal",
 
                   render: (value) =>
-                    `₱${Number(value).toLocaleString("en-PH", {
+                    `Ã¢â€šÂ±${Number(value).toLocaleString("en-PH", {
                       minimumFractionDigits: 2,
                     })}`,
                 },
@@ -867,7 +861,7 @@ const PurchaseOrders = () => {
               <Text>Total</Text>
 
               <strong>
-                ₱
+                Ã¢â€šÂ±
                 {Number(selectedOrder.totalAmount).toLocaleString("en-PH", {
                   minimumFractionDigits: 2,
                 })}
@@ -898,7 +892,7 @@ const PurchaseOrders = () => {
               <Text type="secondary">Receiving branch</Text>
 
               <strong>
-                {selectedOrder.branch?.code} — {selectedOrder.branch?.name}
+                {selectedOrder.branch?.code} Ã¢â‚¬â€ {selectedOrder.branch?.name}
               </strong>
             </div>
 
