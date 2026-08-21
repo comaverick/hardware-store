@@ -118,7 +118,7 @@ const getAssistantContext = async (req) => {
   ]);
 
   const stockRows = inventory
-    .filter((row) => row.product?.isActive !== false)
+    .filter((row) => row.product && row.branch && row.product.isActive !== false)
     .map((row) => ({
       product: row.product.name,
       sku: row.product.sku,
