@@ -56,7 +56,7 @@ const Sidebar = ({ expanded, setExpanded }) => {
 
   const menuGroups = [
     {
-      title: "STORE",
+      title: "Store",
 
       items: [
         {
@@ -78,7 +78,7 @@ const Sidebar = ({ expanded, setExpanded }) => {
     },
 
     {
-      title: "INVENTORY",
+      title: "Inventory",
 
       items: [
         {
@@ -110,7 +110,7 @@ const Sidebar = ({ expanded, setExpanded }) => {
     },
 
     {
-      title: "PURCHASING",
+      title: "Purchasing",
 
       items: [
         {
@@ -132,7 +132,7 @@ const Sidebar = ({ expanded, setExpanded }) => {
     },
 
     {
-      title: "MANAGEMENT",
+      title: "Management",
 
       items: [
         {

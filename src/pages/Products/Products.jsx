@@ -199,7 +199,7 @@ const Products = () => {
 
       render: (_, product) => (
         <strong>
-          ₱
+          &#8369;
           {Number(product.sellingPrice || 0).toLocaleString("en-PH", {
             minimumFractionDigits: 2,
           })}
@@ -266,30 +266,11 @@ const Products = () => {
           PAGE HEADER
       ========================= */}
 
-      <div className="products-header">
-        <div>
-          <Title level={2}>Products</Title>
+      {/* FILTERS */}
 
-          <Text type="secondary">Manage your hardware product catalog</Text>
-        </div>
-
-        <Button
-          type="primary"
-          icon={<PlusOutlined />}
-          size="large"
-          onClick={() => setModalOpen(true)}
-        >
-          Add Product
-        </Button>
-      </div>
-
-      {/* =========================
-          FILTERS
-      ========================= */}
-
-      <Card className="products-filter-card">
-        <Row gutter={[12, 12]}>
-          <Col xs={24} md={14} lg={16}>
+      <Card className="products-filter-card" title="Filter products">
+        <Row gutter={[12, 12]} align="middle">
+          <Col xs={24} md={12} lg={14}>
             <Input
               size="large"
               prefix={<SearchOutlined />}
@@ -300,14 +281,12 @@ const Products = () => {
             />
           </Col>
 
-          <Col xs={24} md={10} lg={8}>
+          <Col xs={24} md={7} lg={6}>
             <Select
               size="large"
               value={categoryFilter}
               onChange={setCategoryFilter}
-              style={{
-                width: "100%",
-              }}
+              style={{ width: "100%" }}
             >
               <Select.Option value="all">All Categories</Select.Option>
 
@@ -318,6 +297,18 @@ const Products = () => {
               ))}
             </Select>
           </Col>
+
+          <Col xs={24} md={5} lg={4}>
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              size="large"
+              block
+              onClick={() => setModalOpen(true)}
+            >
+              Add Product
+            </Button>
+          </Col>
         </Row>
       </Card>
 
@@ -325,7 +316,7 @@ const Products = () => {
           PRODUCTS TABLE
       ========================= */}
 
-      <Card className="products-table-card">
+      <Card className="products-table-card" title="Product catalog">
         <Table
           columns={columns}
           dataSource={filteredProducts}
@@ -453,7 +444,7 @@ const Products = () => {
                 <InputNumber
                   size="large"
                   min={0}
-                  prefix="₱"
+                  prefix={"\u20B1"}
                   style={{
                     width: "100%",
                   }}
@@ -475,7 +466,7 @@ const Products = () => {
                 <InputNumber
                   size="large"
                   min={0}
-                  prefix="₱"
+                  prefix={"\u20B1"}
                   style={{
                     width: "100%",
                   }}
@@ -586,7 +577,7 @@ const Products = () => {
                   <Text type="secondary">Cost Price</Text>
 
                   <div className="detail-value">
-                    ₱
+                    &#8369;
                     {Number(selectedProduct.costPrice || 0).toLocaleString(
                       "en-PH",
                       {
@@ -602,7 +593,7 @@ const Products = () => {
                   <Text type="secondary">Selling Price</Text>
 
                   <div className="detail-value">
-                    ₱
+                    &#8369;
                     {Number(selectedProduct.sellingPrice || 0).toLocaleString(
                       "en-PH",
                       {
