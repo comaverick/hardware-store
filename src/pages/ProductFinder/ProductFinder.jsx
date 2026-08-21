@@ -324,7 +324,7 @@ const ProductFinder = () => {
     <div className="finder-page">
       <div className="finder-header">
 
-        <Tag color="blue">Guided scan</Tag>
+        <Tag color="gray">Guided scan</Tag>
       </div>
       <div className="finder-layout">
         <Card className="finder-capture-card" title="Scan product">

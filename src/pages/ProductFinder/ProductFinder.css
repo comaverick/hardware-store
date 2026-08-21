@@ -1,4 +1,4 @@
-.finder-page {
+﻿.finder-page {
   max-width: 1400px;
   margin: 0 auto;
   padding: 8px 0 32px;
@@ -252,16 +252,10 @@
 }
 
 .finder-page .finder-header .ant-tag {
-  border-color: #111;
+  border-color: #b5b1b1;
   border-radius: 999px;
   background: #111;
   color: #fff;
-}
-
-.finder-page .finder-header .ant-tag.ant-tag-blue {
-  border-color: #111 !important;
-  background: #111 !important;
-  color: #fff !important;
 }
 
 .finder-page .finder-capture-card,

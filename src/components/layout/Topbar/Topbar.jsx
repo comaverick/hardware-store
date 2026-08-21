@@ -7,15 +7,13 @@ import {
   SettingOutlined,
 } from "@ant-design/icons";
 
-import { Avatar, Badge, Dropdown, Typography } from "antd";
+import { Avatar, Badge, Dropdown } from "antd";
 
 import { useLocation, useNavigate } from "react-router-dom";
 
 import { useAuth } from "../../../context/AuthContext";
 
 import "./Topbar.css";
-
-const { Text } = Typography;
 
 const Topbar = ({ sidebarExpanded }) => {
   const { user, logout } = useAuth();
@@ -43,6 +41,25 @@ const Topbar = ({ sidebarExpanded }) => {
     "/inventory": {
       title: "Inventory",
       description: "Monitor your stock levels",
+    },
+
+    "/reservations": {
+      title: "Reservations",
+      description: "Manage product holds for pickup",
+    },
+
+    "/product-finder": {
+      title: "AI Product Finder",
+      description: "Find products with guided scanning",
+    },
+    "/user-management": {
+      title: "User Management",
+      description: "Manage users and permissions",
+    },
+
+    "/audit-logs": {
+      title: "Audit Logs",
+      description: "Review system activity",
     },
 
     "/stock-history": {
@@ -86,9 +103,30 @@ const Topbar = ({ sidebarExpanded }) => {
     },
   };
 
-  const currentPage = pageTitles[location.pathname] || {
-    title: "Hardware Store",
-    description: "Store management system",
+  const pageCategories = {
+    "/dashboard": "Store",
+    "/pos": "Store",
+    "/products": "Catalog",
+    "/inventory": "Inventory",
+    "/reservations": "Inventory",
+    "/product-finder": "Inventory",
+    "/stock-history": "Inventory",
+    "/transfers": "Inventory",
+    "/suppliers": "Purchasing",
+    "/purchase-orders": "Purchasing",
+    "/purchases": "Purchasing",
+    "/customers": "Management",
+    "/reports": "Management",
+    "/settings": "System",
+    "/user-management": "Administration",
+    "/audit-logs": "Administration",
+  };
+  const currentPage = {
+    ...(pageTitles[location.pathname] || {
+      title: "Hardware Store",
+      description: "Store management system",
+    }),
+    category: pageCategories[location.pathname] || "Store",
   };
 
   const menuItems = [
@@ -144,9 +182,9 @@ const Topbar = ({ sidebarExpanded }) => {
 
       <div className="topbar-left">
         <div className="page-heading">
+          <span className="breadcrumb-category">{currentPage.category}</span>
+          <span className="breadcrumb-separator" aria-hidden="true">&gt;</span>
           <h1 className="page-title">{currentPage.title}</h1>
-
-          <Text className="page-description">{currentPage.description}</Text>
         </div>
       </div>
 

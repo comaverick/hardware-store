@@ -56,10 +56,19 @@
 
 .page-heading {
   display: flex;
+  align-items: center;
+  gap: 8px;
+}
 
-  flex-direction: column;
+.breadcrumb-category {
+  color: #999999;
+  font-size: 12px;
+  font-weight: 500;
+}
 
-  gap: 2px;
+.breadcrumb-separator {
+  color: #c4c4c4;
+  font-size: 13px;
 }
 
 .page-title {
