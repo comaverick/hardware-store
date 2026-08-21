@@ -1,18 +1,58 @@
-﻿const BranchInventory = require("../models/BranchInventory");
+const BranchInventory = require("../models/BranchInventory");
 const Product = require("../models/Product");
 const Branch = require("../models/Branch");
 
+const completeInventoryRecords = (inventory, products, branches) => {
+  const existing = new Set(
+    inventory.map((item) => String(item.branch?._id) + ":" + String(item.product?._id)),
+  );
+
+  const virtualRecords = [];
+  branches.forEach((branch) => {
+    products.forEach((product) => {
+      const key = String(branch._id) + ":" + String(product._id);
+      if (existing.has(key)) return;
+
+      virtualRecords.push({
+        _id: "virtual-" + String(branch._id) + "-" + String(product._id),
+        branch,
+        product,
+        quantity: 0,
+        reservedQuantity: 0,
+        reorderLevel: product.reorderLevel ?? 5,
+        shelfLocation: null,
+        isVirtual: true,
+      });
+    });
+  });
+
+  return [...inventory, ...virtualRecords];
+};
 // Get inventory for all branches
 const getInventory = async (req, res) => {
   try {
-    const inventory = await BranchInventory.find(
-      req.user?.role === "SUPER_ADMIN" ? {} : { branch: req.user?.branch?._id },
-    )
-      .populate("product", "name sku barcode sellingPrice unit")
-      .populate("branch", "name code")
-      .sort({ createdAt: -1 });
+    const branchFilter =
+      req.user?.role === "SUPER_ADMIN"
+        ? {}
+        : { branch: req.user?.branch?._id };
+    const branchQuery =
+      req.user?.role === "SUPER_ADMIN"
+        ? {}
+        : { _id: req.user?.branch?._id };
 
-    res.status(200).json(inventory);
+    const [inventory, products, branches] = await Promise.all([
+      BranchInventory.find(branchFilter)
+        .populate("product", "name sku barcode sellingPrice unit reorderLevel")
+        .populate("branch", "name code")
+        .sort({ createdAt: -1 })
+        .lean(),
+      Product.find({ isActive: true })
+        .select("name sku barcode sellingPrice unit reorderLevel")
+        .lean(),
+      Branch.find(branchQuery).select("name code").lean(),
+    ]);
+
+    res.status(200).json(completeInventoryRecords(inventory, products, branches));
   } catch (error) {
     res.status(500).json({
       message: "Failed to get inventory",
@@ -20,18 +60,22 @@ const getInventory = async (req, res) => {
     });
   }
 };
-
 // Get inventory for one branch
 const getBranchInventory = async (req, res) => {
   try {
-    const inventory = await BranchInventory.find({
-      branch: req.params.branchId,
-    })
-      .populate("product", "name sku barcode sellingPrice unit")
-      .populate("branch", "name code")
-      .sort({ createdAt: -1 });
+    const [inventory, products, branches] = await Promise.all([
+      BranchInventory.find({ branch: req.params.branchId })
+        .populate("product", "name sku barcode sellingPrice unit reorderLevel")
+        .populate("branch", "name code")
+        .sort({ createdAt: -1 })
+        .lean(),
+      Product.find({ isActive: true })
+        .select("name sku barcode sellingPrice unit reorderLevel")
+        .lean(),
+      Branch.find({ _id: req.params.branchId }).select("name code").lean(),
+    ]);
 
-    res.status(200).json(inventory);
+    res.status(200).json(completeInventoryRecords(inventory, products, branches));
   } catch (error) {
     res.status(500).json({
       message: "Failed to get branch inventory",
