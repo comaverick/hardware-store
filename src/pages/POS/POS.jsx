@@ -35,7 +35,7 @@ import "./POS.css";
 
 const { Title, Text } = Typography;
 
-const PRINTER_SERVER = (process.env.REACT_APP_PRINTER_SERVER_URL || "http://localhost:5100").replace(/\/+$/, "");
+const PRINTER_SERVER = (process.env.REACT_APP_PRINTER_SERVER_URL || "http://127.0.0.1:5100").replace(/\/+$/, "");
 
 const POS = () => {
   const searchRef = useRef(null);
@@ -782,7 +782,7 @@ const POS = () => {
     ) {
       Modal.confirm({
         title: "Confirm discount",
-        content: `This discount is over 10% of the sale (₱${subtotal.toLocaleString("en-PH", { minimumFractionDigits: 2 })}).`,
+        content: `This discount is over 10% of the sale (â‚±${subtotal.toLocaleString("en-PH", { minimumFractionDigits: 2 })}).`,
         okText: "Apply discount",
         onOk: () => setDiscount(nextDiscount),
       });
@@ -962,7 +962,7 @@ const POS = () => {
               options={branches.map((branch) => ({
                 value: branch._id,
 
-                label: `${branch.code} — ${branch.name}`,
+                label: `${branch.code} â€” ${branch.name}`,
               }))}
             />
           </div>
@@ -975,7 +975,7 @@ const POS = () => {
                 printerOnline ? "printer-connected" : "printer-disconnected"
               }`}
             >
-              <span className="printer-status-dot">●</span>
+              <span className="printer-status-dot">â—</span>
 
               <div>
                 <strong>Receipt Printer</strong>
@@ -1160,7 +1160,7 @@ const POS = () => {
                     <Text type="secondary">{product.sku}</Text>
 
                     <div className="product-price">
-                      ₱
+                      â‚±
                       {Number(product.sellingPrice).toLocaleString("en-PH", {
                         minimumFractionDigits: 2,
                       })}
@@ -1168,7 +1168,7 @@ const POS = () => {
 
                     <div className="product-bottom">
                       <Text type="secondary">
-                        {product.unit ? `Per ${product.unit}` : "Per item"} ·
+                        {product.unit ? `Per ${product.unit}` : "Per item"} Â·
                         Stock: <strong>{stock}</strong>
                       </Text>
 
@@ -1234,7 +1234,7 @@ const POS = () => {
                       <Text type="secondary">{item.sku}</Text>
 
                       <div className="cart-item-price">
-                        ₱
+                        â‚±
                         {Number(item.unitPrice).toLocaleString("en-PH", {
                           minimumFractionDigits: 2,
                         })}{" "}
@@ -1275,7 +1275,7 @@ const POS = () => {
                     </div>
 
                     <div className="cart-item-subtotal">
-                      ₱
+                      â‚±
                       {Number(item.subtotal).toLocaleString("en-PH", {
                         minimumFractionDigits: 2,
                       })}
@@ -1292,7 +1292,7 @@ const POS = () => {
                 <Text>Subtotal</Text>
 
                 <strong>
-                  ₱
+                  â‚±
                   {subtotal.toLocaleString("en-PH", {
                     minimumFractionDigits: 2,
                   })}
@@ -1306,7 +1306,7 @@ const POS = () => {
                   min={0}
                   max={subtotal}
                   precision={2}
-                  prefix="₱"
+                  prefix="â‚±"
                   value={discount}
                   onChange={(value) => handleDiscountChange(value)}
                   size="small"
@@ -1320,7 +1320,7 @@ const POS = () => {
                 <span>TOTAL</span>
 
                 <strong>
-                  ₱
+                  â‚±
                   {total.toLocaleString("en-PH", {
                     minimumFractionDigits: 2,
                   })}
@@ -1355,7 +1355,7 @@ const POS = () => {
                     size="large"
                     min={0}
                     precision={2}
-                    prefix="₱"
+                    prefix="â‚±"
                     value={amountPaid}
                     onChange={(value) => setAmountPaid(value || 0)}
                     disabled={paymentMethod !== "CASH"}
@@ -1377,7 +1377,7 @@ const POS = () => {
                           key={amount}
                           onClick={() => setAmountPaid(amount)}
                         >
-                          ₱{amount.toLocaleString("en-PH")}
+                          â‚±{amount.toLocaleString("en-PH")}
                         </Button>
                       ))}
                     </div>
@@ -1390,7 +1390,7 @@ const POS = () => {
                   <div
                     className={`change-display ${amountPaid >= total && total > 0 ? "change-ready" : ""}`}
                   >
-                    ₱
+                    â‚±
                     {change.toLocaleString("en-PH", {
                       minimumFractionDigits: 2,
                     })}
@@ -1416,11 +1416,11 @@ const POS = () => {
                 ? "ADD ITEMS TO START"
                 : paymentMethod === "CASH" && amountPaid < total
                   ? "ENTER SUFFICIENT CASH"
-                  : `PAY ₱${total.toLocaleString("en-PH", { minimumFractionDigits: 2 })}`}
+                  : `PAY â‚±${total.toLocaleString("en-PH", { minimumFractionDigits: 2 })}`}
             </Button>
 
             <Text className="checkout-help" type="secondary">
-              F2 Search · F4 Cash · F5 GCash · F6 Card · F9 Pay
+              F2 Search Â· F4 Cash Â· F5 GCash Â· F6 Card Â· F9 Pay
             </Text>
           </Card>
         </Col>
@@ -1454,7 +1454,7 @@ const POS = () => {
               <div className="receipt-change-hero">
                 <span>CHANGE DUE</span>
                 <strong>
-                  ₱
+                  â‚±
                   {Number(receipt.changeAmount).toLocaleString("en-PH", {
                     minimumFractionDigits: 2,
                   })}
@@ -1501,7 +1501,7 @@ const POS = () => {
                     <strong>{item.product?.name}</strong>
 
                     <Text type="secondary">
-                      {item.quantity} × ₱
+                      {item.quantity} Ã— â‚±
                       {Number(item.unitPrice).toLocaleString("en-PH", {
                         minimumFractionDigits: 2,
                       })}
@@ -1509,7 +1509,7 @@ const POS = () => {
                   </div>
 
                   <strong>
-                    ₱
+                    â‚±
                     {Number(item.subtotal).toLocaleString("en-PH", {
                       minimumFractionDigits: 2,
                     })}
@@ -1522,7 +1522,7 @@ const POS = () => {
               <span>Subtotal</span>
 
               <span>
-                ₱
+                â‚±
                 {Number(receipt.subtotal).toLocaleString("en-PH", {
                   minimumFractionDigits: 2,
                 })}
@@ -1533,7 +1533,7 @@ const POS = () => {
               <span>Discount</span>
 
               <span>
-                ₱
+                â‚±
                 {Number(receipt.discount).toLocaleString("en-PH", {
                   minimumFractionDigits: 2,
                 })}
@@ -1544,7 +1544,7 @@ const POS = () => {
               <span>TOTAL</span>
 
               <strong>
-                ₱
+                â‚±
                 {Number(receipt.totalAmount).toLocaleString("en-PH", {
                   minimumFractionDigits: 2,
                 })}
@@ -1562,7 +1562,7 @@ const POS = () => {
                 <span>Amount Paid</span>
 
                 <strong>
-                  ₱
+                  â‚±
                   {Number(receipt.amountPaid).toLocaleString("en-PH", {
                     minimumFractionDigits: 2,
                   })}
@@ -1573,7 +1573,7 @@ const POS = () => {
                 <span>Change</span>
 
                 <strong>
-                  ₱
+                  â‚±
                   {Number(receipt.changeAmount).toLocaleString("en-PH", {
                     minimumFractionDigits: 2,
                   })}
