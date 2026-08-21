@@ -1,4 +1,4 @@
-﻿.finder-page {
+.finder-page {
   max-width: 1400px;
   margin: 0 auto;
   padding: 8px 0 32px;
@@ -234,5 +234,147 @@
   }
   .finder-branch .ant-btn {
     width: 100%;
+  }
+}
+
+/* Dashboard theme */
+.finder-page {
+  width: 100%;
+  max-width: none;
+  padding: 0 0 32px;
+  color: #1d1d1f;
+}
+
+.finder-page .finder-header {
+  align-items: center;
+  min-height: 44px;
+  margin-bottom: 18px;
+}
+
+.finder-page .finder-header .ant-tag {
+  border-color: #111;
+  border-radius: 999px;
+  background: #111;
+  color: #fff;
+}
+
+.finder-page .finder-header .ant-tag.ant-tag-blue {
+  border-color: #111 !important;
+  background: #111 !important;
+  color: #fff !important;
+}
+
+.finder-page .finder-capture-card,
+.finder-page .finder-guidance,
+.finder-page .finder-match-card,
+.finder-page .finder-results > .ant-card {
+  overflow: hidden;
+  border: 1px solid #e5e5e5;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: none;
+}
+
+.finder-page .ant-card-head {
+  min-height: 46px;
+  padding: 0 18px;
+  border-bottom: 1px solid #e5e5e5;
+  background: #f5f5f5;
+}
+
+.finder-page .ant-card-head-title {
+  color: #262626;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.1px;
+  text-transform: uppercase;
+}
+
+.finder-page .finder-capture-card .ant-card-body {
+  padding: 18px;
+}
+
+.finder-page .finder-capture {
+  border-radius: 8px;
+  background: #111;
+}
+
+.finder-page .finder-empty-camera .anticon {
+  color: #fff;
+}
+
+.finder-page .finder-empty-camera span {
+  color: #b5b5b5;
+}
+
+.finder-page .finder-actions .ant-btn,
+.finder-page .finder-identify-actions .ant-btn {
+  border-radius: 6px;
+}
+
+.finder-page .finder-guidance {
+  gap: 12px;
+  border-color: #e5e5e5;
+  background: #fafafa;
+}
+
+.finder-page .finder-guidance-rescan {
+  border-color: #d9d9d9;
+  background: #f5f5f5;
+}
+
+.finder-page .finder-guidance-icon,
+.finder-page .finder-guidance-rescan .finder-guidance-icon {
+  background: #e9e9e9;
+  color: #262626;
+}
+
+.finder-page .finder-result-intro {
+  border: 1px solid #e5e5e5;
+  border-radius: 10px;
+  background: #f5f5f5;
+  color: #262626;
+}
+
+.finder-page .finder-result-intro span {
+  color: #777;
+}
+
+.finder-page .finder-match-card {
+  margin-bottom: 14px;
+}
+
+.finder-page .finder-branch {
+  border-color: #e5e5e5;
+  border-radius: 8px;
+  background: #fafafa;
+}
+
+.finder-page .finder-branch span,
+.finder-page .finder-reserve-summary span {
+  color: #777;
+}
+
+.finder-page .finder-branch button.ant-btn-primary:not(:disabled):not(.ant-btn-disabled) {
+  color: #fff !important;
+  background: #111 !important;
+  border-color: #111 !important;
+  box-shadow: none;
+}
+
+.finder-page .finder-reserve-summary {
+  border: 1px solid #e5e5e5;
+  background: #f5f5f5;
+}
+
+@media (max-width: 900px) {
+  .finder-page .finder-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 520px) {
+  .finder-page .finder-header {
+    align-items: stretch;
   }
 }

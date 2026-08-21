@@ -184,7 +184,7 @@ const ProductFinder = () => {
       return (
         <Card className="finder-loading">
           <Spin size="large" />
-          <strong>Analysing this view…</strong>
+          <strong>Analysing this viewâ€¦</strong>
           <Text type="secondary">
             We will give you a camera instruction if another scan is needed.
           </Text>
@@ -230,7 +230,7 @@ const ProductFinder = () => {
               image={Empty.PRESENTED_IMAGE_SIMPLE}
               description={
                 recognisedName
-                  ? `${recognisedName} — not in our catalogue`
+                  ? `${recognisedName} â€” not in our catalogue`
                   : "Item not clear enough yet"
               }
             />
@@ -257,8 +257,8 @@ const ProductFinder = () => {
                   <div>
                     <Title level={4}>{match.product.name}</Title>
                     <Text type="secondary">
-                      {match.product.brand || "Hardware"} · {match.product.sku}{" "}
-                      · ₱
+                      {match.product.brand || "Hardware"} Â· {match.product.sku}{" "}
+                      Â· â‚±
                       {Number(match.product.sellingPrice).toLocaleString(
                         "en-PH",
                         { minimumFractionDigits: 2 },
@@ -284,7 +284,7 @@ const ProductFinder = () => {
                         <div>
                           <strong>{item.branch.name}</strong>
                           <span>
-                            {item.branch.code} ·{" "}
+                            {item.branch.code} Â·{" "}
                             {item.available > 0
                               ? `${item.available} ${match.product.unit} available`
                               : "Out of stock"}
@@ -323,16 +323,11 @@ const ProductFinder = () => {
   return (
     <div className="finder-page">
       <div className="finder-header">
-        <div>
-          <Title level={2}>AI Product Finder</Title>
-          <Text type="secondary">
-            Scan an item, follow the camera guidance, then find or reserve it.
-          </Text>
-        </div>
+
         <Tag color="blue">Guided scan</Tag>
       </div>
       <div className="finder-layout">
-        <Card className="finder-capture-card">
+        <Card className="finder-capture-card" title="Scan product">
           <div className="finder-capture">
             {cameraOpen ? (
               <video
@@ -439,7 +434,7 @@ const ProductFinder = () => {
             <div className="finder-reserve-summary">
               <strong>{reserveTarget.product.name}</strong>
               <span>
-                {reserveTarget.branch.name} · {reserveTarget.available}{" "}
+                {reserveTarget.branch.name} Â· {reserveTarget.available}{" "}
                 available
               </span>
             </div>
