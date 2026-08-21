@@ -12,6 +12,39 @@ const getOutputText = (result) =>
     .join(" ")
     .trim();
 
+const parseAssistantJson = (text) => {
+  const value = String(text || "").trim();
+  const start = value.indexOf("{");
+  const end = value.lastIndexOf("}");
+  return JSON.parse((start >= 0 && end > start ? value.slice(start, end + 1) : value).trim());
+};
+
+const assistantResponseSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["answer", "recommendations"],
+  properties: {
+    answer: { type: "string" },
+    recommendations: {
+      type: "array",
+      maxItems: 6,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["sku", "reason", "actionPath", "actionLabel"],
+        properties: {
+          sku: { type: "string" },
+          reason: { type: "string" },
+          actionPath: {
+            type: "string",
+            enum: ["/products", "/inventory", "/pos", "/product-finder"],
+          },
+          actionLabel: { type: "string" },
+        },
+      },
+    },
+  },
+};
 const buildScope = (req) => {
   const isPrivileged = privilegedRoles.includes(req.user?.role);
   const branchFilter =
@@ -173,7 +206,8 @@ const askAssistant = async (req, res) => {
       "Use Philippine peso formatting such as PHP 1,250. Keep answers easy to scan with short paragraphs or bullets.",
       "The assistant is read-only. Never claim that you created, deleted, edited, reserved, refunded, or reordered anything.",
       "Respect the user's access scope. Do not reveal data outside the supplied scope.",
-      "For product advice, clearly label recommendations as recommendations and distinguish them from confirmed store stock.",
+      "For repair or shopping questions, return up to 6 useful confirmed products from the catalog as recommendations. Use each product SKU exactly as shown in the context. Set actionPath to /products for browsing, /inventory for stock details, /pos for selling, or /product-finder for visual identification. Never recommend a product SKU that is not in the context.",
+      "Return JSON matching the response schema. Keep the answer conversational and explain what the customer needs.",
       "LIVE STORE CONTEXT:\n" + JSON.stringify(context),
     ].join("\n\n");
 
@@ -186,6 +220,14 @@ const askAssistant = async (req, res) => {
       body: JSON.stringify({
         model: process.env.OPENAI_ASSISTANT_MODEL || "gpt-4o-mini",
         store: false,
+        text: {
+          format: {
+            type: "json_schema",
+            name: "hardware_store_bolt_response",
+            strict: true,
+            schema: assistantResponseSchema,
+          },
+        },
         input: [
           { role: "developer", content: systemPrompt },
           ...messages,
@@ -203,7 +245,43 @@ const askAssistant = async (req, res) => {
     }
 
     const result = await aiResponse.json();
-    const answer = getOutputText(result);
+    const outputText = getOutputText(result);
+    let structured;
+
+    try {
+      structured = parseAssistantJson(outputText);
+    } catch {
+      structured = { answer: outputText, recommendations: [] };
+    }
+
+    const catalogBySku = new Map(
+      context.products.map((product) => [String(product.sku).toUpperCase(), product]),
+    );
+    const allowedPaths = new Set(["/products", "/inventory", "/pos", "/product-finder"]);
+    const recommendations = (Array.isArray(structured.recommendations)
+      ? structured.recommendations
+      : []
+    )
+      .map((recommendation) => {
+        const product = catalogBySku.get(String(recommendation.sku || "").toUpperCase());
+        if (!product || !allowedPaths.has(recommendation.actionPath)) return null;
+
+        return {
+          product: product.product,
+          sku: product.sku,
+          category: product.category,
+          brand: product.brand,
+          price: product.price,
+          unit: product.unit,
+          stock: product.stock,
+          reason: String(recommendation.reason || "Recommended for your request."),
+          actionPath: recommendation.actionPath,
+          actionLabel: String(recommendation.actionLabel || "Open Products"),
+        };
+      })
+      .filter(Boolean);
+
+    const answer = String(structured.answer || outputText || "").trim();
 
     if (!answer) {
       return res.status(502).json({
@@ -213,6 +291,7 @@ const askAssistant = async (req, res) => {
 
     res.json({
       answer,
+      recommendations,
       scope: context.accessScope,
       generatedAt: new Date().toISOString(),
     });

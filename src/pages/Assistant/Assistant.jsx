@@ -1,4 +1,5 @@
 import {
+  ArrowRightOutlined,
   BulbOutlined,
   ClearOutlined,
   RobotOutlined,
@@ -9,6 +10,7 @@ import {
 } from "@ant-design/icons";
 import { Alert, Button, Input, Spin } from "antd";
 import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 import api from "../../services/api";
 import "./Assistant.css";
@@ -21,6 +23,7 @@ const quickPrompts = [
 ];
 
 const Assistant = () => {
+  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState([
     { role: "assistant", content: "Hi! I'm your Hardware Store Bolt. Ask me about sales, stock, products, or branch performance." },
@@ -50,7 +53,7 @@ const Assistant = () => {
         question: cleanQuestion,
         messages: nextMessages.slice(-8),
       });
-      setMessages((current) => [...current, { role: "assistant", content: response.data.answer }]);
+      setMessages((current) => [...current, { role: "assistant", content: response.data.answer, recommendations: response.data.recommendations || [] }]);
     } catch (requestError) {
       setError(requestError.response?.data?.message || "I could not connect to the assistant. Please try again.");
     } finally {
@@ -86,6 +89,36 @@ const Assistant = () => {
               <div className={"assistant-message assistant-message-" + message.role} key={message.role + "-" + index}>
                 {message.role === "assistant" && <div className="assistant-message-avatar"><RobotOutlined /></div>}
                 <div className="assistant-message-bubble">{message.content}</div>
+                {message.role === "assistant" && message.recommendations?.length > 0 && (
+                  <div className="assistant-recommendations">
+                    <div className="assistant-recommendations-title">Recommended for this</div>
+                    {message.recommendations.map((item) => (
+                      <article className="assistant-recommendation-card" key={item.sku}>
+                        <div className="assistant-recommendation-icon"><span>+</span></div>
+                        <div className="assistant-recommendation-body">
+                          <strong>{item.product}</strong>
+                          <span>{item.brand} - {item.sku}</span>
+                          <small>{item.reason}</small>
+                          <div className="assistant-recommendation-footer">
+                            <b>PHP {Number(item.price || 0).toLocaleString()}</b>
+                            <span>{item.stock > 0 ? item.stock + " available" : "Check availability"}</span>
+                          </div>
+                          <Button
+                            type="link"
+                            size="small"
+                            icon={<ArrowRightOutlined />}
+                            onClick={() => {
+                              navigate(item.actionPath);
+                              setOpen(false);
+                            }}
+                          >
+                            {item.actionLabel}
+                          </Button>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                )}
               </div>
             ))}
             {loading && (
