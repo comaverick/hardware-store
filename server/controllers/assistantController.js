@@ -54,6 +54,22 @@ const getManilaDateKey = (value) => new Intl.DateTimeFormat("en-CA", {
   day: "2-digit",
 }).format(new Date(value));
 
+const summarizeSales = (sales, dateOrRange) => {
+  const summary = {
+    date: typeof dateOrRange === "string" ? dateOrRange : undefined,
+    transactionCount: sales.length,
+    totalSales: sales.reduce((sum, sale) => sum + (sale.totalAmount || 0), 0),
+    byBranch: {},
+  };
+
+  sales.forEach((sale) => {
+    const branchName = sale.branch?.name || "Unknown branch";
+    summary.byBranch[branchName] =
+      (summary.byBranch[branchName] || 0) + (sale.totalAmount || 0);
+  });
+
+  return summary;
+};
 const buildScope = (req) => {
   const isPrivileged = privilegedRoles.includes(req.user?.role);
   const branchFilter =
@@ -162,18 +178,71 @@ const getAssistantContext = async (req) => {
   });
 
   const todayKey = getManilaDateKey(new Date());
+  const manilaToday = new Date(todayKey + "T00:00:00+08:00");
+  const yesterdayKey = getManilaDateKey(new Date(manilaToday.getTime() - 86400000));
+  const weekday = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Manila",
+    weekday: "short",
+  }).format(manilaToday);
+  const weekdayIndex = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(weekday);
+  const weekStart = new Date(manilaToday.getTime() - Math.max(weekdayIndex, 0) * 86400000);
+  const weekStartKey = getManilaDateKey(weekStart);
+
   const todaySales = sales.filter((sale) => getManilaDateKey(sale.createdAt) === todayKey);
-  const salesToday = {
-    date: todayKey,
-    transactionCount: todaySales.length,
-    totalSales: todaySales.reduce((sum, sale) => sum + (sale.totalAmount || 0), 0),
-    byBranch: {},
-  };
-  todaySales.forEach((sale) => {
-    const branchName = sale.branch?.name || "Unknown branch";
-    salesToday.byBranch[branchName] = (salesToday.byBranch[branchName] || 0) + (sale.totalAmount || 0);
+  const yesterdaySales = sales.filter((sale) => getManilaDateKey(sale.createdAt) === yesterdayKey);
+  const thisWeekSales = sales.filter((sale) => {
+    const dateKey = getManilaDateKey(sale.createdAt);
+    return dateKey >= weekStartKey && dateKey <= todayKey;
   });
 
+  const salesToday = summarizeSales(todaySales, todayKey);
+  const salesYesterday = summarizeSales(yesterdaySales, yesterdayKey);
+  const salesThisWeek = summarizeSales(thisWeekSales, {
+    start: weekStartKey,
+    end: todayKey,
+  });
+
+  const salesByDate = {};
+  const cashierPerformance = {};
+
+  sales.forEach((sale) => {
+    const dateKey = getManilaDateKey(sale.createdAt);
+    const cashierName = sale.cashier?.name || "Unknown cashier";
+
+    if (!salesByDate[dateKey]) {
+      salesByDate[dateKey] = {
+        date: dateKey,
+        transactionCount: 0,
+        totalSales: 0,
+        byCashier: {},
+      };
+    }
+
+    salesByDate[dateKey].transactionCount += 1;
+    salesByDate[dateKey].totalSales += sale.totalAmount || 0;
+    salesByDate[dateKey].byCashier[cashierName] =
+      (salesByDate[dateKey].byCashier[cashierName] || 0) + (sale.totalAmount || 0);
+
+    if (!cashierPerformance[cashierName]) {
+      cashierPerformance[cashierName] = {
+        cashier: cashierName,
+        transactionCount: 0,
+        totalSales: 0,
+        unitsSold: 0,
+      };
+    }
+
+    cashierPerformance[cashierName].transactionCount += 1;
+    cashierPerformance[cashierName].totalSales += sale.totalAmount || 0;
+    cashierPerformance[cashierName].unitsSold += (sale.items || []).reduce(
+      (sum, item) => sum + (item.quantity || 0),
+      0,
+    );
+  });
+
+  const cashierLeaderboard = Object.values(cashierPerformance).sort(
+    (a, b) => b.totalSales - a.totalSales,
+  );
   const lowStock = stockRows
     .filter((row) => row.available <= row.reorderLevel)
     .sort((a, b) => a.available - b.available)
@@ -191,6 +260,10 @@ const getAssistantContext = async (req) => {
     currentDateManila: todayKey,
     products: productCatalog.slice(0, 300),
     salesToday,
+    salesYesterday,
+    salesThisWeek,
+    salesByDate,
+    cashierLeaderboard,
     lowStock,
     salesLast30Days: salesSummary,
   };
@@ -228,6 +301,8 @@ const askAssistant = async (req, res) => {
       "You are Hardware Store Bolt, a concise and practical assistant inside a hardware-store management system.",
       "Answer only from the supplied live store context. If the context does not contain the answer, say that you do not have enough data.",
       "For questions about today, today's sales, or sales so far today, use the salesToday object and currentDateManila. Do not substitute the last 30 days summary.",
+      "For yesterday use salesYesterday. For this week or weekly sales use salesThisWeek. These summaries are already calculated in Manila time; do not say data is unavailable when the relevant object is present, including when its totals are zero.",
+      "For custom date ranges such as today until last Friday, use the daily salesByDate object and include only dates in the requested range. For questions about who sold the most, use cashierLeaderboard; rank by totalSales unless the user asks for transactions or units sold. Follow-up questions should use the conversation context plus these live summaries.",
       "Never invent stock, sales, prices, branches, employees, or transactions.",
       "Use Philippine peso formatting such as PHP 1,250. Keep answers easy to scan with short paragraphs or bullets.",
       "The assistant is read-only. Never claim that you created, deleted, edited, reserved, refunded, or reordered anything.",
