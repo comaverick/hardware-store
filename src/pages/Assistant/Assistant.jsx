@@ -56,7 +56,7 @@ const Assistant = () => {
         question: cleanQuestion,
         messages: nextMessages.slice(-8).map(({ role, content }) => ({ role, content })),
       });
-      setMessages((current) => [...current, { role: "assistant", content: response.data.answer, recommendations: response.data.recommendations || [] }]);
+      setMessages((current) => [...current, { role: "assistant", content: response.data.answer, recommendations: response.data.recommendations || [], action: response.data.action || null }]);
       if ((response.data.recommendations || []).length > 0) setExpanded(true);
     } catch (requestError) {
       setError(requestError.response?.data?.message || "I could not connect to the assistant. Please try again.");

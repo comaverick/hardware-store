@@ -22,9 +22,11 @@ const parseAssistantJson = (text) => {
 const assistantResponseSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["answer", "recommendations"],
+  required: ["answer", "recommendations", "actionPath", "actionLabel"],
   properties: {
     answer: { type: "string" },
+    actionPath: { type: "string", enum: ["", "/products", "/inventory", "/pos", "/product-finder"] },
+    actionLabel: { type: "string" },
     recommendations: {
       type: "array",
       maxItems: 6,
@@ -72,7 +74,7 @@ const getAssistantContext = async (req) => {
       .lean(),
     Product.find({ isActive: true })
       .populate("category", "name")
-      .select("name sku brand category sellingPrice unit reorderLevel")
+      .select("name sku barcode brand category sellingPrice unit reorderLevel")
       .lean(),
     Sale.find({
       ...saleFilter,
@@ -207,7 +209,9 @@ const askAssistant = async (req, res) => {
       "Use Philippine peso formatting such as PHP 1,250. Keep answers easy to scan with short paragraphs or bullets.",
       "The assistant is read-only. Never claim that you created, deleted, edited, reserved, refunded, or reordered anything.",
       "Respect the user's access scope. Do not reveal data outside the supplied scope.",
-      "For repair or shopping questions, return up to 6 useful confirmed products from the catalog as recommendations. Use each product SKU exactly as shown in the context. Set actionPath to /products for browsing, /inventory for stock details, /pos for selling, or /product-finder for visual identification. Never recommend a product SKU that is not in the context.",
+      "For repair or shopping questions, return up to 6 useful confirmed products from the catalog as recommendations. Use each product SKU exactly as shown in the context. Never recommend a product SKU that is not in the context.",
+      "If the user asks what an unknown physical item is, says a customer brought in an item, or asks to identify an item without an exact SKU/barcode/product name, return an empty recommendations array, set actionPath to /product-finder, set actionLabel to Use AI Product Finder, and tell them to scan or photograph the item.",
+      "If the user provides an exact SKU, barcode, or exact catalog product name, answer using that item and its real stock. For identification questions, do not show unrelated catalog products.",
       "If the repair or project also needs an item that is not in the catalog, say so clearly under a separate Not in our catalog note. Do not make it look like store stock, and say that it must be sourced elsewhere or added by a manager.",
       "Return JSON matching the response schema. Keep the answer to 1 to 3 short sentences, then let the cards provide the details. Be practical and action-oriented: recommend the best next step instead of giving a long explanation. Keep each recommendation reason to one short sentence.",
       "LIVE STORE CONTEXT:\n" + JSON.stringify(context),
@@ -283,6 +287,17 @@ const askAssistant = async (req, res) => {
       })
       .filter(Boolean);
 
+    const identificationQuestion = /what is this|identify|brought in|product identifier|unknown item|what item/i.test(question);
+    const hasExactCatalogMatch = context.products.some((product) => {
+      const query = question.toLowerCase();
+      return [product.sku, product.barcode, product.product].filter(Boolean).some((value) => query.includes(String(value).toLowerCase()));
+    });
+    const actionPath = identificationQuestion && !hasExactCatalogMatch
+      ? "/product-finder"
+      : (allowedPaths.has(structured.actionPath) ? structured.actionPath : "");
+    const actionLabel = identificationQuestion && !hasExactCatalogMatch
+      ? "Use AI Product Finder"
+      : String(structured.actionLabel || "");
     const answer = String(structured.answer || outputText || "").trim();
 
     if (!answer) {
