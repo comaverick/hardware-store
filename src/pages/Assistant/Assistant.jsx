@@ -2,6 +2,8 @@ import {
   ArrowRightOutlined,
   BulbOutlined,
   ClearOutlined,
+  ExpandOutlined,
+  CompressOutlined,
   RobotOutlined,
   SendOutlined,
   ShopOutlined,
@@ -25,6 +27,7 @@ const quickPrompts = [
 const Assistant = () => {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const [messages, setMessages] = useState([
     { role: "assistant", content: "Hi! I'm your Hardware Store Bolt. Ask me about sales, stock, products, or branch performance." },
   ]);
@@ -54,6 +57,7 @@ const Assistant = () => {
         messages: nextMessages.slice(-8),
       });
       setMessages((current) => [...current, { role: "assistant", content: response.data.answer, recommendations: response.data.recommendations || [] }]);
+      if ((response.data.recommendations || []).length > 0) setExpanded(true);
     } catch (requestError) {
       setError(requestError.response?.data?.message || "I could not connect to the assistant. Please try again.");
     } finally {
@@ -69,7 +73,7 @@ const Assistant = () => {
   return (
     <>
       {open && (
-        <section className="assistant-float-panel" aria-label="Hardware Store Bolt">
+        <section className={"assistant-float-panel" + (expanded ? " assistant-float-panel-expanded" : "")} aria-label="Hardware Store Bolt">
           <div className="assistant-float-header">
             <div className="assistant-agent">
               <div className="assistant-agent-avatar"><RobotOutlined /></div>
@@ -80,6 +84,7 @@ const Assistant = () => {
             </div>
             <div className="assistant-float-actions">
               <Button type="text" icon={<ClearOutlined />} onClick={clearConversation} disabled={loading} aria-label="Clear conversation" />
+              <Button type="text" icon={expanded ? <CompressOutlined /> : <ExpandOutlined />} onClick={() => setExpanded((current) => !current)} aria-label={expanded ? "Shrink assistant" : "Expand assistant"} />
               <Button type="text" onClick={() => setOpen(false)} aria-label="Close assistant">X</Button>
             </div>
           </div>

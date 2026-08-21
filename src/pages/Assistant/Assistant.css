@@ -364,3 +364,17 @@
     margin-left: 0;
   }
 }
+
+.assistant-float-panel-expanded {
+  width: min(560px, calc(100vw - 32px));
+  height: min(780px, calc(100vh - 105px));
+}
+.assistant-float-panel-expanded .assistant-float-messages {
+  padding: 22px 18px;
+}
+@media (max-width: 560px) {
+  .assistant-float-panel-expanded {
+    width: calc(100vw - 32px);
+    height: calc(100vh - 95px);
+  }
+}
