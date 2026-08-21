@@ -91,7 +91,7 @@ const Assistant = () => {
 
           <div className="assistant-float-messages">
             {messages.map((message, index) => (
-              <div className={"assistant-message assistant-message-" + message.role} key={message.role + "-" + index}>
+              <div className={"assistant-message assistant-message-" + message.role + (message.recommendations?.length ? " assistant-message-with-recommendations" : "")} key={message.role + "-" + index}>
                 {message.role === "assistant" && <div className="assistant-message-avatar"><RobotOutlined /></div>}
                 <div className="assistant-message-bubble">{message.content}</div>
                 {message.role === "assistant" && message.recommendations?.length > 0 && (
@@ -113,7 +113,9 @@ const Assistant = () => {
                             size="small"
                             icon={<ArrowRightOutlined />}
                             onClick={() => {
-                              navigate(item.actionPath);
+                              const needsProductFocus = ["/products", "/inventory"].includes(item.actionPath);
+                              const destination = needsProductFocus ? item.actionPath + "?product=" + encodeURIComponent(item.sku) : item.actionPath;
+                              navigate(destination);
                               setOpen(false);
                             }}
                           >

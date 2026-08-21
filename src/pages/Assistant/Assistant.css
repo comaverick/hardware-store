@@ -378,3 +378,23 @@
     height: calc(100vh - 95px);
   }
 }
+
+.assistant-message-with-recommendations {
+  align-items: flex-start;
+  max-width: 100%;
+  flex-direction: column;
+}
+
+.assistant-message-with-recommendations .assistant-message-bubble {
+  margin-left: 35px;
+}
+
+.assistant-message-with-recommendations .assistant-recommendations {
+  width: calc(100% - 35px);
+  max-width: none;
+}
+
+.assistant-focused-row > td {
+  background: #fff8d9 !important;
+  transition: background .3s ease;
+}

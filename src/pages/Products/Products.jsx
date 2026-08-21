@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 
 import {
   AppstoreOutlined,
@@ -42,6 +43,8 @@ const Products = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
+  const [searchParams] = useSearchParams();
+  const focusedSku = searchParams.get("product") || "";
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
 
@@ -86,6 +89,10 @@ const Products = () => {
     fetchData();
   }, []);
 
+  useEffect(() => {
+    if (focusedSku) setSearch(focusedSku);
+  }, [focusedSku]);
+
   // =========================
   // GET PRODUCT STOCK
   // =========================
@@ -116,6 +123,16 @@ const Products = () => {
       return matchesSearch && matchesCategory;
     });
   }, [products, search, categoryFilter]);
+
+  useEffect(() => {
+    if (loading || !focusedSku || !filteredProducts.length) return undefined;
+    const timer = window.setTimeout(() => {
+      document.querySelector(".assistant-focused-row")?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 150);
+    return () => window.clearTimeout(timer);
+  }, [loading, filteredProducts, focusedSku]);
+
+
 
   // =========================
   // ADD PRODUCT
@@ -321,6 +338,7 @@ const Products = () => {
           columns={columns}
           dataSource={filteredProducts}
           rowKey="_id"
+          rowClassName={(record) => (record.sku === focusedSku ? "assistant-focused-row" : "")}
           loading={loading}
           pagination={{
             pageSize: 10,

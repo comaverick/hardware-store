@@ -208,7 +208,7 @@ const askAssistant = async (req, res) => {
       "Respect the user's access scope. Do not reveal data outside the supplied scope.",
       "For repair or shopping questions, return up to 6 useful confirmed products from the catalog as recommendations. Use each product SKU exactly as shown in the context. Set actionPath to /products for browsing, /inventory for stock details, /pos for selling, or /product-finder for visual identification. Never recommend a product SKU that is not in the context.",
       "If the repair or project also needs an item that is not in the catalog, say so clearly under a separate Not in our catalog note. Do not make it look like store stock, and say that it must be sourced elsewhere or added by a manager.",
-      "Return JSON matching the response schema. Keep the answer conversational and explain what the customer needs.",
+      "Return JSON matching the response schema. Keep the answer to 1 to 3 short sentences, then let the cards provide the details. Be practical and action-oriented: recommend the best next step instead of giving a long explanation. Keep each recommendation reason to one short sentence.",
       "LIVE STORE CONTEXT:\n" + JSON.stringify(context),
     ].join("\n\n");
 
