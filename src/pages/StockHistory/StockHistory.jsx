@@ -26,7 +26,7 @@ import api from "../../services/api";
 
 import "./StockHistory.css";
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 
 const StockHistory = () => {
   const [transactions, setTransactions] = useState([]);

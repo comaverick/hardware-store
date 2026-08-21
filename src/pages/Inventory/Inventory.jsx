@@ -33,7 +33,7 @@ import api from "../../services/api";
 
 import "./Inventory.css";
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 
 const Inventory = () => {
   const [inventory, setInventory] = useState([]);
@@ -422,7 +422,7 @@ const Inventory = () => {
       dataIndex: "reason",
       key: "reason",
 
-      render: (value) => value || "Ã¢â‚¬â€",
+      render: (value) => value || "ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â",
     },
 
     {
@@ -430,7 +430,7 @@ const Inventory = () => {
       dataIndex: "reference",
       key: "reference",
 
-      render: (value) => value || "Ã¢â‚¬â€",
+      render: (value) => value || "ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â",
     },
   ];
 

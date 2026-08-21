@@ -32,7 +32,7 @@ import api from "../../services/api";
 
 import "./Reservations.css";
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 
 const Reservations = () => {
   const [inventory, setInventory] = useState([]);
