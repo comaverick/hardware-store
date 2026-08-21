@@ -573,8 +573,7 @@ const Dashboard = () => {
               <Skeleton active paragraph={{ rows: 7 }} title={{ width: "45%" }} />
             </Card>
           </Col>
-        </Row>
-      </div>
+        </Row>      </div>
     );
   }
 

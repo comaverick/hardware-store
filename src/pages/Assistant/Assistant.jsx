@@ -54,7 +54,7 @@ const Assistant = () => {
     try {
       const response = await api.post("/assistant", {
         question: cleanQuestion,
-        messages: nextMessages.slice(-8),
+        messages: nextMessages.slice(-8).map(({ role, content }) => ({ role, content })),
       });
       setMessages((current) => [...current, { role: "assistant", content: response.data.answer, recommendations: response.data.recommendations || [] }]);
       if ((response.data.recommendations || []).length > 0) setExpanded(true);

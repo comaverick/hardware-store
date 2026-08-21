@@ -183,6 +183,7 @@ const askAssistant = async (req, res) => {
               typeof message.content === "string",
           )
           .slice(-8)
+          .map(({ role, content }) => ({ role, content }))
       : [];
 
     if (!question || question.length > 1000) {
