@@ -313,7 +313,7 @@ const StockHistory = () => {
         <div className="stock-change">
           <Text type="secondary">{transaction.previousQuantity}</Text>
 
-          <span>→</span>
+          <span aria-hidden="true">&#8594;</span>
 
           <strong>{transaction.newQuantity}</strong>
         </div>
@@ -324,7 +324,7 @@ const StockHistory = () => {
       title: "Reason",
       key: "reason",
 
-      render: (_, transaction) => <Text>{transaction.reason || "—"}</Text>,
+      render: (_, transaction) => <Text>{transaction.reason || "N/A"}</Text>,
     },
 
     {
@@ -335,7 +335,7 @@ const StockHistory = () => {
         transaction.reference ? (
           <Tag>{transaction.reference}</Tag>
         ) : (
-          <Text type="secondary">—</Text>
+          <Text type="secondary">N/A</Text>
         ),
     },
 
@@ -360,13 +360,7 @@ const StockHistory = () => {
       ========================= */}
 
       <div className="stock-history-header">
-        <div>
-          <Title level={2}>Stock History</Title>
 
-          <Text type="secondary">
-            Complete audit trail of inventory movements
-          </Text>
-        </div>
 
         <Tag icon={<HistoryOutlined />} className="history-count-tag">
           {transactions.length} Transactions
@@ -419,8 +413,8 @@ const StockHistory = () => {
           FILTERS
       ========================= */}
 
-      <Card className="history-filter-card">
-        <Row gutter={[12, 12]}>
+      <Card className="history-filter-card" title="Filter stock history">
+        <Row gutter={[12, 12]} align="middle">
           <Col xs={24} md={10} lg={12}>
             <Input
               size="large"
@@ -480,18 +474,7 @@ const StockHistory = () => {
           HISTORY TABLE
       ========================= */}
 
-      <Card className="history-table-card">
-        <div className="history-table-header">
-          <div>
-            <Title level={5}>Inventory Movements</Title>
-
-            <Text type="secondary">
-              Showing {filteredTransactions.length} of {transactions.length}{" "}
-              transactions
-            </Text>
-          </div>
-        </div>
-
+      <Card className="history-table-card" title="Inventory movements">
         <Table
           columns={columns}
           dataSource={filteredTransactions}
