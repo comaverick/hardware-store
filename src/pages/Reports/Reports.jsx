@@ -13,8 +13,8 @@ import {
   message,
 } from "antd";
 import {
-  Area,
-  AreaChart,
+  Bar,
+  BarChart,
   CartesianGrid,
   ResponsiveContainer,
   Tooltip,
@@ -26,7 +26,7 @@ import api from "../../services/api";
 
 import "./Reports.css";
 
-const { Title, Text } = Typography;
+const { Text } = Typography
 
 const localDateKey = (value) => {
   const date = new Date(value);
@@ -77,29 +77,56 @@ const Reports = () => {
   );
 
   const chartData = useMemo(() => {
-    const days =
-      period === "TODAY" ? 1 : period === "MONTH" ? new Date().getDate() : 7;
+    if (period === "TODAY") {
+      const todayStart = new Date(cutoff);
+      const yesterdayStart = new Date(todayStart);
+      yesterdayStart.setDate(yesterdayStart.getDate() - 1);
+
+      return Array.from({ length: 24 }, (_, hour) => {
+        const currentStart = new Date(todayStart);
+        currentStart.setHours(hour, 0, 0, 0);
+        const currentEnd = new Date(currentStart);
+        currentEnd.setHours(hour + 1, 0, 0, 0);
+        const previousStart = new Date(yesterdayStart);
+        previousStart.setHours(hour, 0, 0, 0);
+        const previousEnd = new Date(previousStart);
+        previousEnd.setHours(hour + 1, 0, 0, 0);
+        const currentSales = periodSales.filter((sale) => {
+          const date = new Date(sale.createdAt);
+          return date >= currentStart && date < currentEnd;
+        });
+        const previousSales = completedSales.filter((sale) => {
+          const date = new Date(sale.createdAt);
+          return date >= previousStart && date < previousEnd;
+        });
+        return {
+          label: currentStart.toLocaleTimeString("en-US", { hour: "numeric" }),
+          revenue: currentSales.reduce((sum, sale) => sum + Number(sale.totalAmount || 0), 0),
+          previousRevenue: previousSales.reduce((sum, sale) => sum + Number(sale.totalAmount || 0), 0),
+          transactions: currentSales.length,
+        };
+      });
+    }
+
+    const days = period === "MONTH" ? new Date().getDate() : 7;
     const start = new Date(cutoff);
     return Array.from({ length: days }, (_, index) => {
       const date = new Date(start);
       date.setDate(start.getDate() + index);
       const key = localDateKey(date);
-      const daily = periodSales.filter(
-        (sale) => localDateKey(sale.createdAt) === key,
-      );
+      const previousDate = new Date(date);
+      previousDate.setDate(previousDate.getDate() - (period === "MONTH" ? 30 : 7));
+      const previousKey = localDateKey(previousDate);
+      const daily = periodSales.filter((sale) => localDateKey(sale.createdAt) === key);
+      const previousDaily = completedSales.filter((sale) => localDateKey(sale.createdAt) === previousKey);
       return {
-        label:
-          period === "MONTH"
-            ? date.getDate()
-            : date.toLocaleDateString("en-US", { weekday: "short" }),
-        revenue: daily.reduce(
-          (sum, sale) => sum + Number(sale.totalAmount || 0),
-          0,
-        ),
+        label: period === "MONTH" ? date.getDate() : date.toLocaleDateString("en-US", { weekday: "short" }),
+        revenue: daily.reduce((sum, sale) => sum + Number(sale.totalAmount || 0), 0),
+        previousRevenue: previousDaily.reduce((sum, sale) => sum + Number(sale.totalAmount || 0), 0),
         transactions: daily.length,
       };
     });
-  }, [cutoff, period, periodSales]);
+  }, [completedSales, cutoff, period, periodSales]);
 
   const branchData = useMemo(() => {
     const map = new Map();
@@ -146,13 +173,7 @@ const Reports = () => {
   return (
     <div className="reports-page">
       <div className="reports-header">
-        <div>
-          <Text className="reports-eyebrow">BUSINESS INSIGHTS</Text>
-          <Title level={1}>Reports</Title>
-          <Text type="secondary">
-            A simple view of sales performance and inventory health.
-          </Text>
-        </div>
+
         <Select
           value={period}
           onChange={setPeriod}
@@ -169,7 +190,7 @@ const Reports = () => {
           <Card>
             <Statistic
               title="Revenue"
-              prefix="₱"
+              prefix={"\u20B1"}
               value={revenue}
               precision={2}
             />
@@ -196,24 +217,8 @@ const Reports = () => {
           <Card title="Sales trend" className="reports-card">
             {periodSales.length ? (
               <ResponsiveContainer width="100%" height={300}>
-                <AreaChart data={chartData}>
-                  <defs>
-                    <linearGradient
-                      id="reportRevenue"
-                      x1="0"
-                      y1="0"
-                      x2="0"
-                      y2="1"
-                    >
-                      <stop
-                        offset="5%"
-                        stopColor="#007aff"
-                        stopOpacity={0.28}
-                      />
-                      <stop offset="95%" stopColor="#007aff" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid
+                <BarChart data={chartData} barGap={-18}>
+<CartesianGrid
                     strokeDasharray="3 3"
                     vertical={false}
                     stroke="#e5e5ea"
@@ -222,22 +227,28 @@ const Reports = () => {
                   <YAxis
                     tickLine={false}
                     axisLine={false}
-                    tickFormatter={(value) => `₱${value}`}
+                    tickFormatter={(value) => `\u20B1${value}`}
                   />
                   <Tooltip
                     formatter={(value) => [
-                      `₱${Number(value).toLocaleString("en-PH", { minimumFractionDigits: 2 })}`,
+                      `\u20B1${Number(value).toLocaleString("en-PH", { minimumFractionDigits: 2 })}`,
                       "Revenue",
                     ]}
                   />
-                  <Area
-                    type="monotone"
-                    dataKey="revenue"
-                    stroke="#007aff"
-                    strokeWidth={3}
-                    fill="url(#reportRevenue)"
+                  <Bar
+                    dataKey="previousRevenue"
+                    name="Previous period"
+                    fill="#eeeeee"
+                    radius={[4, 4, 0, 0]}
+                    maxBarSize={32}
                   />
-                </AreaChart>
+                  <Bar
+                    dataKey="revenue"
+                    fill="#111111"
+                    radius={[4, 4, 0, 0]}
+                    maxBarSize={32}
+                  />
+                </BarChart>
               </ResponsiveContainer>
             ) : (
               <Empty description="No completed sales in this period." />
@@ -259,7 +270,7 @@ const Reports = () => {
                     </Text>
                   </div>
                   <strong>
-                    ₱
+                    {"\u20B1"}
                     {item.revenue.toLocaleString("en-PH", {
                       minimumFractionDigits: 2,
                     })}
