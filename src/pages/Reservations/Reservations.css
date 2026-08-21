@@ -68,3 +68,92 @@
     flex-direction: column;
   }
 }
+
+/* Dashboard theme */
+.reservations-page {
+  width: 100%;
+  max-width: none;
+  color: #1d1d1f;
+}
+
+.reservations-page .reservations-header {
+  align-items: center;
+  min-height: 44px;
+  margin-bottom: 18px;
+}
+
+.reservations-page .reservations-stats .ant-card,
+.reservations-page .reservations-panel {
+  overflow: hidden;
+  border: 1px solid #e5e5e5;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: none;
+}
+
+.reservations-page .reservations-stats .ant-card {
+  min-height: 112px;
+}
+
+.reservations-page .reservations-stats .ant-card-body {
+  padding: 18px;
+}
+
+.reservations-page .reservations-panel {
+  margin-bottom: 20px;
+}
+
+.reservations-page .ant-card-head {
+  min-height: 46px;
+  padding: 0 18px;
+  border-bottom: 1px solid #e5e5e5;
+  background: #f5f5f5;
+}
+
+.reservations-page .ant-card-head-title {
+  color: #262626;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.1px;
+  text-transform: uppercase;
+}
+
+.reservations-page .reservations-panel .ant-card-body {
+  padding: 18px;
+}
+
+.reservations-page .reservations-panel .ant-table-thead > tr > th {
+  color: #555;
+  background: #fafafa;
+  border-bottom: 1px solid #e5e5e5;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+
+.reservations-page .reservations-panel .ant-table-tbody > tr:hover > td {
+  background: #fafafa;
+}
+
+.reservations-page .reservations-filters {
+  margin-bottom: 16px;
+}
+
+.reservations-page .reservation-status-filter {
+  margin-bottom: 16px;
+}
+
+@media (max-width: 768px) {
+  .reservations-page .reservations-header {
+    align-items: stretch;
+  }
+
+  .reservations-page .reservations-header .ant-btn {
+    width: 100%;
+  }
+
+  .reservations-page .reservations-panel .ant-card-body {
+    padding: 14px;
+  }
+}

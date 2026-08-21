@@ -338,12 +338,7 @@ const Reservations = () => {
   return (
     <div className="reservations-page">
       <div className="reservations-header">
-        <div>
-          <Title level={2}>Branch Availability</Title>
-          <Text type="secondary">
-            Find stock across branches and hold products for pickup.
-          </Text>
-        </div>
+
         <Button
           type="primary"
           icon={<PlusOutlined />}
