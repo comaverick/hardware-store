@@ -3,12 +3,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   BarcodeOutlined,
   DeleteOutlined,
+  LeftOutlined,
   HistoryOutlined,
   MinusOutlined,
   PlusOutlined,
   PrinterOutlined,
   SearchOutlined,
   ShoppingCartOutlined,
+  RightOutlined,
 } from "@ant-design/icons";
 
 import {
@@ -77,6 +79,7 @@ const POS = () => {
 
   const [search, setSearch] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("All");
+  const [productPage, setProductPage] = useState(0);
   const [recentProductIds, setRecentProductIds] = useState([]);
   const [selectedCartProductId, setSelectedCartProductId] = useState(null);
 
@@ -402,8 +405,27 @@ const POS = () => {
           (selectedCategory === "All" || category === selectedCategory)
         );
       })
-      .slice(0, 30);
-  }, [products, search, selectedCategory]);
+      .sort((first, second) => {
+        const firstStock = Math.max((inventoryMap[first._id]?.quantity || 0) - (inventoryMap[first._id]?.reservedQuantity || 0), 0);
+        const secondStock = Math.max((inventoryMap[second._id]?.quantity || 0) - (inventoryMap[second._id]?.reservedQuantity || 0), 0);
+        return Number(secondStock > 0) - Number(firstStock > 0);
+      });
+  }, [products, search, selectedCategory, inventoryMap]);
+
+  const productPageSize = 30;
+  const productPageCount = Math.max(Math.ceil(filteredProducts.length / productPageSize), 1);
+  const visibleProducts = filteredProducts.slice(
+    productPage * productPageSize,
+    (productPage + 1) * productPageSize,
+  );
+
+  useEffect(() => {
+    setProductPage(0);
+  }, [search, selectedCategory, selectedBranch]);
+
+  useEffect(() => {
+    if (productPage >= productPageCount) setProductPage(Math.max(productPageCount - 1, 0));
+  }, [productPage, productPageCount]);
 
   // =========================
   // ADD TO CART
@@ -1153,14 +1175,16 @@ const POS = () => {
 
             <div className="pos-product-count">
               <Text type="secondary">
-                {filteredProducts.length} products shown
+                {filteredProducts.length === 0
+                  ? "0 products"
+                  : `Showing ${productPage * productPageSize + 1}-${Math.min((productPage + 1) * productPageSize, filteredProducts.length)} of ${filteredProducts.length} products`}
               </Text>
 
               {inventoryLoading && <Spin size="small" />}
             </div>
 
             <div className="pos-products-grid">
-              {filteredProducts.map((product) => {
+              {visibleProducts.map((product) => {
                 const stock = inventoryMap[product._id]?.quantity || 0;
 
                 const inCart = cart.find(
@@ -1226,6 +1250,27 @@ const POS = () => {
                 );
               })}
             </div>
+
+            {filteredProducts.length > productPageSize && (
+              <div className="pos-product-pagination">
+                <Button
+                  icon={<LeftOutlined />}
+                  onClick={() => setProductPage((page) => Math.max(page - 1, 0))}
+                  disabled={productPage === 0}
+                >
+                  Previous
+                </Button>
+                <Text type="secondary">Page {productPage + 1} of {productPageCount}</Text>
+                <Button
+                  icon={<RightOutlined />}
+                  iconPosition="end"
+                  onClick={() => setProductPage((page) => Math.min(page + 1, productPageCount - 1))}
+                  disabled={productPage >= productPageCount - 1}
+                >
+                  Next
+                </Button>
+              </div>
+            )}
 
             {filteredProducts.length === 0 && (
               <Empty description="No products found" className="pos-empty" />

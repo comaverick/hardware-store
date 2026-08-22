@@ -885,6 +885,16 @@
   outline-color: #111111;
 }
 
+.pos-product-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid #eeeeee;
+}
+
 .printer-status {
   border-color: #d8d8d8;
   background: #ffffff;
