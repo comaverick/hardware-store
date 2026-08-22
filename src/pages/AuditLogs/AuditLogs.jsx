@@ -9,6 +9,13 @@ import "./AuditLogs.css";
 const { Text } = Typography;
 
 const formatAction = (value = "") => {
+  const productActions = {
+    "ADD PRODUCT": "Added product",
+    "EDIT PRODUCT": "Edited product",
+    "DELETE PRODUCT": "Deleted product",
+  };
+  if (productActions[value]) return productActions[value];
+
   const [method, ...pathParts] = value.split(" ");
   const path = pathParts.join(" ").replace(/^\/api\//, "").replaceAll("/", " > ").replaceAll("-", " ");
   const resource = path || "system";
@@ -70,7 +77,7 @@ const AuditLogs = () => {
     () =>
       logs.filter((log) => {
         const query = search.trim().toLowerCase();
-        const searchable = [log.action, log.actor?.name, log.actor?.email, log.branch?.code, log.branch?.name, log.statusCode].filter(Boolean).join(" ").toLowerCase();
+        const searchable = [log.action, log.actor?.name, log.actor?.email, log.branch?.code, log.branch?.name, log.metadata?.target?.name, log.metadata?.target?.sku, log.statusCode].filter(Boolean).join(" ").toLowerCase();
         const matchesSearch = !query || searchable.includes(query);
         const matchesAction = actionFilter === "ALL" || log.action === actionFilter;
         const matchesAccount = accountFilter === "ALL" || log.actor?._id === accountFilter;
@@ -92,12 +99,13 @@ const AuditLogs = () => {
 
   const exportLogs = () => {
     const rows = [
-      ["Time", "Account", "Email", "Action", "Branch", "Status Code", "Result"],
+      ["Time", "Account", "Email", "Action", "Target", "Branch", "Status Code", "Result"],
       ...filteredLogs.map((log) => [
         new Date(log.createdAt).toISOString(),
         log.actor?.name || "Unknown account",
         log.actor?.email || "",
         log.action || "",
+        log.metadata?.target?.name || log.metadata?.target?.sku || "",
         log.branch?.code || log.branch?.name || "N/A",
         log.statusCode ?? "",
         Number(log.statusCode) < 400 ? "Success" : "Failed",
@@ -142,6 +150,15 @@ const AuditLogs = () => {
           <Text type="secondary">{value}</Text>
         </div>
       ),
+    },
+    {
+      title: "Target",
+      key: "target",
+      render: (_, log) => {
+        const target = log.metadata?.target;
+        if (!target) return "-";
+        return target.name || target.sku || target.id || "-";
+      },
     },
     {
       title: "Branch",

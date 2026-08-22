@@ -75,6 +75,8 @@ const createProduct = async (req, res) => {
       image,
     });
 
+    req.auditTarget = { id: product._id, name: product.name, sku: product.sku };
+
     res.status(201).json(product);
   } catch (error) {
     res.status(500).json({
@@ -96,6 +98,8 @@ const updateProduct = async (req, res) => {
         message: "Product not found",
       });
     }
+
+    req.auditTarget = { id: product._id, name: product.name, sku: product.sku };
 
     res.status(200).json(product);
   } catch (error) {
@@ -119,6 +123,8 @@ const deleteProduct = async (req, res) => {
         message: "Product not found",
       });
     }
+
+    req.auditTarget = { id: product._id, name: product.name, sku: product.sku };
 
     res.status(200).json({
       message: "Product deactivated successfully",

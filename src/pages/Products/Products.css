@@ -102,6 +102,12 @@
   font-size: 12px;
 }
 
+.product-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
 /* =========================
    ADD PRODUCT MODAL
 ========================= */

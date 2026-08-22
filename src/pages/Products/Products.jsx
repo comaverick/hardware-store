@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 
 import {
   AppstoreOutlined,
+  EditOutlined,
   EyeOutlined,
   PlusOutlined,
   SearchOutlined,
@@ -49,6 +50,7 @@ const Products = () => {
   const [categoryFilter, setCategoryFilter] = useState("all");
 
   const [modalOpen, setModalOpen] = useState(false);
+  const [editingProduct, setEditingProduct] = useState(null);
 
   const [detailsOpen, setDetailsOpen] = useState(false);
 
@@ -138,26 +140,54 @@ const Products = () => {
   // ADD PRODUCT
   // =========================
 
-  const handleAddProduct = async (values) => {
+  const handleSubmitProduct = async (values) => {
     try {
       setSaving(true);
 
-      await api.post("/products", values);
-
-      message.success("Product added successfully.");
+      if (editingProduct) {
+        await api.put(`/products/${editingProduct._id}`, values);
+        message.success("Product updated successfully.");
+      } else {
+        await api.post("/products", values);
+        message.success("Product added successfully.");
+      }
 
       form.resetFields();
 
       setModalOpen(false);
+      setEditingProduct(null);
 
       await fetchData();
     } catch (error) {
-      console.error("Add product error:", error);
+      console.error("Save product error:", error);
 
-      message.error(error.response?.data?.message || "Failed to add product.");
+      message.error(error.response?.data?.message || "Failed to save product.");
     } finally {
       setSaving(false);
     }
+  };
+
+  const openAddProduct = () => {
+    setEditingProduct(null);
+    form.resetFields();
+    setModalOpen(true);
+  };
+
+  const openEditProduct = (product) => {
+    setEditingProduct(product);
+    form.setFieldsValue({
+      name: product.name,
+      sku: product.sku,
+      barcode: product.barcode,
+      brand: product.brand,
+      category: product.category?._id || product.category,
+      description: product.description,
+      costPrice: product.costPrice,
+      sellingPrice: product.sellingPrice,
+      reorderLevel: product.reorderLevel,
+      unit: product.unit,
+    });
+    setModalOpen(true);
   };
 
   // =========================
@@ -254,13 +284,22 @@ const Products = () => {
       key: "action",
 
       render: (_, product) => (
-        <Button
-          type="text"
-          icon={<EyeOutlined />}
-          onClick={() => handleViewProduct(product)}
-        >
-          View
-        </Button>
+        <div className="product-actions">
+          <Button
+            type="text"
+            icon={<EyeOutlined />}
+            onClick={() => handleViewProduct(product)}
+          >
+            View
+          </Button>
+          <Button
+            type="text"
+            icon={<EditOutlined />}
+            onClick={() => openEditProduct(product)}
+          >
+            Edit
+          </Button>
+        </div>
       ),
     },
   ];
@@ -321,7 +360,7 @@ const Products = () => {
               icon={<PlusOutlined />}
               size="large"
               block
-              onClick={() => setModalOpen(true)}
+              onClick={openAddProduct}
             >
               Add Product
             </Button>
@@ -357,12 +396,13 @@ const Products = () => {
       ========================= */}
 
       <Modal
-        title="Add Product"
+          title={editingProduct ? "Edit Product" : "Add Product"}
         open={modalOpen}
         onCancel={() => {
           if (!saving) {
             form.resetFields();
             setModalOpen(false);
+            setEditingProduct(null);
           }
         }}
         footer={null}
@@ -372,7 +412,7 @@ const Products = () => {
         <Form
           form={form}
           layout="vertical"
-          onFinish={handleAddProduct}
+          onFinish={handleSubmitProduct}
           requiredMark="optional"
         >
           <Form.Item
@@ -544,6 +584,7 @@ const Products = () => {
               onClick={() => {
                 form.resetFields();
                 setModalOpen(false);
+                setEditingProduct(null);
               }}
               disabled={saving}
             >
@@ -551,7 +592,7 @@ const Products = () => {
             </Button>
 
             <Button type="primary" htmlType="submit" loading={saving}>
-              Add Product
+              {editingProduct ? "Save Changes" : "Add Product"}
             </Button>
           </div>
         </Form>

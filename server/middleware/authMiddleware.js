@@ -9,6 +9,16 @@ const getRequestBranch = (req) =>
   req.user?.branch?._id ||
   null;
 
+const getAuditAction = (req) => {
+  if (req.baseUrl === "/api/products") {
+    if (req.method === "POST" && req.path === "/") return "ADD PRODUCT";
+    if (req.method === "PUT") return "EDIT PRODUCT";
+    if (req.method === "DELETE") return "DELETE PRODUCT";
+  }
+
+  return `${req.method} ${req.baseUrl}${req.path}`;
+};
+
 const attachAuditLog = (req, res) => {
   if (
     ["GET", "HEAD", "OPTIONS"].includes(req.method) ||
@@ -23,12 +33,17 @@ const attachAuditLog = (req, res) => {
 
     AuditLog.create({
       actor: req.user._id,
-      action: `${req.method} ${req.baseUrl}${req.path}`,
+      action: req.auditAction || getAuditAction(req),
       method: req.method,
       path: `${req.baseUrl}${req.path}`,
       statusCode: res.statusCode,
       branch: getRequestBranch(req),
-      metadata: { bodyKeys, params: req.params, query: req.query },
+      metadata: {
+        bodyKeys,
+        params: req.params,
+        query: req.query,
+        target: req.auditTarget || undefined,
+      },
     }).catch((error) => console.error("Audit log error:", error.message));
   });
 };
