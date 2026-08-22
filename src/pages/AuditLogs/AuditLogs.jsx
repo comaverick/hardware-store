@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { Card, Col, Empty, Input, Row, Select, Spin, Table, Tag, Typography, message } from "antd";
+import { Button, Card, Col, Empty, Input, Row, Select, Space, Spin, Table, Tag, Typography, message } from "antd";
+import { ClearOutlined, DownloadOutlined } from "@ant-design/icons";
 import api from "../../services/api";
 
 import "./AuditLogs.css";
@@ -34,6 +35,7 @@ const AuditLogs = () => {
   const [actionFilter, setActionFilter] = useState("ALL");
   const [accountFilter, setAccountFilter] = useState("ALL");
   const [dateFilter, setDateFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState("ALL");
 
   useEffect(() => {
     api
@@ -73,10 +75,42 @@ const AuditLogs = () => {
         const matchesAction = actionFilter === "ALL" || log.action === actionFilter;
         const matchesAccount = accountFilter === "ALL" || log.actor?._id === accountFilter;
         const matchesDate = !dateFilter || localDateKey(log.createdAt) === dateFilter;
-        return matchesSearch && matchesAction && matchesAccount && matchesDate;
+        const isSuccess = Number(log.statusCode) < 400;
+        const matchesStatus = statusFilter === "ALL" || (statusFilter === "SUCCESS" ? isSuccess : !isSuccess);
+        return matchesSearch && matchesAction && matchesAccount && matchesDate && matchesStatus;
       }),
-    [logs, search, actionFilter, accountFilter, dateFilter],
+    [logs, search, actionFilter, accountFilter, dateFilter, statusFilter],
   );
+
+  const clearFilters = () => {
+    setSearch("");
+    setActionFilter("ALL");
+    setAccountFilter("ALL");
+    setDateFilter("");
+    setStatusFilter("ALL");
+  };
+
+  const exportLogs = () => {
+    const rows = [
+      ["Time", "Account", "Email", "Action", "Branch", "Status Code", "Result"],
+      ...filteredLogs.map((log) => [
+        new Date(log.createdAt).toISOString(),
+        log.actor?.name || "Unknown account",
+        log.actor?.email || "",
+        log.action || "",
+        log.branch?.code || log.branch?.name || "N/A",
+        log.statusCode ?? "",
+        Number(log.statusCode) < 400 ? "Success" : "Failed",
+      ]),
+    ];
+    const csv = rows.map((row) => row.map((value) => `"${String(value ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "audit-logs-export.csv";
+    link.click();
+    URL.revokeObjectURL(url);
+  };
 
   const columns = [
     {
@@ -134,12 +168,15 @@ const AuditLogs = () => {
   return (
     <div className="audit-page">
       <div className="audit-header">
-        <Tag className="audit-count-tag">{logs.length} activity records</Tag>
+        <Space>
+          <Tag className="audit-count-tag">{filteredLogs.length} of {logs.length} activity records</Tag>
+          <Button icon={<DownloadOutlined />} onClick={exportLogs}>Export Logs</Button>
+        </Space>
       </div>
 
       <Card className="audit-filter-card" title="Filter account activity">
         <Row gutter={[12, 12]} align="middle">
-          <Col xs={24} md={6}>
+          <Col xs={24} md={4}>
             <Input
               size="large"
               placeholder="Search activity, account, or branch"
@@ -148,7 +185,7 @@ const AuditLogs = () => {
               allowClear
             />
           </Col>
-          <Col xs={24} md={6}>
+          <Col xs={24} md={4}>
             <Select
               size="large"
               value={actionFilter}
@@ -164,7 +201,7 @@ const AuditLogs = () => {
               ]}
             />
           </Col>
-          <Col xs={24} md={6}>
+          <Col xs={24} md={4}>
             <Select
               size="large"
               value={accountFilter}
@@ -180,7 +217,7 @@ const AuditLogs = () => {
               ]}
             />
           </Col>
-          <Col xs={24} md={6}>
+          <Col xs={24} md={4}>
             <Input
               size="large"
               type="date"
@@ -189,6 +226,24 @@ const AuditLogs = () => {
               aria-label="Filter by date"
               suffix={dateFilter ? <button type="button" className="audit-clear-date" onClick={() => setDateFilter("")}>Clear</button> : null}
             />
+          </Col>
+          <Col xs={24} md={4}>
+            <Select
+              size="large"
+              value={statusFilter}
+              onChange={setStatusFilter}
+              style={{ width: "100%" }}
+              options={[
+                { value: "ALL", label: "All results" },
+                { value: "SUCCESS", label: "Successful only" },
+                { value: "FAILED", label: "Failed only" },
+              ]}
+            />
+          </Col>
+          <Col xs={24} md={4}>
+            <Button block size="large" icon={<ClearOutlined />} onClick={clearFilters}>
+              Clear filters
+            </Button>
           </Col>
         </Row>
       </Card>

@@ -4,6 +4,8 @@ import { useSearchParams } from "react-router-dom";
 import {
   AppstoreOutlined,
   ArrowRightOutlined,
+  ClearOutlined,
+  DownloadOutlined,
   InboxOutlined,
   SearchOutlined,
   SwapOutlined,
@@ -172,6 +174,37 @@ const Inventory = () => {
       return matchesSearch && matchesBranch && matchesStatus;
     });
   }, [inventory, search, branchFilter, statusFilter]);
+
+  const clearFilters = () => {
+    setSearch("");
+    setBranchFilter("all");
+    setStatusFilter("all");
+  };
+
+  const exportInventory = () => {
+    const rows = [
+      ["Product", "SKU", "Branch", "Branch Code", "On Hand", "Reserved", "Available", "Reorder Level", "Shelf", "Status"],
+      ...filteredInventory.map((item) => [
+        item.product?.name || "Unknown product",
+        item.product?.sku || "",
+        item.branch?.name || "Unknown branch",
+        item.branch?.code || "",
+        item.quantity || 0,
+        item.reservedQuantity || 0,
+        Math.max(Number(item.quantity || 0) - Number(item.reservedQuantity || 0), 0),
+        item.reorderLevel ?? item.product?.reorderLevel ?? 0,
+        item.shelfLocation || "",
+        getStockStatus(item),
+      ]),
+    ];
+    const csv = rows.map((row) => row.map((value) => `"${String(value ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "inventory-export.csv";
+    link.click();
+    URL.revokeObjectURL(url);
+  };
 
   useEffect(() => {
     if (focusedSku) setSearch(focusedSku);
@@ -494,6 +527,10 @@ const Inventory = () => {
           >
             Transfer Stock
           </Button>
+
+          <Button icon={<DownloadOutlined />} onClick={exportInventory}>
+            Export Inventory
+          </Button>
         </Space>
       </div>
 
@@ -592,6 +629,12 @@ const Inventory = () => {
 
               <Select.Option value="OUT">Out of Stock</Select.Option>
             </Select>
+          </Col>
+
+          <Col xs={24} md={6} lg={5}>
+            <Button block size="large" icon={<ClearOutlined />} onClick={clearFilters}>
+              Clear filters
+            </Button>
           </Col>
         </Row>
       </Card>
