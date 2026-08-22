@@ -100,6 +100,20 @@ const Assistant = () => {
               <div className={"assistant-message assistant-message-" + message.role + (message.recommendations?.length ? " assistant-message-with-recommendations" : "")} key={message.role + "-" + index}>
                 {message.role === "assistant" && <div className="assistant-message-avatar"><RobotOutlined /></div>}
                 <div className="assistant-message-bubble">{message.content}</div>
+                {message.role === "assistant" && message.action?.path && (
+                  <Button
+                    className="assistant-next-action"
+                    type="primary"
+                    size="small"
+                    icon={<ArrowRightOutlined />}
+                    onClick={() => {
+                      navigate(message.action.path);
+                      setOpen(false);
+                    }}
+                  >
+                    {message.action.label || "Open"}
+                  </Button>
+                )}
                 {message.role === "assistant" && message.recommendations?.length > 0 && (
                   <div className="assistant-recommendations">
                     <div className="assistant-recommendations-title">Recommended for this</div>

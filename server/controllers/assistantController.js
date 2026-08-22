@@ -450,7 +450,31 @@ const askAssistant = async (req, res) => {
       : requiresFinder
         ? "Use AI Product Finder"
         : String(structured.actionLabel || "");
-    const answer = String(structured.answer || outputText || "").trim();
+    let answer = String(structured.answer || "").trim();
+
+    // Product Finder and navigation requests intentionally use an empty AI
+    // answer. Never expose the raw JSON response to the user in that case.
+    if (!answer && requiresFinder) {
+      answer = "I can help identify it. Open Product Finder and scan or photograph the item so I can look for a matching product.";
+    }
+
+    if (!answer && navigationPath) {
+      answer = "I’m ready to take you there.";
+    }
+
+    // Keep out-of-stock answers grounded and branch-specific even when the
+    // model only returns recommendation cards.
+    if (/out of stock|completely out|no stock/i.test(question) && !hasExactCatalogMatch) {
+      const branchLines = context.outOfStockByBranch
+        .filter((branch) => branch.products.length > 0)
+        .map((branch) => `${branch.branch}: ${branch.products.map((product) => `${product.product} (${product.sku})`).join(", ")}`);
+
+      if (branchLines.length > 0) {
+        answer = `These products are out of stock by branch:\n${branchLines.join("\n")}`;
+      } else {
+        answer = "No active products are currently out of stock in the permitted branches.";
+      }
+    }
 
     if (!answer) {
       return res.status(502).json({
