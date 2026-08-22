@@ -8,6 +8,11 @@ const purchaseOrderRoutes = require("./routes/purchaseOrderRoutes");
 const saleRoutes = require("./routes/saleRoutes");
 const smartInventoryRoutes = require("./routes/smartInventoryRoutes");
 const reservationRoutes = require("./routes/reservationRoutes");
+const {
+  apiRateLimiter,
+  authRateLimiter,
+  aiRateLimiter,
+} = require("./middleware/rateLimitMiddleware");
 
 dotenv.config();
 
@@ -15,6 +20,10 @@ const app = express();
 
 app.use(cors());
 app.use(express.json({ limit: "8mb" }));
+app.use("/api", apiRateLimiter);
+app.use("/api/auth", authRateLimiter);
+app.use("/api/assistant", aiRateLimiter);
+app.use("/api/product-finder", aiRateLimiter);
 
 connectDB();
 
