@@ -110,6 +110,27 @@ const Reports = () => {
 
   const marginPercent = revenue ? (estimatedProfit / revenue) * 100 : 0;
 
+  const refundSummary = useMemo(() => sales.reduce((summary, sale) => {
+    (sale.refunds || []).forEach((refund) => {
+      const refundDate = new Date(refund.createdAt || sale.updatedAt || sale.createdAt);
+      if (Number.isNaN(refundDate.getTime()) || refundDate < cutoff) return;
+
+      const reason = refund.reason || "No reason provided";
+      const amount = Number(refund.amount || 0);
+      summary.count += 1;
+      summary.amount += amount;
+      summary.byReason[reason] = (summary.byReason[reason] || 0) + amount;
+      summary.activity.push({
+        key: `${sale._id}-${refund.createdAt}`,
+        receipt: sale.receiptNumber || sale._id,
+        reason,
+        amount,
+        createdAt: refundDate,
+      });
+    });
+    return summary;
+  }, { count: 0, amount: 0, byReason: {}, activity: [] }), [cutoff, sales]);
+
   const slowMovingProducts = useMemo(() => {
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - 29);
@@ -155,6 +176,8 @@ const Reports = () => {
       ["Metric", "Value"],
       ["Revenue", revenue],
       ["Completed transactions", periodSales.length],
+      ["Refunds processed", refundSummary.count],
+      ["Refund amount", refundSummary.amount],
       ["Estimated gross profit", estimatedProfit],
       ["Estimated margin", `${marginPercent.toFixed(2)}%`],
       ["Inventory cost value", inventoryMetrics.costValue],
@@ -324,6 +347,16 @@ const Reports = () => {
             />
           </Card>
         </Col>
+        <Col xs={24} sm={8}>
+          <Card>
+            <Statistic
+              title="Refunds processed"
+              value={refundSummary.count}
+              suffix={money(refundSummary.amount)}
+              valueStyle={{ color: refundSummary.count ? "#d46b08" : "#389e0d" }}
+            />
+          </Card>
+        </Col>
       </Row>
 
       <Row gutter={[16, 16]}>
@@ -439,6 +472,26 @@ const Reports = () => {
               <div><span>Potential retail value</span><strong>{money(inventoryMetrics.retailValue)}</strong></div>
               <div><span>Potential gross value gain</span><strong>{money(inventoryMetrics.retailValue - inventoryMetrics.costValue)}</strong></div>
             </div>
+          </Card>
+        </Col>
+        <Col xs={24}>
+          <Card title="Refund activity" className="reports-card">
+            {refundSummary.activity.length ? (
+              <Table
+                rowKey="key"
+                size="small"
+                pagination={{ pageSize: 5 }}
+                dataSource={[...refundSummary.activity].sort((a, b) => b.createdAt - a.createdAt)}
+                columns={[
+                  { title: "Receipt", dataIndex: "receipt" },
+                  { title: "Reason", dataIndex: "reason" },
+                  { title: "Amount", dataIndex: "amount", render: (value) => money(value) },
+                  { title: "Processed", dataIndex: "createdAt", render: (value) => value.toLocaleString() },
+                ]}
+              />
+            ) : (
+              <Empty description="No refunds in this period." />
+            )}
           </Card>
         </Col>
       </Row>

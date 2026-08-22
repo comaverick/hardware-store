@@ -56,6 +56,15 @@ const getSaleDate = (sale) => {
   return Number.isNaN(parsedDate.getTime()) ? null : parsedDate;
 };
 
+const getRefundAmountInRange = (sales, start, end) => sales.reduce((total, sale) => (
+  total + (sale.refunds || []).reduce((refundTotal, refund) => {
+    const processedAt = new Date(refund.createdAt || sale.updatedAt || sale.createdAt);
+    return !Number.isNaN(processedAt.getTime()) && processedAt >= start && processedAt < end
+      ? refundTotal + Number(refund.amount || 0)
+      : refundTotal;
+  }, 0)
+), 0);
+
 const Dashboard = () => {
   const { user } = useAuth();
   const currentHour = new Date().getHours();
@@ -75,6 +84,8 @@ const Dashboard = () => {
   const [branchOpen, setBranchOpen] = useState(false);
 
   const [salesPeriod, setSalesPeriod] = useState("WEEK");
+
+  const [chartMetric, setChartMetric] = useState("SALES");
 
   // ========================================
   // FETCH DASHBOARD
@@ -227,6 +238,43 @@ const Dashboard = () => {
 
   const todayTransactions = todaySales.length;
 
+  const refundPeriod = useMemo(() => {
+    const periodStart = new Date();
+    periodStart.setHours(0, 0, 0, 0);
+
+    if (salesPeriod === "WEEK") {
+      periodStart.setDate(periodStart.getDate() - 6);
+    } else if (salesPeriod === "MONTH") {
+      periodStart.setDate(1);
+    }
+
+    const periodEnd = new Date();
+    periodEnd.setHours(0, 0, 0, 0);
+    if (salesPeriod === "MONTH") {
+      periodEnd.setMonth(periodEnd.getMonth() + 1);
+    } else {
+      periodEnd.setDate(periodEnd.getDate() + 1);
+    }
+
+    return {
+      start: periodStart,
+      end: periodEnd,
+      label: salesPeriod === "TODAY" ? "REFUNDS TODAY" : `REFUNDS THIS ${salesPeriod}`,
+    };
+  }, [salesPeriod]);
+
+  const refundPeriodSummary = filteredSales.reduce((summary, sale) => {
+    (sale.refunds || []).forEach((refund) => {
+      const processedAt = new Date(refund.createdAt || sale.updatedAt || sale.createdAt);
+      if (!Number.isNaN(processedAt.getTime()) && processedAt >= refundPeriod.start && processedAt < refundPeriod.end) {
+        summary.count += 1;
+        summary.amount += Number(refund.amount || 0);
+      }
+    });
+
+    return summary;
+  }, { count: 0, amount: 0 });
+
   // ========================================
   // SALES CHART
   // ========================================
@@ -249,6 +297,7 @@ const Dashboard = () => {
           const saleDate = getSaleDate(sale);
           return saleDate && saleDate >= bucketStart && saleDate < bucketEnd;
         });
+        const refunds = getRefundAmountInRange(filteredSales, bucketStart, bucketEnd);
 
         return {
           date: bucketStart.toISOString(),
@@ -260,6 +309,7 @@ const Dashboard = () => {
             0,
           ),
           transactions: hourSales.length,
+          refunds,
         };
       });
     }
@@ -291,6 +341,9 @@ const Dashboard = () => {
         const saleDate = getSaleDate(sale);
         return saleDate && localDateKey(saleDate) === dateKey;
       });
+      const bucketEnd = new Date(date);
+      bucketEnd.setDate(bucketEnd.getDate() + 1);
+      const refunds = getRefundAmountInRange(filteredSales, date, bucketEnd);
 
       return {
         date: dateKey,
@@ -302,6 +355,7 @@ const Dashboard = () => {
           0,
         ),
         transactions: daySales.length,
+        refunds,
       };
     });
   }, [filteredSales, salesPeriod]);
@@ -331,6 +385,7 @@ const Dashboard = () => {
       const saleDate = getSaleDate(sale);
       return saleDate && saleDate >= previousStart && saleDate < previousEnd;
     });
+    const previousRefunds = getRefundAmountInRange(filteredSales, previousStart, previousEnd);
 
     return {
       ...bucket,
@@ -338,6 +393,7 @@ const Dashboard = () => {
         (total, sale) => total + Number(sale.totalAmount || 0),
         0,
       ),
+      previousRefunds,
     };
   });
 
@@ -832,37 +888,59 @@ const Dashboard = () => {
             <div>
               <Text className="section-eyebrow">PERFORMANCE</Text>
 
-              <Title level={3}>Sales Overview</Title>
+              <Title level={3}>{chartMetric === "SALES" ? "Sales Overview" : "Refund Overview"}</Title>
 
               <Text className="section-description">
-                Your sales performance over time.
+                {chartMetric === "SALES"
+                  ? "Your sales performance over time."
+                  : "Refund activity over time."}
               </Text>
             </div>
 
-            <div className="sales-period-selector">
-              <button
-                type="button"
-                className={salesPeriod === "TODAY" ? "active" : ""}
-                onClick={() => setSalesPeriod("TODAY")}
-              >
-                Today
-              </button>
+            <div className="sales-overview-controls">
+              <div className={`sales-period-selector sales-metric-toggle ${chartMetric === "REFUNDS" ? "refunds-active" : "sales-active"}`}>
+                <button
+                  type="button"
+                  className={chartMetric === "SALES" ? "active" : ""}
+                  onClick={() => setChartMetric("SALES")}
+                >
+                  Sales
+                </button>
 
-              <button
-                type="button"
-                className={salesPeriod === "WEEK" ? "active" : ""}
-                onClick={() => setSalesPeriod("WEEK")}
-              >
-                Week
-              </button>
+                <button
+                  type="button"
+                  className={chartMetric === "REFUNDS" ? "active" : ""}
+                  onClick={() => setChartMetric("REFUNDS")}
+                >
+                  Refunds
+                </button>
+              </div>
 
-              <button
-                type="button"
-                className={salesPeriod === "MONTH" ? "active" : ""}
-                onClick={() => setSalesPeriod("MONTH")}
-              >
-                Month
-              </button>
+              <div className={`sales-period-selector sales-range-toggle ${salesPeriod.toLowerCase()}-active`}>
+                <button
+                  type="button"
+                  className={salesPeriod === "TODAY" ? "active" : ""}
+                  onClick={() => setSalesPeriod("TODAY")}
+                >
+                  Today
+                </button>
+
+                <button
+                  type="button"
+                  className={salesPeriod === "WEEK" ? "active" : ""}
+                  onClick={() => setSalesPeriod("WEEK")}
+                >
+                  Week
+                </button>
+
+                <button
+                  type="button"
+                  className={salesPeriod === "MONTH" ? "active" : ""}
+                  onClick={() => setSalesPeriod("MONTH")}
+                >
+                  Month
+                </button>
+              </div>
             </div>
           </div>
 
@@ -890,6 +968,17 @@ const Dashboard = () => {
               <span className={`comparison-note ${periodComparison.transactionChange >= 0 ? "\u2191" : "\u2193"}`}>
                 {periodComparison.transactionChange >= 0 ? "\u2191" : "\u2193"} {Math.abs(periodComparison.transactionChange).toFixed(1)}% {periodComparison.comparisonLabel}
               </span>
+            </div>
+
+            <div className="refund-overview-summary">
+              <span>{refundPeriod.label}</span>
+              <strong>
+                &#8369;
+                {refundPeriodSummary.amount.toLocaleString(undefined, {
+                  minimumFractionDigits: 2,
+                })}
+              </strong>
+              <span className="comparison-note">{refundPeriodSummary.count} processed</span>
             </div>
           </div>
 
@@ -943,16 +1032,16 @@ const Dashboard = () => {
                     boxShadow: "0 8px 24px rgba(0,0,0,0.08)",
                   }}
                   formatter={(value, name) => [
-                    (name === "sales" || name === "Previous period") ? `\u20B1${Number(value).toLocaleString(undefined, {
+                    (name === "sales" || name === "Sales" || name === "refunds" || name === "Refunds" || name === "Previous period") ? `\u20B1${Number(value).toLocaleString(undefined, {
                           minimumFractionDigits: 2,
                         })}`
                       : value,
-                    name === "sales" ? "Sales" : name === "Previous period" ? "Previous period" : "Transactions",
+                    name === "sales" || name === "Sales" ? "Sales" : name === "refunds" || name === "Refunds" ? "Refunds" : name === "Previous period" ? "Previous period" : "Transactions",
                   ]}
                 />
 
                 <Bar
-                  dataKey="previousSales"
+                  dataKey={chartMetric === "SALES" ? "previousSales" : "previousRefunds"}
                   name="Previous period"
                   fill="#eeeeee"
                   radius={[4, 4, 0, 0]}
@@ -960,7 +1049,8 @@ const Dashboard = () => {
                 />
 
                 <Bar
-                  dataKey="sales"
+                  dataKey={chartMetric === "SALES" ? "sales" : "refunds"}
+                  name={chartMetric === "SALES" ? "Sales" : "Refunds"}
                   fill="#111111"
                   radius={[4, 4, 0, 0]}
                   maxBarSize={22}

@@ -625,6 +625,14 @@
   border-radius: 11px;
 
   background: #f2f2f7;
+
+  transition: background-color 180ms ease, box-shadow 180ms ease;
+}
+
+.sales-overview-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .sales-period-selector button {
@@ -645,14 +653,25 @@
   font-weight: 600;
 
   cursor: pointer;
+
+  transition: color 180ms ease, background-color 180ms ease, box-shadow 180ms ease, transform 140ms ease;
+}
+
+.sales-period-selector button:hover {
+  color: #3659b8;
+  background: rgba(79, 110, 247, 0.08);
+}
+
+.sales-period-selector button:active {
+  transform: scale(0.96);
 }
 
 .sales-period-selector button.active {
-  background: #ffffff;
+  background: #e8efff;
 
-  color: #1d1d1f;
+  color: #3659b8;
 
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 2px 7px rgba(79, 110, 247, 0.18);
 }
 
 .sales-overview-summary {
@@ -691,6 +710,15 @@
   font-weight: 700;
 
   letter-spacing: -0.5px;
+}
+
+.refund-overview-summary {
+  padding-left: 18px;
+  border-left: 1px solid #eeeeee;
+}
+
+.refund-overview-summary strong {
+  color: #d46b08;
 }
 
 .sales-chart {
@@ -1617,6 +1645,12 @@
     width: 100%;
   }
 
+  .sales-overview-controls {
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
   .sales-period-selector button {
     flex: 1;
   }
@@ -1869,9 +1903,9 @@
 }
 
 .sales-period-selector button.active {
-  background: #111111;
-  color: #ffffff;
-  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.16);
+  background: #e8efff;
+  color: #3659b8;
+  box-shadow: 0 3px 8px rgba(79, 110, 247, 0.18);
 }
 
 .smart-product,
@@ -1945,8 +1979,77 @@
 }
 
 .dashboard .sales-period-selector button.active {
-  background: #111111;
-  color: #ffffff;
+  background: #e8efff;
+  color: #3659b8;
+  box-shadow: 0 3px 8px rgba(79, 110, 247, 0.18);
+}
+
+.sales-period-selector.sales-metric-toggle,
+.sales-period-selector.sales-range-toggle {
+  position: relative;
+  overflow: hidden;
+  padding: 3px;
+  border: 1px solid #dedee2;
+  border-radius: 12px;
+  background: #f1f1f3;
+  box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.04);
+}
+
+.sales-period-selector.sales-metric-toggle::before,
+.sales-period-selector.sales-range-toggle::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  border: 1px solid #d8d8dc;
+  border-radius: 9px;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08), 0 3px 8px rgba(0, 0, 0, 0.06);
+  pointer-events: none;
+  transition: left 260ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 180ms ease;
+}
+
+.sales-period-selector.sales-metric-toggle::before {
+  width: calc((100% - 9px) / 2);
+}
+
+.sales-period-selector.sales-metric-toggle.refunds-active::before {
+  left: calc(50% + 1.5px);
+}
+
+.sales-period-selector.sales-range-toggle::before {
+  width: calc((100% - 12px) / 3);
+}
+
+.sales-period-selector.sales-range-toggle.week-active::before {
+  left: calc(33.333% + 2px);
+}
+
+.sales-period-selector.sales-range-toggle.month-active::before {
+  left: calc(66.667% + 1px);
+}
+
+.sales-period-selector.sales-metric-toggle button,
+.sales-period-selector.sales-range-toggle button {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  background: transparent !important;
+  color: #85858b !important;
+  letter-spacing: 0.1px;
+  box-shadow: none !important;
+}
+
+.sales-period-selector.sales-metric-toggle button.active,
+.sales-period-selector.sales-range-toggle button.active {
+  color: #242426 !important;
+}
+
+.sales-period-selector.sales-metric-toggle button:hover,
+.sales-period-selector.sales-range-toggle button:hover {
+  color: #3f3f43 !important;
 }
 
 .dashboard .ant-card-head {
