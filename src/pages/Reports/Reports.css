@@ -68,6 +68,31 @@
   display: grid;
   place-items: center;
 }
+.reports-value-list {
+  display: grid;
+  gap: 14px;
+  padding: 4px 0;
+}
+.reports-value-list div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #f0f0f2;
+}
+.reports-value-list div:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+.reports-value-list span {
+  color: #777;
+  font-size: 12px;
+}
+.reports-value-list strong {
+  color: #171717;
+  font-size: 14px;
+}
 @media (max-width: 640px) {
   .reports-header {
     flex-direction: column;

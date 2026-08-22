@@ -61,6 +61,7 @@ const Dashboard = () => {
   const currentHour = new Date().getHours();
   const greeting = currentHour < 12 ? "Good morning" : currentHour < 18 ? "Good afternoon" : "Good evening";
   const [inventory, setInventory] = useState([]);
+  const [products, setProducts] = useState([]);
   const [sales, setSales] = useState([]);
   const [smartData, setSmartData] = useState(null);
 
@@ -85,14 +86,16 @@ const Dashboard = () => {
         setLoading(true);
         setError(null);
 
-        const [inventoryResponse, salesResponse] = await Promise.all([
+        const [inventoryResponse, salesResponse, productsResponse] = await Promise.all([
           api.get("/inventory"),
           api.get("/sales"),
+          api.get("/products"),
         ]);
 
         setInventory(inventoryResponse.data || []);
 
         setSales(salesResponse.data || []);
+        setProducts(productsResponse.data || []);
       } catch (error) {
         console.error("Dashboard error:", error);
 
@@ -179,6 +182,21 @@ const Dashboard = () => {
 
   const lowStockItems = filteredInventory.filter(
     (item) => Number(item.quantity) <= Number(item.reorderLevel),
+  );
+
+  const productById = new Map(products.map((product) => [String(product._id), product]));
+  const getProductPrice = (item, field) => Number(
+    item.product?.[field] ?? productById.get(String(item.product?._id))?.[field] ?? 0,
+  );
+
+  const inventoryCostValue = filteredInventory.reduce(
+    (total, item) => total + Number(item.quantity || 0) * getProductPrice(item, "costPrice"),
+    0,
+  );
+
+  const inventoryRetailValue = filteredInventory.reduce(
+    (total, item) => total + Number(item.quantity || 0) * getProductPrice(item, "sellingPrice"),
+    0,
   );
 
   // ========================================
@@ -1151,6 +1169,20 @@ const Dashboard = () => {
               ))
             )}
           </div>
+
+          <div className="inventory-value-summary">
+            <div>
+              <span>Cost value on hand</span>
+              <strong>&#8369;{inventoryCostValue.toLocaleString(undefined, { minimumFractionDigits: 2 })}</strong>
+            </div>
+            <div>
+              <span>Potential retail value</span>
+              <strong>&#8369;{inventoryRetailValue.toLocaleString(undefined, { minimumFractionDigits: 2 })}</strong>
+            </div>
+          </div>
+          {totalStock > 0 && inventoryCostValue === 0 && (
+            <div className="inventory-value-warning">Add product cost prices to calculate inventory value.</div>
+          )}
         </Card>
       </section>
 

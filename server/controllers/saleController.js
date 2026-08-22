@@ -308,7 +308,7 @@ const getSales = async (req, res) => {
     const sales = await Sale.find(salesFilter)
       .populate("branch", "name code")
       .populate("cashier", "name email role")
-      .populate("items.product", "name sku barcode unit")
+      .populate("items.product", "name sku barcode unit costPrice sellingPrice")
       .sort({
         createdAt: -1,
       });

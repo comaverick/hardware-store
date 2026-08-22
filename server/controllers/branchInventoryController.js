@@ -42,12 +42,12 @@ const getInventory = async (req, res) => {
 
     const [inventory, products, branches] = await Promise.all([
       BranchInventory.find(branchFilter)
-        .populate("product", "name sku barcode sellingPrice unit reorderLevel")
+        .populate("product", "name sku barcode sellingPrice costPrice unit reorderLevel")
         .populate("branch", "name code")
         .sort({ createdAt: -1 })
         .lean(),
       Product.find({ isActive: true })
-        .select("name sku barcode sellingPrice unit reorderLevel")
+        .select("name sku barcode sellingPrice costPrice unit reorderLevel")
         .lean(),
       Branch.find(branchQuery).select("name code").lean(),
     ]);
@@ -65,12 +65,12 @@ const getBranchInventory = async (req, res) => {
   try {
     const [inventory, products, branches] = await Promise.all([
       BranchInventory.find({ branch: req.params.branchId })
-        .populate("product", "name sku barcode sellingPrice unit reorderLevel")
+        .populate("product", "name sku barcode sellingPrice costPrice unit reorderLevel")
         .populate("branch", "name code")
         .sort({ createdAt: -1 })
         .lean(),
       Product.find({ isActive: true })
-        .select("name sku barcode sellingPrice unit reorderLevel")
+        .select("name sku barcode sellingPrice costPrice unit reorderLevel")
         .lean(),
       Branch.find({ _id: req.params.branchId }).select("name code").lean(),
     ]);
