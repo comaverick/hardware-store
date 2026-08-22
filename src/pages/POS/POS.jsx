@@ -36,6 +36,7 @@ import {
 } from "antd";
 
 import api from "../../services/api";
+import { useAuth } from "../../context/AuthContext";
 
 import "./POS.css";
 
@@ -50,6 +51,8 @@ const printerFetch = (path, options = {}) =>
   });
 
 const POS = () => {
+  const { user } = useAuth();
+  const canRefundDirectly = ["SUPER_ADMIN", "ADMIN", "MANAGER"].includes(user?.role);
   const searchRef = useRef(null);
   const cartItemsRef = useRef(null);
 
@@ -679,6 +682,7 @@ const POS = () => {
       const response = await api.post(`/sales/${refundSale._id}/refund`, {
         items,
         reason: values.reason,
+        ...(canRefundDirectly ? {} : { approvalPin: values.approvalPin }),
       });
       message.success(`Refund processed: \u20B1${Number(response.data.refundAmount || 0).toLocaleString("en-PH", { minimumFractionDigits: 2 })}.`);
       setRefundSale(null);
@@ -1649,6 +1653,18 @@ const POS = () => {
             <Form.Item label="Reason" name="reason" rules={[{ required: true, message: "Enter a refund reason." }]}>
               <Input placeholder="Customer return, damaged item, wrong item..." />
             </Form.Item>
+            {!canRefundDirectly && (
+              <Form.Item
+                label="Manager approval PIN"
+                name="approvalPin"
+                rules={[
+                  { required: true, message: "Enter the manager PIN." },
+                  { pattern: /^\d{4,6}$/, message: "Use a 4 to 6 digit PIN." },
+                ]}
+              >
+                <Input.Password inputMode="numeric" maxLength={6} placeholder="Enter manager PIN" />
+              </Form.Item>
+            )}
             <div className="product-modal-footer">
               <Button onClick={() => setRefundSale(null)} disabled={refundSaving}>Cancel</Button>
               <Button type="primary" htmlType="submit" loading={refundSaving}>Confirm refund</Button>

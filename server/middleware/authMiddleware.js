@@ -28,7 +28,7 @@ const attachAuditLog = (req, res) => {
 
   res.once("finish", () => {
     const bodyKeys = Object.keys(req.body || {}).filter(
-      (key) => !["password", "token", "imageData"].includes(key),
+      (key) => !["password", "token", "imageData", "approvalPin", "refundPin"].includes(key),
     );
 
     AuditLog.create({

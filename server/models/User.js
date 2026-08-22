@@ -22,6 +22,11 @@ const userSchema = new mongoose.Schema(
       minlength: 6,
     },
 
+    refundPin: {
+      type: String,
+      select: false,
+    },
+
     role: {
       type: String,
       enum: ["SUPER_ADMIN", "ADMIN", "MANAGER", "CASHIER", "INVENTORY_STAFF"],

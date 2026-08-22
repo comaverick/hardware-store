@@ -19,11 +19,14 @@ const getUsers = async (req, res) => {
 
 const createUser = async (req, res) => {
   try {
-    const { name, email, password, role, branch } = req.body;
+    const { name, email, password, role, branch, refundPin } = req.body;
     if (!name || !email || !password || !role) {
       return res
         .status(400)
         .json({ message: "Name, email, password, and role are required." });
+    }
+    if (refundPin && !/^\d{4,6}$/.test(String(refundPin))) {
+      return res.status(400).json({ message: "Refund PIN must contain 4 to 6 digits." });
     }
 
     if (role !== "SUPER_ADMIN" && !branch) {
@@ -49,6 +52,7 @@ const createUser = async (req, res) => {
       name,
       email: normalizedEmail,
       password: await bcrypt.hash(password, 10),
+      ...(refundPin ? { refundPin: await bcrypt.hash(refundPin, 10) } : {}),
       role,
       branch: role === "SUPER_ADMIN" ? null : branch,
     });
@@ -64,11 +68,14 @@ const createUser = async (req, res) => {
 
 const updateUser = async (req, res) => {
   try {
-    const { name, email, role, branch, password, isActive } = req.body;
+    const { name, email, role, branch, password, refundPin, isActive } = req.body;
     const user = await User.findById(req.params.id);
     if (!user) return res.status(404).json({ message: "User not found." });
 
     const nextRole = role || user.role;
+    if (refundPin && !/^\d{4,6}$/.test(String(refundPin))) {
+      return res.status(400).json({ message: "Refund PIN must contain 4 to 6 digits." });
+    }
     if (nextRole !== "SUPER_ADMIN" && !(branch || user.branch)) {
       return res
         .status(400)
@@ -86,6 +93,7 @@ const updateUser = async (req, res) => {
     user.branch = nextRole === "SUPER_ADMIN" ? null : branch || user.branch;
     if (typeof isActive === "boolean") user.isActive = isActive;
     if (password) user.password = await bcrypt.hash(password, 10);
+    if (refundPin) user.refundPin = await bcrypt.hash(refundPin, 10);
     await user.save();
 
     const result = await User.findById(user._id)

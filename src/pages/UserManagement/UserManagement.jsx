@@ -72,6 +72,7 @@ const UserManagement = () => {
       branch: user.branch?._id,
       isActive: user.isActive,
       password: "",
+      refundPin: "",
     });
     setModalOpen(true);
   };
@@ -231,6 +232,16 @@ const UserManagement = () => {
           >
             <Input.Password />
           </Form.Item>
+          {(selectedRole === "SUPER_ADMIN" || selectedRole === "ADMIN" || selectedRole === "MANAGER") && (
+            <Form.Item
+              name="refundPin"
+              label="Refund approval PIN"
+              extra="4 to 6 digits. Cashiers use this PIN to get refund approval."
+              rules={[{ pattern: /^\d{4,6}$/, message: "Use 4 to 6 digits." }]}
+            >
+              <Input.Password inputMode="numeric" maxLength={6} placeholder="Set or update refund PIN" />
+            </Form.Item>
+          )}
           <div className="user-form-grid">
             <Form.Item name="role" label="Role" rules={[{ required: true }]}>
               <Select

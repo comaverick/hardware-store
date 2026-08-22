@@ -9,6 +9,8 @@ const Product = require("../models/Product");
 const BranchInventory = require("../models/BranchInventory");
 
 const InventoryTransaction = require("../models/InventoryTransaction");
+const User = require("../models/User");
+const bcrypt = require("bcryptjs");
 
 const refundSale = async (req, res) => {
   const session = await mongoose.startSession();
@@ -27,6 +29,31 @@ const refundSale = async (req, res) => {
     if (!["COMPLETED", "PARTIALLY_REFUNDED"].includes(sale.status)) {
       await session.abortTransaction();
       return res.status(400).json({ message: "This sale cannot be refunded." });
+    }
+
+    const privilegedRoles = ["SUPER_ADMIN", "ADMIN", "MANAGER"];
+    let approver = privilegedRoles.includes(req.user?.role) ? req.user : null;
+    if (!approver) {
+      const approvalPin = String(req.body?.approvalPin || "");
+      if (!/^\d{4,6}$/.test(approvalPin)) {
+        await session.abortTransaction();
+        return res.status(400).json({ message: "A valid 4 to 6 digit manager PIN is required." });
+      }
+      const approvers = await User.find({
+        role: { $in: privilegedRoles },
+        isActive: true,
+        $or: [{ role: "SUPER_ADMIN" }, { branch: req.user?.branch?._id }],
+      }).select("+refundPin name role branch").lean();
+      for (const candidate of approvers) {
+        if (candidate.refundPin && await bcrypt.compare(approvalPin, candidate.refundPin)) {
+          approver = candidate;
+          break;
+        }
+      }
+      if (!approver) {
+        await session.abortTransaction();
+        return res.status(403).json({ message: "The manager PIN is incorrect or not configured." });
+      }
     }
 
     const reason = String(req.body?.reason || "").trim();
@@ -86,7 +113,7 @@ const refundSale = async (req, res) => {
     }
 
     sale.refundedAmount = Number(((sale.refundedAmount || 0) + refundAmount).toFixed(2));
-    sale.refunds.push({ refundedBy: req.user._id, amount: refundAmount, reason, items: refundItems });
+    sale.refunds.push({ refundedBy: req.user._id, approvedBy: approver._id, amount: refundAmount, reason, items: refundItems });
     const fullyRefunded = sale.items.every((item) => (item.refundedQuantity || 0) >= item.quantity);
     sale.status = fullyRefunded ? "REFUNDED" : "PARTIALLY_REFUNDED";
     await sale.save({ session });
@@ -97,6 +124,7 @@ const refundSale = async (req, res) => {
       .populate("cashier", "name email role")
       .populate("items.product", "name sku barcode unit sellingPrice")
       .populate("refunds.refundedBy", "name email role")
+      .populate("refunds.approvedBy", "name email role")
       .lean();
     res.json({ message: "Refund processed successfully.", refundAmount, sale: populatedSale });
   } catch (error) {

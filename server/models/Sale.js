@@ -111,6 +111,7 @@ const saleSchema = new mongoose.Schema(
     refunds: [
       {
         refundedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+        approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
         amount: { type: Number, required: true, min: 0 },
         reason: { type: String, trim: true, required: true },
         items: [
