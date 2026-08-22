@@ -895,6 +895,32 @@
   border-top: 1px solid #eeeeee;
 }
 
+.pos-refund-items {
+  display: grid;
+  gap: 10px;
+  margin: 18px 0;
+}
+
+.pos-refund-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px;
+  border: 1px solid #eeeeee;
+  border-radius: 8px;
+}
+
+.pos-refund-row > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pos-refund-row .ant-form-item {
+  margin: 0;
+}
+
 .printer-status {
   border-color: #d8d8d8;
   background: #ffffff;

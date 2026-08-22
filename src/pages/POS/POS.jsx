@@ -8,6 +8,7 @@ import {
   MinusOutlined,
   PlusOutlined,
   PrinterOutlined,
+  RollbackOutlined,
   SearchOutlined,
   ShoppingCartOutlined,
   RightOutlined,
@@ -19,6 +20,7 @@ import {
   Skeleton,
   Col,
   Empty,
+  Form,
   Input,
   InputNumber,
   Modal,
@@ -128,6 +130,9 @@ const POS = () => {
   const [salesHistoryOpen, setSalesHistoryOpen] = useState(false);
   const [salesHistoryLoading, setSalesHistoryLoading] = useState(false);
   const [salesHistorySearch, setSalesHistorySearch] = useState("");
+  const [refundSale, setRefundSale] = useState(null);
+  const [refundSaving, setRefundSaving] = useState(false);
+  const [refundForm] = Form.useForm();
 
   // =========================
   // INITIAL DATA
@@ -646,6 +651,46 @@ const POS = () => {
       return searchable.includes(query);
     });
   }, [salesHistory, salesHistorySearch]);
+
+  const openRefund = (sale) => {
+    setRefundSale(sale);
+    refundForm.setFieldsValue({
+      reason: "Customer return",
+      items: sale.items.map(() => ({
+        quantity: 0,
+      })),
+    });
+  };
+
+  const handleRefund = async (values) => {
+    if (!refundSale) return;
+    const items = (values.items || [])
+      .map((item, index) => ({
+        product: refundSale.items[index].product?._id || refundSale.items[index].product,
+        quantity: Number(item.quantity || 0),
+      }))
+      .filter((item) => item.quantity > 0);
+    if (!items.length) {
+      message.error("Select at least one item to return.");
+      return;
+    }
+    try {
+      setRefundSaving(true);
+      const response = await api.post(`/sales/${refundSale._id}/refund`, {
+        items,
+        reason: values.reason,
+      });
+      message.success(`Refund processed: \u20B1${Number(response.data.refundAmount || 0).toLocaleString("en-PH", { minimumFractionDigits: 2 })}.`);
+      setRefundSale(null);
+      refundForm.resetFields();
+      await fetchSalesHistory();
+      if (selectedBranch) await fetchInventory(selectedBranch);
+    } catch (error) {
+      message.error(error.response?.data?.message || "Failed to process refund.");
+    } finally {
+      setRefundSaving(false);
+    }
+  };
 
   // =========================
   // PRINT RECEIPT
@@ -1537,24 +1582,79 @@ const POS = () => {
               key: "paymentMethod",
             },
             {
+              title: "Status",
+              dataIndex: "status",
+              key: "status",
+              render: (status) => <Tag color={status === "REFUNDED" ? "red" : status === "PARTIALLY_REFUNDED" ? "orange" : "green"}>{String(status || "COMPLETED").replaceAll("_", " ")}</Tag>,
+            },
+            {
               title: "Action",
               key: "action",
               render: (_, sale) => (
-                <Button
-                  icon={<PrinterOutlined />}
-                  disabled={!printerOnline}
-                  onClick={() => {
-                    setReceipt(sale);
-                    setReceiptOpen(true);
-                    printReceipt(sale, true);
-                  }}
-                >
-                  Reprint
-                </Button>
+                <Space wrap>
+                  <Button
+                    icon={<PrinterOutlined />}
+                    disabled={!printerOnline}
+                    onClick={() => {
+                      setReceipt(sale);
+                      setReceiptOpen(true);
+                      printReceipt(sale, true);
+                    }}
+                  >
+                    Reprint
+                  </Button>
+                  {sale.status !== "REFUNDED" && sale.status !== "VOIDED" && (
+                    <Button icon={<RollbackOutlined />} onClick={() => openRefund(sale)}>
+                      Return
+                    </Button>
+                  )}
+                </Space>
               ),
             },
           ]}
         />
+      </Modal>
+
+      <Modal
+        title={`Return items - ${refundSale?.receiptNumber || "Sale"}`}
+        open={Boolean(refundSale)}
+        onCancel={() => {
+          if (!refundSaving) {
+            setRefundSale(null);
+            refundForm.resetFields();
+          }
+        }}
+        footer={null}
+        width={650}
+      >
+        {refundSale && (
+          <Form form={refundForm} layout="vertical" onFinish={handleRefund}>
+            <Text type="secondary">Choose the quantities being returned. The refund restores those units to the sale branch inventory.</Text>
+            <div className="pos-refund-items">
+              {refundSale.items.map((item, index) => {
+                const remaining = Math.max(Number(item.quantity || 0) - Number(item.refundedQuantity || 0), 0);
+                return (
+                  <div className="pos-refund-row" key={item._id || item.product?._id || index}>
+                    <div>
+                      <strong>{item.product?.name || "Product"}</strong>
+                      <Text type="secondary">Sold: {item.quantity} · Already returned: {item.refundedQuantity || 0} · Remaining: {remaining}</Text>
+                    </div>
+                    <Form.Item name={["items", index, "quantity"]} initialValue={0} rules={[{ type: "number", min: 0, max: remaining, message: `Maximum ${remaining}.` }]}>
+                      <InputNumber min={0} max={remaining} disabled={remaining === 0} />
+                    </Form.Item>
+                  </div>
+                );
+              })}
+            </div>
+            <Form.Item label="Reason" name="reason" rules={[{ required: true, message: "Enter a refund reason." }]}>
+              <Input placeholder="Customer return, damaged item, wrong item..." />
+            </Form.Item>
+            <div className="product-modal-footer">
+              <Button onClick={() => setRefundSale(null)} disabled={refundSaving}>Cancel</Button>
+              <Button type="primary" htmlType="submit" loading={refundSaving}>Confirm refund</Button>
+            </div>
+          </Form>
+        )}
       </Modal>
 
       {/* RECEIPT */}

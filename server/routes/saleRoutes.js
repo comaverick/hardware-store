@@ -4,9 +4,11 @@ const {
   createSale,
   getSales,
   getSaleById,
+  refundSale,
 } = require("../controllers/saleController");
 
 const { protect, authorizeBranch } = require("../middleware/authMiddleware");
+const { authorize } = require("../middleware/authMiddleware");
 
 const router = express.Router();
 
@@ -18,5 +20,6 @@ router.get("/:id", protect, getSaleById);
 
 // Complete POS sale
 router.post("/", protect, authorizeBranch, createSale);
+router.post("/:id/refund", protect, authorize("SUPER_ADMIN", "ADMIN", "MANAGER"), refundSale);
 
 module.exports = router;

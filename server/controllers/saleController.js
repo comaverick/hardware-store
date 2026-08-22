@@ -10,6 +10,104 @@ const BranchInventory = require("../models/BranchInventory");
 
 const InventoryTransaction = require("../models/InventoryTransaction");
 
+const refundSale = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const saleFilter = {
+      _id: req.params.id,
+      ...(req.user?.role === "SUPER_ADMIN" ? {} : { branch: req.user?.branch?._id }),
+    };
+    const sale = await Sale.findOne(saleFilter).session(session);
+    if (!sale) {
+      await session.abortTransaction();
+      return res.status(404).json({ message: "Sale not found." });
+    }
+    if (!["COMPLETED", "PARTIALLY_REFUNDED"].includes(sale.status)) {
+      await session.abortTransaction();
+      return res.status(400).json({ message: "This sale cannot be refunded." });
+    }
+
+    const reason = String(req.body?.reason || "").trim();
+    const requestedItems = Array.isArray(req.body?.items) ? req.body.items : [];
+    if (!reason) {
+      await session.abortTransaction();
+      return res.status(400).json({ message: "A refund reason is required." });
+    }
+    if (!requestedItems.length) {
+      await session.abortTransaction();
+      return res.status(400).json({ message: "Select at least one item to return." });
+    }
+
+    const discountFactor = sale.subtotal > 0 ? sale.totalAmount / sale.subtotal : 1;
+    const refundItems = [];
+    let refundAmount = 0;
+    for (const requested of requestedItems) {
+      const saleItem = sale.items.find((item) => String(item.product) === String(requested.product));
+      const quantity = Number(requested.quantity);
+      if (!saleItem || !Number.isInteger(quantity) || quantity < 1) {
+        await session.abortTransaction();
+        return res.status(400).json({ message: "Each returned item must belong to the sale and have a valid quantity." });
+      }
+      const remaining = saleItem.quantity - (saleItem.refundedQuantity || 0);
+      if (quantity > remaining) {
+        await session.abortTransaction();
+        return res.status(400).json({ message: `Cannot return more than the remaining quantity for an item. Remaining: ${remaining}.` });
+      }
+      const amount = Number((saleItem.unitPrice * quantity * discountFactor).toFixed(2));
+      refundItems.push({ product: saleItem.product, quantity, amount });
+      refundAmount += amount;
+    }
+
+    for (const item of refundItems) {
+      const saleItem = sale.items.find((saleLine) => String(saleLine.product) === String(item.product));
+      saleItem.refundedQuantity = (saleItem.refundedQuantity || 0) + item.quantity;
+      const inventory = await BranchInventory.findOne({ branch: sale.branch, product: item.product }).session(session);
+      if (!inventory) {
+        await session.abortTransaction();
+        return res.status(400).json({ message: "Inventory record not found for a returned product." });
+      }
+      const previousQuantity = inventory.quantity || 0;
+      inventory.quantity = previousQuantity + item.quantity;
+      await inventory.save({ session });
+      await InventoryTransaction.create([{
+        product: item.product,
+        branch: sale.branch,
+        type: "STOCK_IN",
+        quantity: item.quantity,
+        previousQuantity,
+        newQuantity: inventory.quantity,
+        reason: "Customer return",
+        reference: sale.receiptNumber,
+        performedBy: req.user._id,
+        notes: reason,
+      }], { session });
+    }
+
+    sale.refundedAmount = Number(((sale.refundedAmount || 0) + refundAmount).toFixed(2));
+    sale.refunds.push({ refundedBy: req.user._id, amount: refundAmount, reason, items: refundItems });
+    const fullyRefunded = sale.items.every((item) => (item.refundedQuantity || 0) >= item.quantity);
+    sale.status = fullyRefunded ? "REFUNDED" : "PARTIALLY_REFUNDED";
+    await sale.save({ session });
+    await session.commitTransaction();
+
+    const populatedSale = await Sale.findById(sale._id)
+      .populate("branch", "name code")
+      .populate("cashier", "name email role")
+      .populate("items.product", "name sku barcode unit sellingPrice")
+      .populate("refunds.refundedBy", "name email role")
+      .lean();
+    res.json({ message: "Refund processed successfully.", refundAmount, sale: populatedSale });
+  } catch (error) {
+    await session.abortTransaction();
+    console.error("Refund sale error:", error);
+    res.status(500).json({ message: "Failed to process refund." });
+  } finally {
+    session.endSession();
+  }
+};
+
 // =========================
 // GENERATE RECEIPT NUMBER
 // =========================
@@ -363,4 +461,5 @@ module.exports = {
   createSale,
   getSales,
   getSaleById,
+  refundSale,
 };
