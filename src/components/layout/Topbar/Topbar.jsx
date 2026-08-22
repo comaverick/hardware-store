@@ -100,11 +100,6 @@ const Topbar = ({ sidebarExpanded }) => {
       description: "Track purchased inventory",
     },
 
-    "/customers": {
-      title: "Customers",
-      description: "Manage customer information",
-    },
-
     "/reports": {
       title: "Reports",
       description: "View store performance",
@@ -126,7 +121,6 @@ const Topbar = ({ sidebarExpanded }) => {
     "/stock-history": "Inventory",
     "/transfers": "Inventory",
     "/purchases": "Purchasing",
-    "/customers": "Management",
     "/reports": "Management",
     "/settings": "System",
     "/user-management": "Administration",

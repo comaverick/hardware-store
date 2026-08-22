@@ -124,11 +124,6 @@ const Sidebar = ({ expanded, setExpanded }) => {
 
       items: [
         {
-          key: "/customers",
-          icon: <TeamOutlined />,
-          label: "Customers",
-        },
-        {
           key: "/reports",
           icon: <BarChartOutlined />,
           label: "Reports",

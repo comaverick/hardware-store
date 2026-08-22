@@ -144,20 +144,6 @@ function App() {
             }
           />
           <Route
-            path="/customers"
-            element={
-              <ProtectedRoute>
-                <AppLayout>
-                  <ComingSoon
-                    title="Customers"
-                    description="Manage customer profiles, purchase history, and customer relationships."
-                  />
-                </AppLayout>
-              </ProtectedRoute>
-            }
-          />
-
-          <Route
             path="/reports"
             element={
               <ProtectedRoute>
