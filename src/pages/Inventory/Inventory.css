@@ -64,6 +64,48 @@
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.04);
 }
 
+.inventory-import-upload {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 18px 0;
+  padding: 14px;
+  border: 1px dashed #d9d9d9;
+  border-radius: 8px;
+  background: #fafafa;
+}
+
+.inventory-import-template {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 10px 12px;
+  border: 1px solid #e5e5e5;
+  border-radius: 8px;
+  background: #fafafa;
+}
+
+.inventory-import-template > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.inventory-import-errors {
+  max-height: 150px;
+  overflow: auto;
+  margin-top: 16px;
+  padding: 10px 12px;
+  border: 1px solid #ffccc7;
+  border-radius: 8px;
+  background: #fff2f0;
+  color: #a8071a;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
 /* =========================
    TABLE
 ========================= */

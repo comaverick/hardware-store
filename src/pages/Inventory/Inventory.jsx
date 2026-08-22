@@ -6,6 +6,7 @@ import {
   ArrowRightOutlined,
   ClearOutlined,
   DownloadOutlined,
+  UploadOutlined,
   InboxOutlined,
   SearchOutlined,
   SwapOutlined,
@@ -54,6 +55,12 @@ const Inventory = () => {
   const [actionModal, setActionModal] = useState(null);
 
   const [saving, setSaving] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const [importRows, setImportRows] = useState([]);
+  const [importFileName, setImportFileName] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState(null);
+  const [importPreview, setImportPreview] = useState([]);
 
   const [transactions, setTransactions] = useState([]);
 
@@ -204,6 +211,117 @@ const Inventory = () => {
     link.download = "inventory-export.csv";
     link.click();
     URL.revokeObjectURL(url);
+  };
+
+  const downloadImportTemplate = () => {
+    const csv = [
+      ["Product", "Branch", "Quantity", "Reorder Level", "Shelf Location"],
+      ["Common Nail 2 inch", "BR-001", "100", "20", "A-01"],
+    ].map((row) => row.map((value) => `"${value}"`).join(",")).join("\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "inventory-import-template.csv";
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const parseCsv = (text) => {
+    const lines = text.split(/\r?\n/).filter((line) => line.trim());
+    if (lines.length < 2) return [];
+    const delimiter = [",", ";", "\t"].sort((a, b) => {
+      const count = (line, character) => line.split(character).length - 1;
+      return count(lines[0], b) - count(lines[0], a);
+    })[0];
+    const parseLine = (line) => {
+      const values = [];
+      let value = "";
+      let quoted = false;
+      for (let index = 0; index < line.length; index += 1) {
+        const character = line[index];
+        if (character === '"' && line[index + 1] === '"') {
+          value += '"';
+          index += 1;
+        } else if (character === '"') {
+          quoted = !quoted;
+        } else if (character === delimiter && !quoted) {
+          values.push(value.trim());
+          value = "";
+        } else {
+          value += character;
+        }
+      }
+      values.push(value.trim());
+      return values;
+    };
+    const headers = parseLine(lines[0].replace(/^\uFEFF/, "")).map((header) => header.toLowerCase().replace(/[^a-z0-9]/g, ""));
+    const getValue = (values, aliases) => {
+      const index = aliases.map((alias) => headers.indexOf(alias)).find((headerIndex) => headerIndex >= 0);
+      return index === undefined ? "" : values[index] || "";
+    };
+    return lines.slice(1).map((line, index) => {
+      const values = parseLine(line);
+      return {
+        line: index + 2,
+        sku: getValue(values, ["sku", "productsku", "itemsku"]),
+        barcode: getValue(values, ["barcode", "upc", "ean"]),
+        productName: getValue(values, ["product", "productname", "item", "itemname", "description"]),
+        branchCode: getValue(values, ["branchcode", "code"]),
+        branch: getValue(values, ["branch", "branchname", "location", "store"]),
+        quantity: getValue(values, ["quantity", "qty", "stock", "onhand", "count"]),
+        reorderLevel: getValue(values, ["reorderlevel", "reorderpoint", "minimumstock", "minstock"]),
+        shelfLocation: getValue(values, ["shelflocation", "shelf", "rack", "bin"]),
+      };
+    });
+  };
+
+  const handleImportFile = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setImportFileName(file.name);
+    setImportResult(null);
+    setImportPreview([]);
+    const reader = new FileReader();
+    reader.onload = () => setImportRows(parseCsv(String(reader.result || "")));
+    reader.readAsText(file);
+    event.target.value = "";
+  };
+
+  const handleReviewImport = async () => {
+    if (!importRows.length) return;
+    try {
+      setImporting(true);
+      const response = await api.post("/inventory/import", { rows: importRows, preview: true });
+      const result = response.data || {};
+      setImportResult(result);
+      setImportPreview(result.previewRows || []);
+      message.success(`${result.imported || 0} record(s) ready to import.`);
+    } catch (error) {
+      message.error(error.response?.data?.message || "Failed to review inventory import.");
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const handleImport = async () => {
+    if (!importPreview.length) return;
+    try {
+      setImporting(true);
+      const response = await api.post("/inventory/import", { rows: importRows });
+      const result = response.data || {};
+      setImportResult(result);
+      message.success(`${result.imported || 0} inventory record(s) imported.`);
+      if (result.errors?.length) message.warning(`${result.errors.length} row(s) were skipped or had errors.`);
+      setImportOpen(false);
+      setImportRows([]);
+      setImportPreview([]);
+      setImportFileName("");
+      await fetchInventory();
+    } catch (error) {
+      message.error(error.response?.data?.message || "Failed to import inventory.");
+    } finally {
+      setImporting(false);
+    }
   };
 
   useEffect(() => {
@@ -531,6 +649,10 @@ const Inventory = () => {
           <Button icon={<DownloadOutlined />} onClick={exportInventory}>
             Export Inventory
           </Button>
+
+          <Button icon={<UploadOutlined />} onClick={() => { setImportOpen(true); setImportResult(null); setImportPreview([]); }}>
+            Import Inventory
+          </Button>
         </Space>
       </div>
 
@@ -657,6 +779,66 @@ const Inventory = () => {
           }}
         />
       </Card>
+
+      <Modal
+        title="Import Inventory"
+        open={importOpen}
+        onCancel={() => {
+          if (!importing) {
+            setImportOpen(false);
+            setImportRows([]);
+            setImportFileName("");
+            setImportResult(null);
+            setImportPreview([]);
+          }
+        }}
+        onOk={importPreview.length ? handleImport : handleReviewImport}
+        okText={importPreview.length ? "Confirm import" : "Review import"}
+        confirmLoading={importing}
+        width={900}
+      >
+        <Text type="secondary">
+          Upload a CSV using common columns such as Product, SKU, Barcode, Branch, Quantity, Reorder Level, and Shelf. Headers and separators are detected automatically. Review the proposed additions before confirming. Existing product/branch records are skipped safely.
+        </Text>
+        <div className="inventory-import-template">
+          <div>
+            <Text strong>Standard CSV headers</Text>
+            <Text code>Product, Branch, Quantity, Reorder Level, Shelf Location</Text>
+          </div>
+          <Button size="small" icon={<DownloadOutlined />} onClick={downloadImportTemplate}>
+            Download template
+          </Button>
+        </div>
+        <div className="inventory-import-upload">
+          <input type="file" accept=".csv,text/csv" onChange={handleImportFile} />
+          {importFileName && <Text type="secondary">{importFileName} - {importRows.length} row(s) ready</Text>}
+        </div>
+        {(importRows.length > 0 || importPreview.length > 0) && (
+          <Table
+            size="small"
+            rowKey="line"
+            dataSource={(importPreview.length ? importPreview : importRows).slice(0, 10)}
+            pagination={false}
+            columns={[
+              { title: "Line", dataIndex: "line" },
+              { title: "Product", dataIndex: "productName", render: (value, row) => value || row.sku || row.barcode },
+              { title: "Branch", dataIndex: "branchCode", render: (value, row) => value || row.branch || row.branchName },
+              { title: "Quantity", dataIndex: "quantity" },
+              { title: "Reorder", dataIndex: "reorderLevel" },
+              { title: "Shelf", dataIndex: "shelfLocation" },
+            ]}
+          />
+        )}
+        {(importPreview.length ? importPreview.length : importRows.length) > 10 && <Text type="secondary">Showing the first 10 rows. All {importPreview.length || importRows.length} rows will be submitted.</Text>}
+        {importResult?.errors?.length > 0 && (
+          <div className="inventory-import-errors">
+            <Text strong>{importResult.errors.length} row(s) need attention</Text>
+            {importResult.errors.map((error, index) => (
+              <div key={`${error.line}-${index}`}>Line {error.line}: {error.message}</div>
+            ))}
+          </div>
+        )}
+      </Modal>
 
       {/* =========================
           RECEIVE MODAL

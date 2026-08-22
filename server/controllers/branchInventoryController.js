@@ -2,6 +2,8 @@ const BranchInventory = require("../models/BranchInventory");
 const Product = require("../models/Product");
 const Branch = require("../models/Branch");
 
+const normalizeImportValue = (value) => String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
+
 const completeInventoryRecords = (inventory, products, branches) => {
   const existing = new Set(
     inventory.map((item) => String(item.branch?._id) + ":" + String(item.product?._id)),
@@ -202,10 +204,109 @@ const updateInventory = async (req, res) => {
   }
 };
 
+// Import multiple new inventory records from a validated row list.
+const importInventory = async (req, res) => {
+  try {
+    const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+    if (!rows.length) return res.status(400).json({ message: "No inventory rows were provided." });
+    if (rows.length > 1000) return res.status(400).json({ message: "Import is limited to 1,000 rows." });
+
+    const [products, branches] = await Promise.all([
+      Product.find({ isActive: true }).select("_id name sku barcode reorderLevel").lean(),
+      Branch.find(req.user?.role === "SUPER_ADMIN" ? {} : { _id: req.user?.branch?._id }).select("_id name code").lean(),
+    ]);
+    const productByKey = new Map();
+    products.forEach((product) => {
+      productByKey.set(`sku:${normalizeImportValue(product.sku)}`, product);
+      if (product.barcode) productByKey.set(`barcode:${normalizeImportValue(product.barcode)}`, product);
+      productByKey.set(`name:${normalizeImportValue(product.name)}`, product);
+    });
+    const branchByKey = new Map();
+    branches.forEach((branch) => {
+      branchByKey.set(`code:${normalizeImportValue(branch.code)}`, branch);
+      branchByKey.set(`name:${normalizeImportValue(branch.name)}`, branch);
+    });
+
+    const errors = [];
+    const validRows = [];
+    const seen = new Set();
+    rows.forEach((row, index) => {
+      const line = Number(row.line || index + 2);
+      const productIdentifier = row.sku || row.productSku || row.barcode || row.productName || row.product || row.item;
+      const productKey = row.productId
+        ? products.find((product) => String(product._id) === String(row.productId))
+        : productByKey.get(`sku:${normalizeImportValue(productIdentifier)}`) ||
+          productByKey.get(`barcode:${normalizeImportValue(productIdentifier)}`) ||
+          productByKey.get(`name:${normalizeImportValue(productIdentifier)}`);
+      const branchKey = row.branchId
+        ? branches.find((branch) => String(branch._id) === String(row.branchId))
+        : branchByKey.get(`code:${normalizeImportValue(row.branchCode || row.branch || row.branchName)}`) ||
+          branchByKey.get(`name:${normalizeImportValue(row.branch || row.branchName || row.branchCode)}`);
+      const quantity = Number(row.quantity);
+
+      if (!productKey) errors.push({ line, message: "Product SKU/barcode was not found." });
+      else if (!branchKey) errors.push({ line, message: "Branch code/name was not found or is not permitted." });
+      else if (!Number.isFinite(quantity) || quantity < 0) errors.push({ line, message: "Quantity must be a number greater than or equal to 0." });
+      else {
+        const key = `${branchKey._id}:${productKey._id}`;
+        if (seen.has(key)) errors.push({ line, message: "The same product and branch appear more than once in this file." });
+        else {
+          seen.add(key);
+          validRows.push({
+            line,
+            branch: branchKey._id,
+            product: productKey._id,
+            productName: productKey.name,
+            sku: productKey.sku,
+            branchName: branchKey.name,
+            branchCode: branchKey.code,
+            quantity,
+            reorderLevel: row.reorderLevel === "" || row.reorderLevel == null ? productKey.reorderLevel ?? 5 : Number(row.reorderLevel),
+            shelfLocation: String(row.shelfLocation || "").trim(),
+          });
+        }
+      }
+    });
+
+    const existing = await BranchInventory.find({
+      $or: validRows.map((row) => ({ branch: row.branch, product: row.product })),
+    }).select("branch product").lean();
+    const existingKeys = new Set(existing.map((row) => `${row.branch}:${row.product}`));
+    const newRows = validRows.filter((row) => !existingKeys.has(`${row.branch}:${row.product}`));
+    validRows.forEach((row) => {
+      if (existingKeys.has(`${row.branch}:${row.product}`)) errors.push({ line: row.line, message: "Inventory already exists for this product and branch." });
+    });
+
+    const previewRows = newRows.map((row) => ({
+      line: row.line,
+      productName: row.productName,
+      sku: row.sku,
+      branchName: row.branchName,
+      branchCode: row.branchCode,
+      quantity: row.quantity,
+      reorderLevel: row.reorderLevel,
+      shelfLocation: row.shelfLocation,
+    }));
+
+    if (req.body?.preview) {
+      return res.status(200).json({ preview: true, imported: newRows.length, skipped: validRows.length - newRows.length, errors, previewRows });
+    }
+
+    if (newRows.length) {
+      await BranchInventory.insertMany(newRows.map(({ line, productName, sku, branchName, branchCode, ...row }) => row), { ordered: false });
+    }
+    res.status(201).json({ imported: newRows.length, skipped: validRows.length - newRows.length, errors, previewRows });
+  } catch (error) {
+    console.error("Import inventory error:", error);
+    res.status(500).json({ message: "Failed to import inventory." });
+  }
+};
+
 module.exports = {
   getInventory,
   getBranchInventory,
   getProductInventory,
   createInventory,
   updateInventory,
+  importInventory,
 };
