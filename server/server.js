@@ -1,7 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 const dotenv = require("dotenv");
-const connectDB = require("./config/db");
+const { connectDB, getDatabaseStatus } = require("./config/db");
 const inventoryTransactionRoutes = require("./routes/inventoryTransactionRoutes");
 const supplierRoutes = require("./routes/supplierRoutes");
 const purchaseOrderRoutes = require("./routes/purchaseOrderRoutes");
@@ -37,6 +37,18 @@ app.use("/api/audit-logs", require("./routes/auditLogRoutes"));
 app.get("/", (req, res) => {
   res.json({
     message: "Hardware Store API is running",
+  });
+});
+
+app.get("/api/health", (req, res) => {
+  const database = getDatabaseStatus();
+  const healthy = database.ready;
+
+  res.status(healthy ? 200 : 503).json({
+    status: healthy ? "ok" : "degraded",
+    service: "hardware-store-api",
+    database,
+    timestamp: new Date().toISOString(),
   });
 });
 

@@ -241,6 +241,30 @@
   background: #e8e8e8;
 }
 
+.topbar-system-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #777777;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.topbar-system-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #b5b5b5;
+}
+
+.topbar-system-status-online .topbar-system-dot {
+  background: #2f9e44;
+}
+
+.topbar-system-status-offline .topbar-system-dot {
+  background: #d94841;
+}
+
 /* ========================================
    USER
 ======================================== */

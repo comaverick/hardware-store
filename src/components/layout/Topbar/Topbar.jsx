@@ -10,8 +10,10 @@ import {
 import { Avatar, Badge, Dropdown } from "antd";
 
 import { useLocation, useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
 
 import { useAuth } from "../../../context/AuthContext";
+import api from "../../../services/api";
 
 import "./Topbar.css";
 
@@ -21,6 +23,28 @@ const Topbar = ({ sidebarExpanded }) => {
   const location = useLocation();
 
   const navigate = useNavigate();
+  const [systemStatus, setSystemStatus] = useState("checking");
+
+  useEffect(() => {
+    let active = true;
+
+    const checkSystemStatus = async () => {
+      try {
+        await api.get("/health");
+        if (active) setSystemStatus("online");
+      } catch {
+        if (active) setSystemStatus("offline");
+      }
+    };
+
+    checkSystemStatus();
+    const interval = window.setInterval(checkSystemStatus, 30000);
+
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, []);
 
   const pageTitles = {
     "/dashboard": {
@@ -223,6 +247,11 @@ const Topbar = ({ sidebarExpanded }) => {
         {/* DIVIDER */}
 
         <div className="topbar-divider" />
+
+        <div className={`topbar-system-status topbar-system-status-${systemStatus}`} title="API and database connection status">
+          <span className="topbar-system-dot" />
+          <span>{systemStatus === "online" ? "System online" : systemStatus === "offline" ? "System offline" : "Checking system"}</span>
+        </div>
 
         {/* USER */}
 

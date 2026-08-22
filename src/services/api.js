@@ -18,6 +18,32 @@ const api = axios.create({
   },
 });
 
+api.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    const config = error.config || {};
+    const status = error.response?.status;
+    const shouldRetry =
+      config.method === "get" &&
+      !config.__retried &&
+      (!error.response || status >= 500);
+
+    if (shouldRetry) {
+      config.__retried = true;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      return api(config);
+    }
+
+    error.userMessage = !error.response
+      ? "The server is unavailable. Check your connection and try again."
+      : status === 503
+        ? "The system is temporarily unavailable while the database reconnects. Please try again shortly."
+        : error.response.data?.message || "Something went wrong. Please try again.";
+
+    return Promise.reject(error);
+  },
+);
+
 api.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem("token");

@@ -65,7 +65,7 @@ const Assistant = () => {
         }, 250);
       }
     } catch (requestError) {
-      setError(requestError.response?.data?.message || "I could not connect to the assistant. Please try again.");
+      setError(requestError.userMessage || requestError.response?.data?.message || "I could not connect to the assistant. Please try again.");
     } finally {
       setLoading(false);
     }
