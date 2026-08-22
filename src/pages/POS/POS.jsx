@@ -128,6 +128,8 @@ const POS = () => {
   const [selectedPrinter, setSelectedPrinter] = useState("");
   const [printerLoading, setPrinterLoading] = useState(true);
   const [printerOnline, setPrinterOnline] = useState(false);
+  const [printing, setPrinting] = useState(false);
+  const printingRef = useRef(false);
 
   const [salesHistory, setSalesHistory] = useState([]);
   const [salesHistoryOpen, setSalesHistoryOpen] = useState(false);
@@ -700,9 +702,27 @@ const POS = () => {
   // PRINT RECEIPT
   // =========================
 
-  const printReceipt = async (sale, isReprint = false) => {
+  const runPrintJob = async (job) => {
+    if (printingRef.current) {
+      message.info("A print job is already in progress.");
+      return false;
+    }
+
+    printingRef.current = true;
+    setPrinting(true);
+
     try {
-      const response = await printerFetch("/print", {
+      return await job();
+    } finally {
+      printingRef.current = false;
+      setPrinting(false);
+    }
+  };
+
+  const printReceipt = async (sale, isReprint = false) => {
+    return runPrintJob(async () => {
+      try {
+        const response = await printerFetch("/print", {
         method: "POST",
 
         headers: {
@@ -739,28 +759,29 @@ const POS = () => {
 
           change: sale.changeAmount,
         }),
-      });
+        });
 
-      const data = await response.json();
+        const data = await response.json();
 
-      if (!response.ok || !data.success) {
-        throw new Error(data.error || data.message || "Printing failed.");
+        if (!response.ok || !data.success) {
+          throw new Error(data.error || data.message || "Printing failed.");
+        }
+
+        setPrinterOnline(true);
+
+        message.success("Receipt printed successfully.");
+
+        return true;
+      } catch (error) {
+        console.error("Printer error:", error);
+
+        setPrinterOnline(false);
+
+        message.warning(isReprint ? "Receipt could not be printed." : "Sale completed, but the receipt could not be printed.");
+
+        return false;
       }
-
-      setPrinterOnline(true);
-
-      message.success("Receipt printed successfully.");
-
-      return true;
-    } catch (error) {
-      console.error("Printer error:", error);
-
-      setPrinterOnline(false);
-
-      message.warning(isReprint ? "Receipt could not be printed." : "Sale completed, but the receipt could not be printed.");
-
-      return false;
-    }
+    });
   };
 
   // =========================
@@ -931,8 +952,9 @@ const POS = () => {
   // =========================
 
   const testPrint = async () => {
-    try {
-      const response = await printerFetch("/print", {
+    await runPrintJob(async () => {
+      try {
+        const response = await printerFetch("/print", {
         method: "POST",
 
         headers: {
@@ -967,24 +989,25 @@ const POS = () => {
           amountPaid: 1,
           change: 0,
         }),
-      });
+        });
 
-      const data = await response.json();
+        const data = await response.json();
 
-      if (!response.ok || !data.success) {
-        throw new Error(data.error || data.message || "Test print failed.");
+        if (!response.ok || !data.success) {
+          throw new Error(data.error || data.message || "Test print failed.");
+        }
+
+        setPrinterOnline(true);
+
+        message.success("Test receipt printed successfully.");
+      } catch (error) {
+        console.error(error);
+
+        setPrinterOnline(false);
+
+        message.error(error.message || "Printer test failed.");
       }
-
-      setPrinterOnline(true);
-
-      message.success("Test receipt printed successfully.");
-    } catch (error) {
-      console.error(error);
-
-      setPrinterOnline(false);
-
-      message.error(error.message || "Printer test failed.");
-    }
+    });
   };
 
   // =========================
@@ -1130,9 +1153,10 @@ const POS = () => {
               size="large"
               icon={<PrinterOutlined />}
               onClick={testPrint}
-              disabled={!printerOnline}
+              loading={printing}
+              disabled={!printerOnline || printing}
             >
-              Test
+              {printing ? "Printing..." : "Test"}
             </Button>
 
             <Button
@@ -1598,7 +1622,8 @@ const POS = () => {
                 <Space wrap>
                   <Button
                     icon={<PrinterOutlined />}
-                    disabled={!printerOnline}
+                    loading={printing}
+                    disabled={!printerOnline || printing}
                     onClick={() => {
                       setReceipt(sale);
                       setReceiptOpen(true);
@@ -1684,9 +1709,10 @@ const POS = () => {
             key="reprint"
             icon={<PrinterOutlined />}
             onClick={reprintReceipt}
-            disabled={!printerOnline}
+            loading={printing}
+            disabled={!printerOnline || printing}
           >
-            Reprint
+            {printing ? "Printing..." : "Reprint"}
           </Button>,
 
           <Button key="new-sale" type="primary" onClick={startNewSale}>
