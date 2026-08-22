@@ -95,16 +95,6 @@ const Topbar = ({ sidebarExpanded }) => {
       description: "Move inventory between branches",
     },
 
-    "/suppliers": {
-      title: "Suppliers",
-      description: "Manage your suppliers",
-    },
-
-    "/purchase-orders": {
-      title: "Purchase Orders",
-      description: "Manage supplier orders",
-    },
-
     "/purchases": {
       title: "Purchases",
       description: "Track purchased inventory",
@@ -135,8 +125,6 @@ const Topbar = ({ sidebarExpanded }) => {
     "/product-finder": "Inventory",
     "/stock-history": "Inventory",
     "/transfers": "Inventory",
-    "/suppliers": "Purchasing",
-    "/purchase-orders": "Purchasing",
     "/purchases": "Purchasing",
     "/customers": "Management",
     "/reports": "Management",

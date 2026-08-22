@@ -12,8 +12,6 @@ import Dashboard from "./pages/Dashboard/Dashboard";
 import Products from "./pages/Products/Products";
 import Inventory from "./pages/Inventory/Inventory";
 import StockHistory from "./pages/StockHistory/StockHistory";
-import Suppliers from "./pages/Suppliers/Suppliers";
-import PurchaseOrders from "./pages/PurchaseOrders/PurchaseOrders";
 import POS from "./pages/POS/POS";
 import Reservations from "./pages/Reservations/Reservations";
 import ProductFinder from "./pages/ProductFinder/ProductFinder";
@@ -128,26 +126,6 @@ function App() {
                     title="Stock Transfers"
                     description="Move inventory between branches and keep stock levels balanced."
                   />
-                </AppLayout>
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/suppliers"
-            element={
-              <ProtectedRoute>
-                <AppLayout>
-                  <Suppliers />
-                </AppLayout>
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/purchase-orders"
-            element={
-              <ProtectedRoute>
-                <AppLayout>
-                  <PurchaseOrders />
                 </AppLayout>
               </ProtectedRoute>
             }

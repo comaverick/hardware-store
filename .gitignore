@@ -75,3 +75,6 @@ Thumbs.db
 # Local secrets
 /server/.env
 /client/.env
+
+# Local system handoff package
+docs/system-handoff/

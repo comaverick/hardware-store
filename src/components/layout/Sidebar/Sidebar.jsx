@@ -9,8 +9,6 @@ import {
   BarChartOutlined,
   SettingOutlined,
   HistoryOutlined,
-  ShopOutlined,
-  FileTextOutlined,
   LockOutlined,
   CameraOutlined,
   AuditOutlined,
@@ -113,16 +111,6 @@ const Sidebar = ({ expanded, setExpanded }) => {
       title: "Purchasing",
 
       items: [
-        {
-          key: "/suppliers",
-          icon: <ShopOutlined />,
-          label: "Suppliers",
-        },
-        {
-          key: "/purchase-orders",
-          icon: <FileTextOutlined />,
-          label: "Purchase Orders",
-        },
         {
           key: "/purchases",
           icon: <ShoppingOutlined />,
