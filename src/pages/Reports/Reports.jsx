@@ -5,14 +5,12 @@ import {
   Col,
   Empty,
   Row,
-  Select,
   Spin,
   Statistic,
   Table,
   Tag,
   Typography,
   message,
-  Space,
 } from "antd";
 import {
   Bar,
@@ -38,11 +36,21 @@ const localDateKey = (value) => {
 
 const money = (value) => `\u20B1${Number(value || 0).toLocaleString("en-PH", { minimumFractionDigits: 2 })}`;
 
+const getRefundAmountInRange = (sales, start, end) => sales.reduce((total, sale) => (
+  total + (sale.refunds || []).reduce((refundTotal, refund) => {
+    const processedAt = new Date(refund.createdAt || sale.updatedAt || sale.createdAt);
+    return !Number.isNaN(processedAt.getTime()) && processedAt >= start && processedAt < end
+      ? refundTotal + Number(refund.amount || 0)
+      : refundTotal;
+  }, 0)
+), 0);
+
 const Reports = () => {
   const [sales, setSales] = useState([]);
   const [inventory, setInventory] = useState([]);
   const [products, setProducts] = useState([]);
   const [period, setPeriod] = useState("WEEK");
+  const [chartMetric, setChartMetric] = useState("SALES");
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -225,6 +233,8 @@ const Reports = () => {
           label: currentStart.toLocaleTimeString("en-US", { hour: "numeric" }),
           revenue: currentSales.reduce((sum, sale) => sum + Number(sale.totalAmount || 0), 0),
           previousRevenue: previousSales.reduce((sum, sale) => sum + Number(sale.totalAmount || 0), 0),
+          refunds: getRefundAmountInRange(sales, currentStart, currentEnd),
+          previousRefunds: getRefundAmountInRange(sales, previousStart, previousEnd),
           transactions: currentSales.length,
         };
       });
@@ -241,14 +251,18 @@ const Reports = () => {
       const previousKey = localDateKey(previousDate);
       const daily = periodSales.filter((sale) => localDateKey(sale.createdAt) === key);
       const previousDaily = completedSales.filter((sale) => localDateKey(sale.createdAt) === previousKey);
+      const nextDate = new Date(date);
+      nextDate.setDate(nextDate.getDate() + 1);
       return {
         label: period === "MONTH" ? date.getDate() : date.toLocaleDateString("en-US", { weekday: "short" }),
         revenue: daily.reduce((sum, sale) => sum + Number(sale.totalAmount || 0), 0),
         previousRevenue: previousDaily.reduce((sum, sale) => sum + Number(sale.totalAmount || 0), 0),
+        refunds: getRefundAmountInRange(sales, date, nextDate),
+        previousRefunds: getRefundAmountInRange(sales, previousDate, date),
         transactions: daily.length,
       };
     });
-  }, [completedSales, cutoff, period, periodSales]);
+  }, [completedSales, cutoff, period, periodSales, sales]);
 
   const branchData = useMemo(() => {
     const map = new Map();
@@ -285,6 +299,8 @@ const Reports = () => {
     },
   ];
 
+  const hasChartData = chartData.some((bucket) => bucket.revenue > 0 || bucket.refunds > 0);
+
   if (loading)
     return (
       <div className="reports-loading">
@@ -295,19 +311,43 @@ const Reports = () => {
   return (
     <div className="reports-page">
       <div className="reports-header">
-        <Space>
-          <Select
-            className="reports-period-select"
-            value={period}
-            onChange={setPeriod}
-            options={[
-              { value: "TODAY", label: "Today" },
-              { value: "WEEK", label: "Last 7 days" },
-              { value: "MONTH", label: "This month" },
-            ]}
-          />
-          <Button icon={<DownloadOutlined />} onClick={exportCsv}>Export CSV</Button>
-        </Space>
+        <div className="reports-header-copy">
+          <Text className="reports-eyebrow">REPORTING</Text>
+          <h1>Reports &amp; analytics</h1>
+          <p>Review sales performance, inventory health, and refund activity.</p>
+        </div>
+
+        <div className="reports-header-actions">
+          <div className={`reports-period-toggle ${period.toLowerCase()}-active`}>
+            <button
+              type="button"
+              className={period === "TODAY" ? "active" : ""}
+              aria-pressed={period === "TODAY"}
+              onClick={() => setPeriod("TODAY")}
+            >
+              Today
+            </button>
+            <button
+              type="button"
+              className={period === "WEEK" ? "active" : ""}
+              aria-pressed={period === "WEEK"}
+              onClick={() => setPeriod("WEEK")}
+            >
+              7 days
+            </button>
+            <button
+              type="button"
+              className={period === "MONTH" ? "active" : ""}
+              aria-pressed={period === "MONTH"}
+              onClick={() => setPeriod("MONTH")}
+            >
+              Month
+            </button>
+          </div>
+          <Button className="reports-export-button" icon={<DownloadOutlined />} onClick={exportCsv}>
+            Export CSV
+          </Button>
+        </div>
       </div>
 
       <Row gutter={[16, 16]} className="reports-stat-row">
@@ -361,44 +401,88 @@ const Reports = () => {
 
       <Row gutter={[16, 16]}>
         <Col xs={24} lg={16}>
-          <Card title="Sales trend" className="reports-card">
-            {periodSales.length ? (
-              <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={chartData} barGap={-18}>
-<CartesianGrid
+          <Card
+            title={chartMetric === "SALES" ? "Sales trend" : "Refund trend"}
+            extra={(
+              <div className="reports-chart-actions">
+                <div className={`reports-metric-toggle ${chartMetric.toLowerCase()}-active`}>
+                  <button
+                    type="button"
+                    className={chartMetric === "SALES" ? "active" : ""}
+                    aria-pressed={chartMetric === "SALES"}
+                    onClick={() => setChartMetric("SALES")}
+                  >
+                    Sales
+                  </button>
+                  <button
+                    type="button"
+                    className={chartMetric === "REFUNDS" ? "active" : ""}
+                    aria-pressed={chartMetric === "REFUNDS"}
+                    onClick={() => setChartMetric("REFUNDS")}
+                  >
+                    Refunds
+                  </button>
+                </div>
+                <span className="reports-chart-period">{period === "TODAY" ? "Today" : period === "WEEK" ? "Last 7 days" : "This month"}</span>
+              </div>
+            )}
+            className="reports-card reports-chart-card"
+          >
+            {hasChartData ? (
+              <ResponsiveContainer width="100%" height={310}>
+                <BarChart data={chartData} barGap={-20} margin={{ top: 12, right: 4, left: 0, bottom: 4 }}>
+                  <CartesianGrid
                     strokeDasharray="3 3"
                     vertical={false}
-                    stroke="#e5e5ea"
+                    stroke="#e1e1e5"
                   />
-                  <XAxis dataKey="label" tickLine={false} axisLine={false} />
+                  <XAxis
+                    dataKey="label"
+                    tickLine={false}
+                    axisLine={false}
+                    tick={{ fill: "#8a8a91", fontSize: 11 }}
+                    tickMargin={10}
+                    minTickGap={18}
+                  />
                   <YAxis
                     tickLine={false}
                     axisLine={false}
-                    tickFormatter={(value) => `\u20B1${value}`}
+                    tick={{ fill: "#8a8a91", fontSize: 11 }}
+                    tickMargin={8}
+                    width={58}
+                    tickFormatter={(value) => value >= 1000 ? `\u20B1${(value / 1000).toFixed(0)}k` : `\u20B1${value}`}
                   />
                   <Tooltip
-                    formatter={(value) => [
+                    cursor={{ fill: "rgba(80, 80, 86, 0.05)" }}
+                    contentStyle={{
+                      border: "1px solid #dedee2",
+                      borderRadius: "12px",
+                      boxShadow: "0 10px 24px rgba(0, 0, 0, 0.1)",
+                      fontSize: 12,
+                    }}
+                    formatter={(value, name) => [
                       `\u20B1${Number(value).toLocaleString("en-PH", { minimumFractionDigits: 2 })}`,
-                      "Revenue",
+                      name === "Refunds" ? "Refunds" : name === "Previous period" ? "Previous period" : "Revenue",
                     ]}
                   />
                   <Bar
-                    dataKey="previousRevenue"
+                    dataKey={chartMetric === "SALES" ? "previousRevenue" : "previousRefunds"}
                     name="Previous period"
-                    fill="#eeeeee"
-                    radius={[4, 4, 0, 0]}
-                    maxBarSize={32}
+                    fill="#d7d7dc"
+                    radius={[6, 6, 0, 0]}
+                    maxBarSize={28}
                   />
                   <Bar
-                    dataKey="revenue"
-                    fill="#111111"
-                    radius={[4, 4, 0, 0]}
-                    maxBarSize={32}
+                    dataKey={chartMetric === "SALES" ? "revenue" : "refunds"}
+                    name={chartMetric === "SALES" ? "Revenue" : "Refunds"}
+                    fill="#4b4b50"
+                    radius={[6, 6, 0, 0]}
+                    maxBarSize={22}
                   />
                 </BarChart>
               </ResponsiveContainer>
             ) : (
-              <Empty description="No completed sales in this period." />
+              <Empty description={chartMetric === "SALES" ? "No completed sales in this period." : "No refunds in this period."} />
             )}
           </Card>
         </Col>
