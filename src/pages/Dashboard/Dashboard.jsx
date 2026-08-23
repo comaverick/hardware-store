@@ -148,12 +148,12 @@ const Dashboard = ({
 
   const selectedBranchName = useMemo(() => {
     if (selectedBranch === "ALL") {
-      return "All Branches";
+      return "All branches";
     }
 
     return (
       availableBranches.find((branch) => branch.id === selectedBranch)?.name ||
-      "All Branches"
+      "All branches"
     );
   }, [selectedBranch, availableBranches]);
 
@@ -240,6 +240,9 @@ const Dashboard = ({
   );
 
   const todayTransactions = todaySales.length;
+  const todayTransactionsLabel = todayTransactions === 1
+    ? "1 completed transaction"
+    : String(todayTransactions) + " completed transactions";
 
   const refundPeriod = useMemo(() => {
     const periodStart = new Date();
@@ -654,7 +657,7 @@ const Dashboard = ({
 
   if (loading) {
     return (
-      <div className="dashboard-loading">
+      <div className="dashboard dashboard-loading">
         <div className="dashboard-loading-heading">
           <Skeleton.Input active size="large" />
           <Skeleton.Input active size="small" />
@@ -766,7 +769,7 @@ const Dashboard = ({
 
           <article className="overview-primary overview-primary-sales">
             <div className="overview-primary-top">
-              <span className="overview-label">Today's completed sales</span>
+              <span className="overview-label">Today's sales</span>
               <span className="overview-mark" aria-hidden="true">₱</span>
             </div>
 
@@ -777,7 +780,7 @@ const Dashboard = ({
             </strong>
 
             <div className="overview-primary-footer">
-              <span>{todayTransactions} completed transactions</span>
+              <span>{todayTransactionsLabel}</span>
               <span>{selectedBranchName}</span>
             </div>
           </article>
@@ -810,7 +813,7 @@ const Dashboard = ({
             <article className="overview-stat overview-stat-sales">
               <span className="overview-label">Today's sales</span>
               <strong>&#8369;{todaySalesAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</strong>
-              <span>{todayTransactions} completed transactions</span>
+              <span>{todayTransactionsLabel}</span>
             </article>
           </div>
         </div>
