@@ -1121,6 +1121,7 @@ const POS = () => {
 
             <Select
               value={selectedPrinter || undefined}
+              aria-label="Receipt printer"
               placeholder={
                 printerLoading ? "Detecting printer..." : "Select printer"
               }
@@ -1249,6 +1250,7 @@ const POS = () => {
                       <Button
                         key={id}
                         size="small"
+                        aria-label={"Add " + product.name + " to current sale"}
                         onClick={() => addToCart(product)}
                       >
                         {product.name}
@@ -1384,6 +1386,7 @@ const POS = () => {
                 <Button
                   danger
                   type="text"
+                  aria-label="Clear current sale"
                   onClick={clearCart}
                   disabled={cart.length === 0}
                 >
@@ -1437,6 +1440,12 @@ const POS = () => {
                         })}{" "}
                         / {item.unit}
                       </div>
+
+                      {item.quantity >= item.available && (
+                        <span className="cart-item-warning" role="status">
+                          Maximum available stock reached
+                        </span>
+                      )}
                     </div>
 
                     <div className="cart-item-controls">
@@ -1493,6 +1502,17 @@ const POS = () => {
                 cart.length === 0 ? "pos-summary-disabled" : ""
               }`}
             >
+              <div className="summary-row">
+                <span>Subtotal</span>
+
+                <strong>
+                  &#8369;
+                  {subtotal.toLocaleString("en-PH", {
+                    minimumFractionDigits: 2,
+                  })}
+                </strong>
+              </div>
+
               <div className="summary-total">
                 <span>Total</span>
 
@@ -1535,7 +1555,13 @@ const POS = () => {
                       aria-label="Quick cash amount"
                     >
                       <Button
+                        className={
+                          amountPaid === total && total > 0
+                            ? "quick-tender-selected"
+                            : ""
+                        }
                         disabled={cart.length === 0}
+                        aria-pressed={amountPaid === total && total > 0}
                         onClick={() => setAmountPaid(total)}
                       >
                         Exact amount
@@ -1543,7 +1569,13 @@ const POS = () => {
                       {[100, 200, 500, 1000].map((amount) => (
                         <Button
                           key={amount}
+                          className={
+                            amountPaid === amount
+                              ? "quick-tender-selected"
+                              : ""
+                          }
                           disabled={cart.length === 0}
+                          aria-pressed={amountPaid === amount}
                           onClick={() => setAmountPaid(amount)}
                         >
                           &#8369;{amount.toLocaleString("en-PH")}

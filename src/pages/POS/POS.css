@@ -1899,6 +1899,15 @@
   font-variant-numeric: tabular-nums;
 }
 
+.cart-item-warning {
+  display: block;
+  margin-top: 5px;
+  color: var(--app-warning) !important;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
 .cart-item-controls .ant-btn,
 .cart-item-controls .ant-input-number {
   min-height: 32px;
@@ -1915,6 +1924,24 @@
   border-top: 0;
   font-size: 15px;
   font-weight: 700;
+}
+
+.summary-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--app-muted);
+  font-size: 13px;
+}
+
+.summary-row strong {
+  color: var(--app-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.summary-total {
+  margin-top: 8px;
 }
 
 .summary-total strong {
@@ -1944,6 +1971,15 @@
   min-height: 36px;
   border-radius: 8px;
   font-size: 12px;
+}
+
+.quick-tender .ant-btn.quick-tender-selected,
+.quick-tender .ant-btn.quick-tender-selected:hover,
+.quick-tender .ant-btn.quick-tender-selected:focus-visible {
+  border-color: var(--app-accent-strong) !important;
+  background: var(--app-accent-soft) !important;
+  color: var(--app-accent-deep) !important;
+  box-shadow: inset 0 0 0 1px var(--app-accent-strong);
 }
 
 .change-display {
@@ -2228,10 +2264,32 @@
 
 /* Keep glass visible during shell motion, but reduce the blur repaint cost briefly. */
 @media (min-width: 901px) {
-  .app-layout-sidebar-moving .pos-page .pos-header,
-  .app-layout-sidebar-moving .pos-page .pos-products-card,
-  .app-layout-sidebar-moving .pos-page .pos-cart-card {
+  .app-layout-sidebar-moving .pos-page .pos-header {
     -webkit-backdrop-filter: blur(8px) saturate(120%);
     backdrop-filter: blur(8px) saturate(120%);
   }
+}
+
+/* Ground the two primary POS workspaces with warm operational tints, not glass. */
+.pos-page .pos-products-card,
+.pos-page .pos-cart-card {
+  border-color: var(--app-pos-panel-border) !important;
+  box-shadow: var(--app-pos-panel-shadow) !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+.pos-page .pos-products-card {
+  background: var(--app-pos-products-surface) !important;
+}
+
+.pos-page .pos-cart-card {
+  background: var(--app-pos-sale-surface) !important;
+}
+
+.pos-page .pos-products-card::before,
+.pos-page .pos-products-card::after,
+.pos-page .pos-cart-card::before,
+.pos-page .pos-cart-card::after {
+  display: none;
 }

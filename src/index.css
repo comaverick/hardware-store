@@ -7,6 +7,10 @@
   --app-panel-raised: #ffffff;
   --app-panel-translucent: rgba(255, 255, 255, 0.64);
   --app-panel-translucent-border: rgba(255, 255, 255, 0.72);
+  --app-pos-products-surface: #fffaf5;
+  --app-pos-sale-surface: #fff5ec;
+  --app-pos-panel-border: #eadfd2;
+  --app-pos-panel-shadow: 0 10px 26px rgb(77 46 25 / 0.08);
   --app-sidebar: #20262b;
   --app-sidebar-strong: #151a1e;
   --app-sidebar-ink: #fffaf4;

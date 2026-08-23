@@ -66,6 +66,17 @@
   will-change: margin-left;
 }
 
+.app-layout-pos .topbar-branch {
+  border-color: var(--app-line);
+  background: var(--app-panel-translucent);
+  box-shadow: none;
+}
+
+.app-layout-pos .topbar-branch .branch-value {
+  color: var(--app-muted);
+  font-weight: 650;
+}
+
 /* ========================================
    RESPONSIVE
 ======================================== */
