@@ -219,7 +219,30 @@
 .sidebar-expanded .sidebar-item { justify-content: flex-start; padding-left: 13px; }
 .sidebar-expanded .sidebar-item-label { opacity: 1; transform: translateX(0); }
 
-.sidebar-collapsed:not(.sidebar-mobile-open) .sidebar-navigation { scrollbar-gutter: auto; }
+.sidebar.sidebar-collapsed:not(.sidebar-mobile-open) .sidebar-navigation {
+  scrollbar-gutter: auto;
+  scrollbar-color: transparent transparent;
+  scrollbar-width: none;
+}
+
+.sidebar.sidebar-collapsed:not(.sidebar-mobile-open) .sidebar-navigation::-webkit-scrollbar,
+.sidebar.sidebar-collapsed:not(.sidebar-mobile-open) .sidebar-navigation::-webkit-scrollbar-track,
+.sidebar.sidebar-collapsed:not(.sidebar-mobile-open) .sidebar-navigation::-webkit-scrollbar-thumb {
+  width: 0;
+  height: 0;
+  background: transparent;
+  display: none;
+}
+
+.sidebar.sidebar-collapsed:not(.sidebar-mobile-open) {
+  scrollbar-width: none;
+}
+
+.sidebar.sidebar-collapsed:not(.sidebar-mobile-open)::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
 .sidebar-collapsed:not(.sidebar-mobile-open) .sidebar-item { justify-content: center; padding-inline: 0; }
 .sidebar-collapsed:not(.sidebar-mobile-open) .sidebar-item-icon { margin-inline: auto; }
 
