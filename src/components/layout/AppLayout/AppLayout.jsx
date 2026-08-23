@@ -1,5 +1,13 @@
 import { Layout } from "antd";
-import { cloneElement, isValidElement, useEffect, useState } from "react";
+import {
+  cloneElement,
+  isValidElement,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
+import { useLocation } from "react-router-dom";
 
 import Sidebar from "../Sidebar/Sidebar";
 import Topbar from "../Topbar/Topbar";
@@ -8,10 +16,33 @@ import Assistant from "../../../pages/Assistant/Assistant";
 import "./AppLayout.css";
 
 const AppLayout = ({ children }) => {
+  const location = useLocation();
   const [sidebarExpanded, setSidebarExpanded] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [branchOptions, setBranchOptions] = useState([]);
   const [selectedBranch, setSelectedBranch] = useState("ALL");
+  const [sidebarTransitioning, setSidebarTransitioning] = useState(false);
+  const previousSidebarExpanded = useRef(sidebarExpanded);
+  const sidebarMotionTimer = useRef(null);
+
+  useLayoutEffect(() => {
+    if (previousSidebarExpanded.current === sidebarExpanded) return undefined;
+
+    previousSidebarExpanded.current = sidebarExpanded;
+    setSidebarTransitioning(true);
+
+    sidebarMotionTimer.current = window.setTimeout(() => {
+      setSidebarTransitioning(false);
+      sidebarMotionTimer.current = null;
+    }, 230);
+
+    return () => {
+      if (sidebarMotionTimer.current) {
+        window.clearTimeout(sidebarMotionTimer.current);
+        sidebarMotionTimer.current = null;
+      }
+    };
+  }, [sidebarExpanded]);
 
   useEffect(() => {
     if (!mobileSidebarOpen) return undefined;
@@ -46,7 +77,11 @@ const AppLayout = ({ children }) => {
     : children;
 
   return (
-    <Layout className="app-layout">
+    <Layout
+      className={`app-layout ${location.pathname === "/pos" ? "app-layout-pos" : ""} ${
+        sidebarTransitioning ? "app-layout-sidebar-moving" : ""
+      }`}
+    >
       <a className="skip-link" href="#main-content">
         Skip to content
       </a>

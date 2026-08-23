@@ -52,6 +52,20 @@
   margin-left: var(--app-sidebar-expanded);
 }
 
+/* POS has more glass compositing work, so keep its shell resize shorter and pre-warmed. */
+.app-layout-pos .sidebar,
+.app-layout-pos .app-content {
+  transition-duration: 210ms;
+}
+
+.app-layout-pos .sidebar {
+  will-change: width;
+}
+
+.app-layout-pos .app-content {
+  will-change: margin-left;
+}
+
 /* ========================================
    RESPONSIVE
 ======================================== */

@@ -1068,19 +1068,22 @@ const POS = () => {
 
       <div className="pos-header">
         <div className="pos-header-controls">
-          <div className="pos-header-left">
+          <div className="pos-toolbar-history">
             <Button icon={<HistoryOutlined />} onClick={openSalesHistory}>
-            Transaction History
-          </Button>
-          {/* BRANCH */}
+              Transaction history
+            </Button>
+          </div>
 
           <div className="pos-branch">
-            <Text type="secondary">Branch</Text>
+            <Text type="secondary" className="pos-branch-label">
+              Transaction branch
+            </Text>
 
             <Select
               value={selectedBranch || undefined}
               onChange={setSelectedBranch}
               size="large"
+              aria-label="Transaction branch"
               loading={inventoryLoading}
               style={{
                 minWidth: 260,
@@ -1093,8 +1096,6 @@ const POS = () => {
             />
           </div>
 
-          </div>
-
           {/* PRINTER */}
 
           <div className="pos-printer">
@@ -1102,16 +1103,18 @@ const POS = () => {
               className={`printer-status ${
                 printerOnline ? "printer-connected" : "printer-disconnected"
               }`}
+              role="status"
+              aria-live="polite"
             >
-              <span className="printer-status-dot">*</span>
+              <span className="printer-status-dot" aria-hidden="true" />
 
               <div>
-                <strong>Receipt Printer</strong>
+                    <strong>Receipt printer</strong>
 
                 <div className="printer-status-text">
                   {printerOnline
                     ? selectedPrinter || "Connected"
-                    : "Printer Offline"}
+                    : "Printer offline"}
                 </div>
               </div>
             </div>
@@ -1154,7 +1157,8 @@ const POS = () => {
               icon={<PrinterOutlined />}
               onClick={testPrint}
               loading={printing}
-              disabled={!printerOnline || printing}
+              disabled={!selectedPrinter || !printerOnline || printing}
+              aria-label="Test receipt printer"
             >
               {printing ? "Printing..." : "Test"}
             </Button>
@@ -1163,6 +1167,7 @@ const POS = () => {
               size="large"
               onClick={fetchPrinters}
               loading={printerLoading}
+              aria-label="Refresh receipt printers"
             >
               Refresh
             </Button>
@@ -1192,7 +1197,15 @@ const POS = () => {
               ref={searchRef}
               size="large"
               prefix={<SearchOutlined />}
-              suffix={<BarcodeOutlined />}
+              suffix={
+                <span
+                  className="barcode-control"
+                  title="Scan or enter a barcode"
+                  aria-label="Barcode scanner input"
+                >
+                  <BarcodeOutlined aria-hidden="true" />
+                </span>
+              }
               placeholder="Search product, SKU, brand, or barcode..."
               value={search}
               onChange={(event) => setSearch(event.target.value)}
@@ -1269,10 +1282,12 @@ const POS = () => {
                     key={product._id}
                     className={`pos-product-card ${
                       stock <= 0 ? "out-of-stock" : ""
-                    }`}
+                    } ${inCart ? "in-cart" : ""}`}
                     hoverable={stock > 0}
                     role="button"
                     tabIndex={stock > 0 ? 0 : -1}
+                    aria-label={`${stock > 0 ? "Add" : "Unavailable:"} ${product.name}`}
+                    aria-disabled={stock <= 0}
                     onClick={() => {
                       if (stock > 0) {
                         addToCart(product);
@@ -1361,7 +1376,7 @@ const POS = () => {
                 <div className="pos-card-title">
                   <ShoppingCartOutlined />
 
-                  <span>Current Sale</span>
+                  <span>Current sale</span>
 
                   <Tag color="blue">{totalItems}</Tag>
                 </div>
@@ -1379,8 +1394,13 @@ const POS = () => {
           >
             {cart.length === 0 ? (
               <Empty
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description="Cart is empty"
+                image={<ShoppingCartOutlined className="cart-empty-icon" />}
+                description={
+                  <div className="cart-empty-copy">
+                    <strong>Select a product to begin</strong>
+                    <span>Search the catalog or scan a barcode to add items.</span>
+                  </div>
+                }
                 className="cart-empty"
               />
             ) : (
@@ -1389,8 +1409,20 @@ const POS = () => {
                   <div
                     className="cart-item"
                     onClick={() => setSelectedCartProductId(item.product)}
+                    onKeyDown={(event) => {
+                      if (event.target !== event.currentTarget) return;
+
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        setSelectedCartProductId(item.product);
+                      }
+                    }}
                     data-selected={selectedCartProductId === item.product}
                     data-cart-product-id={item.product}
+                    role="button"
+                    tabIndex={0}
+                    aria-pressed={selectedCartProductId === item.product}
+                    aria-label={`Select ${item.name} in current sale`}
                     key={item.product}
                   >
                     <div className="cart-item-main">
@@ -1411,6 +1443,7 @@ const POS = () => {
                       <Space.Compact>
                         <Button
                           icon={<MinusOutlined />}
+                          aria-label={`Decrease ${item.name} quantity`}
                           onClick={() => decreaseQuantity(item.product)}
                         />
 
@@ -1422,11 +1455,13 @@ const POS = () => {
                             updateQuantity(item.product, value)
                           }
                           controls={false}
+                          aria-label={`Quantity for ${item.name}`}
                           className="cart-quantity"
                         />
 
                         <Button
                           icon={<PlusOutlined />}
+                          aria-label={`Increase ${item.name} quantity`}
                           onClick={() => increaseQuantity(item.product)}
                         />
                       </Space.Compact>
@@ -1435,6 +1470,7 @@ const POS = () => {
                         danger
                         type="text"
                         icon={<DeleteOutlined />}
+                        aria-label={`Remove ${item.name} from current sale`}
                         onClick={() => removeFromCart(item.product)}
                       />
                     </div>
@@ -1452,18 +1488,13 @@ const POS = () => {
 
             {/* SUMMARY */}
 
-            <div className="pos-summary">
-              <div className="summary-row">
-                <Text>Subtotal</Text>
-
-                <strong>
-                  &#8369;
-                  {subtotal.toLocaleString("en-PH", {
-                    minimumFractionDigits: 2,
-                  })}
-                </strong>
-              </div><div className="summary-total">
-                <span>TOTAL</span>
+            <div
+              className={`pos-summary ${
+                cart.length === 0 ? "pos-summary-disabled" : ""
+              }`}
+            >
+              <div className="summary-total">
+                <span>Total</span>
 
                 <strong>
                   &#8369;
@@ -1476,11 +1507,14 @@ const POS = () => {
 
             {/* PAYMENT */}
 
-            <div className="payment-section">
-
+            <div
+              className={`payment-section ${
+                cart.length === 0 ? "payment-section-disabled" : ""
+              }`}
+            >
               <div className="amount-row">
                 <div>
-                  <Text type="secondary">Amount Paid</Text>
+                  <Text type="secondary">Amount paid</Text>
 
                   <InputNumber
                     size="large"
@@ -1489,6 +1523,7 @@ const POS = () => {
                     prefix={"\u20B1"}
                     value={amountPaid}
                     onChange={(value) => setAmountPaid(value || 0)}
+                    disabled={cart.length === 0}
                     style={{
                       width: "100%",
                     }}
@@ -1499,12 +1534,16 @@ const POS = () => {
                       className="quick-tender"
                       aria-label="Quick cash amount"
                     >
-                      <Button onClick={() => setAmountPaid(total)}>
+                      <Button
+                        disabled={cart.length === 0}
+                        onClick={() => setAmountPaid(total)}
+                      >
                         Exact amount
                       </Button>
                       {[100, 200, 500, 1000].map((amount) => (
                         <Button
                           key={amount}
+                          disabled={cart.length === 0}
                           onClick={() => setAmountPaid(amount)}
                         >
                           &#8369;{amount.toLocaleString("en-PH")}
@@ -1529,25 +1568,30 @@ const POS = () => {
               </div>
             </div>
 
-            <Button
-              type="primary"
-              size="large"
-              block
-              className="complete-sale-button"
-              loading={processing}
-              disabled={
-                cart.length === 0 ||
-                !selectedBranch ||
-                amountPaid < total
-              }
-              onClick={completeSale}
-            >
-              {cart.length === 0
-                ? "ADD ITEMS TO START"
-                : amountPaid < total
-                  ? "ENTER SUFFICIENT CASH"
-                  : `PAY \u20B1${total.toLocaleString("en-PH", { minimumFractionDigits: 2 })}`}
-            </Button>
+            <div className="checkout-action-slot">
+              {cart.length === 0 ? (
+                <div className="checkout-disabled-note">
+                  Add an item to enable checkout.
+                </div>
+              ) : (
+                <Button
+                  type="primary"
+                  size="large"
+                  block
+                  className="complete-sale-button"
+                  loading={processing}
+                  disabled={
+                    !selectedBranch ||
+                    amountPaid < total
+                  }
+                  onClick={completeSale}
+                >
+                  {amountPaid < total
+                    ? "Enter sufficient cash"
+                    : `Pay \u20B1${total.toLocaleString("en-PH", { minimumFractionDigits: 2 })}`}
+                </Button>
+              )}
+            </div>
 
             <Text className="checkout-help" type="secondary">
               F2 Search  -  F4 Cash  -  F5 GCash  -  F6 Card  -  F9 Pay
