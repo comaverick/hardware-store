@@ -101,6 +101,14 @@
   --app-sidebar-active: linear-gradient(90deg, rgb(249 99 2 / 0.15), rgb(249 99 2 / 0.05));
   --app-sidebar-active-hover: linear-gradient(90deg, rgb(249 99 2 / 0.2), rgb(249 99 2 / 0.08));
   --app-sidebar-edge: rgba(255, 255, 255, 0.11);
+  --app-sidebar-surface: linear-gradient(145deg, rgb(255 255 255 / 0.065), rgb(249 99 2 / 0.035) 48%, rgb(21 26 30 / 0.14)), linear-gradient(180deg, rgb(32 38 43 / 0.98), rgb(21 26 30 / 0.99));
+  --app-sidebar-highlight: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.2), transparent);
+  --app-sidebar-control: linear-gradient(135deg, rgb(255 255 255 / 0.08), rgb(255 255 255 / 0.035));
+  --app-sidebar-control-hover: linear-gradient(135deg, rgb(249 99 2 / 0.16), rgb(249 99 2 / 0.07));
+  --app-sidebar-item-border: rgba(255, 255, 255, 0.14);
+  --app-sidebar-divider: rgba(255, 255, 255, 0.12);
+  --app-sidebar-shadow: 14px 0 36px rgba(21, 26, 30, 0.16);
+  --app-sidebar-scrollbar: rgba(255, 255, 255, 0.25);
   --app-sidebar-collapsed: 78px;
   --app-sidebar-expanded: 264px;
   --app-assistant-clearance: 92px;
