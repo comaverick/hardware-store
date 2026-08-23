@@ -1,75 +1,220 @@
+:root {
+  --app-canvas: #f5f2ed;
+  --app-canvas-modern: radial-gradient(ellipse 58% 48% at 8% -10%, rgb(249 99 2 / 0.085), transparent 72%), radial-gradient(ellipse 46% 36% at 60% 28%, rgb(255 186 128 / 0.055), transparent 76%), radial-gradient(ellipse 44% 36% at 97% 10%, rgb(255 255 255 / 0.5), transparent 74%), linear-gradient(180deg, #faf8f4 0%, #f5f2ed 100%);
+  --app-dashboard-atmosphere: radial-gradient(ellipse 70% 48% at 18% 16%, rgb(196 77 28 / 0.085), transparent 72%), radial-gradient(ellipse 66% 46% at 72% 42%, rgb(251 146 60 / 0.06), transparent 76%), radial-gradient(ellipse 58% 42% at 44% 84%, rgb(245 158 11 / 0.04), transparent 78%);
+  --app-dashboard-glow: none;
+  --app-panel: #fbfaf7;
+  --app-panel-raised: #ffffff;
+  --app-panel-translucent: rgba(255, 255, 255, 0.64);
+  --app-panel-translucent-border: rgba(255, 255, 255, 0.72);
+  --app-sidebar: #20262b;
+  --app-sidebar-strong: #151a1e;
+  --app-sidebar-ink: #fffaf4;
+  --app-sidebar-muted: #a7adb0;
+  --app-ink: #20262b;
+  --app-heading: #151a1e;
+  --app-muted: #687178;
+  --app-subtle: #8a9295;
+  --app-line: #d9d5ce;
+  --app-line-strong: #bcb7ae;
+  --app-accent: #f96302;
+  --app-accent-light: #ff7a1a;
+  --app-accent-strong: #d94e00;
+  --app-accent-deep: #b93600;
+  --app-accent-gradient: linear-gradient(135deg, #ff7a1a 0%, #f96302 38%, #d94e00 72%, #b93600 100%);
+  --app-accent-glass: linear-gradient(135deg, rgba(255, 132, 62, 0.96) 0%, rgba(245, 107, 35, 0.95) 42%, rgba(214, 81, 13, 0.95) 100%);
+  --app-accent-soft: #fff0e6;
+  --app-accent-wash: #fff7f1;
+  --app-accent-ink: #8d3600;
+  --app-steel: #59676d;
+  --app-steel-soft: #eef0ef;
+  --app-success: #2d8a5f;
+  --app-success-soft: #e7f3ec;
+  --app-warning: #c47a18;
+  --app-warning-soft: #fff2dc;
+  --app-medium: #8d7318;
+  --app-medium-soft: #f5f0d9;
+  --app-danger: #b9433d;
+  --app-danger-soft: #f9e5e3;
+  --app-info: #4b7180;
+  --app-info-soft: #e8f0f2;
+  --app-focus: #f96302;
+  --app-chart-grid: #d7d1c8;
+  --app-chart-previous: #c8c3bc;
+  --app-chart-cursor: rgb(249 99 2 / 0.07);
+  --app-shadow-sm: 0 8px 22px rgba(32, 38, 43, 0.07);
+  --app-shadow-md: 0 16px 42px rgba(32, 38, 43, 0.14);
+  --app-scrim: rgba(21, 26, 30, 0.58);
+  --app-glass-light: rgba(255, 255, 255, 0.72);
+  --app-glass-dark: rgba(27, 33, 37, 0.82);
+  --app-glass-border-light: rgba(255, 255, 255, 0.65);
+  --app-glass-border-dark: rgba(255, 255, 255, 0.1);
+  --app-glass-border-accent: rgba(255, 255, 255, 0.42);
+  --app-glass-border-strong: rgba(255, 255, 255, 0.86);
+  --app-glass-background: linear-gradient(135deg, rgb(255 255 255 / 0.62), rgb(255 248 242 / 0.32));
+  --app-glass-secondary-background: linear-gradient(135deg, rgb(255 255 255 / 0.54), rgb(255 248 242 / 0.24));
+  --app-glass-background-raised: linear-gradient(135deg, rgb(255 255 255 / 0.78), rgb(255 248 242 / 0.54));
+  --app-glass-background-mobile: linear-gradient(135deg, rgb(255 255 255 / 0.7), rgb(255 248 242 / 0.46));
+  --app-glass-surface: var(--app-glass-background);
+  --app-glass-surface-raised: var(--app-glass-background-raised);
+  --app-glass-surface-mobile: var(--app-glass-background-mobile);
+  --app-glass-border: rgb(255 255 255 / 0.72);
+  --app-glass-inner-border: rgb(255 255 255 / 0.28);
+  --app-glass-reflection: linear-gradient(122deg, rgb(255 255 255 / 0.14), transparent 36%, rgb(255 238 226 / 0.06) 70%, transparent 100%);
+  --app-glass-highlight: rgb(255 255 255 / 0.92);
+  --app-glass-highlight-soft: rgb(255 255 255 / 0.66);
+  --app-glass-control: linear-gradient(135deg, rgb(255 255 255 / 0.68), rgb(255 248 242 / 0.48));
+  --app-glass-control-active: linear-gradient(135deg, rgb(255 255 255 / 0.84), rgb(255 248 242 / 0.68));
+  --app-glass-attention-control: linear-gradient(135deg, rgb(117 37 0 / 0.36), rgb(117 37 0 / 0.22));
+  --app-glass-attention-control-hover: linear-gradient(135deg, rgb(117 37 0 / 0.46), rgb(117 37 0 / 0.3));
+  --app-glass-control-border: rgb(249 99 2 / 0.26);
+  --app-glass-inset: inset 0 1px 0 rgb(255 255 255 / 0.92), inset 0 -1px 0 rgb(234 88 12 / 0.06);
+  --app-glass-shadow: inset 0 1px 0 rgb(255 255 255 / 0.92), inset 0 -1px 0 rgb(234 88 12 / 0.06), 0 18px 45px rgb(77 46 25 / 0.09);
+  --app-glass-control-shadow: inset 0 1px 0 rgb(255 255 255 / 0.86), 0 8px 18px rgb(77 46 25 / 0.08);
+  --app-glass-accent-shadow: inset 0 1px 0 rgb(255 255 255 / 0.42), inset 0 -14px 24px rgb(117 37 0 / 0.1), 0 18px 34px rgb(185 54 0 / 0.18);
+  --app-glass-attention-inner-border: rgb(255 255 255 / 0.24);
+  --app-glass-blur: 22px;
+  --app-glass-saturation: 145%;
+  --app-glass-saturate: saturate(145%);
+  --app-smart-surface: linear-gradient(135deg, rgb(255 255 255 / 0.08), rgb(249 99 2 / 0.055) 52%, rgb(21 26 30 / 0.16)), rgb(29 36 42 / 0.92);
+  --app-smart-border: rgba(255, 255, 255, 0.2);
+  --app-smart-reflection: linear-gradient(122deg, rgb(255 255 255 / 0.055), transparent 36%, rgb(249 99 2 / 0.04) 70%, transparent 100%);
+  --app-smart-inner-border: rgb(255 255 255 / 0.17);
+  --app-smart-inset: inset 0 1px 0 rgb(255 255 255 / 0.2), inset 0 -1px 0 rgb(249 99 2 / 0.08);
+  --app-smart-shadow: 0 14px 30px rgba(32, 38, 43, 0.12);
+  --app-smart-divider: rgba(255, 255, 255, 0.22);
+  --app-smart-muted: #c8cecc;
+  --app-smart-row: rgba(255, 255, 255, 0.075);
+  --app-smart-row-hover: rgba(255, 255, 255, 0.13);
+  --app-stock-row-hover: rgba(196, 122, 24, 0.07);
+  --app-smart-accent-surface: rgba(249, 99, 2, 0.2);
+  --app-smart-accent-border: rgba(249, 99, 2, 0.38);
+  --app-smart-critical-surface: rgba(185, 67, 61, 0.25);
+  --app-smart-critical-ink: #ffd9d5;
+  --app-smart-high-surface: rgba(196, 122, 24, 0.25);
+  --app-smart-high-ink: #ffe1ac;
+  --app-smart-medium-surface: rgba(141, 115, 24, 0.25);
+  --app-smart-medium-ink: #f2e5a8;
+  --app-smart-low-surface: rgba(45, 138, 95, 0.25);
+  --app-smart-low-ink: #c9efd9;
+  --app-sidebar-hover: rgba(255, 255, 255, 0.07);
+  --app-sidebar-active: linear-gradient(90deg, rgb(249 99 2 / 0.15), rgb(249 99 2 / 0.05));
+  --app-sidebar-active-hover: linear-gradient(90deg, rgb(249 99 2 / 0.2), rgb(249 99 2 / 0.08));
+  --app-sidebar-edge: rgba(255, 255, 255, 0.11);
+  --app-sidebar-collapsed: 78px;
+  --app-sidebar-expanded: 264px;
+  --app-assistant-clearance: 92px;
+  --app-assistant-clearance-mobile: 82px;
+  --app-motion-fast: 180ms;
+  --app-motion-shell: 260ms;
+  --app-motion-scrim: 200ms;
+  --app-ease-out: cubic-bezier(0.22, 0.8, 0.2, 1);
+  --app-font: "Avenir Next", "Segoe UI", ui-sans-serif, sans-serif;
+  --app-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
 * {
   box-sizing: border-box;
 }
 
-html,
+html {
+  min-height: 100%;
+  scroll-behavior: smooth;
+}
+
 body,
 #root {
-  margin: 0;
   min-height: 100%;
+  margin: 0;
 }
 
 body {
-  font-family:
-    -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", sans-serif;
-
-  background: #ffffff;
-  color: #1d1d1f;
-}
-
-/* ========================================
-   SHARED BLACK-ACCENT APPLICATION THEME
-======================================== */
-
-:root {
-  --app-ink: #111111;
-  --app-muted: #737373;
-  --app-border: #e2e2e2;
-  --app-surface: #ffffff;
-  --app-header: #f6f6f6;
-}
-
-body {
-  background: var(--app-surface);
+  background: var(--app-canvas-modern);
   color: var(--app-ink);
+  font-family: var(--app-font);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: var(--app-accent);
+  color: var(--app-sidebar-strong);
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button:focus-visible,
+a:focus-visible,
+.ant-btn:focus-visible,
+.ant-input:focus-visible,
+.ant-input-affix-wrapper:focus-within,
+.ant-select-focused .ant-select-selector,
+.ant-picker-focused,
+.ant-input-number-focused {
+  outline: 2px solid var(--app-focus);
+  outline-offset: 2px;
+}
+
+.app-layout,
+.ant-layout {
+  background: var(--app-canvas-modern) !important;
 }
 
 .ant-card {
-  border: 1px solid var(--app-border) !important;
-  border-radius: 16px !important;
-  background: var(--app-surface) !important;
+  border: 1px solid var(--app-line) !important;
+  border-radius: 14px !important;
+  background: var(--app-panel-raised) !important;
   box-shadow: none !important;
 }
 
 .ant-card-head {
   min-height: 56px;
-  border-bottom: 1px solid var(--app-border) !important;
-  background: var(--app-header);
+  border-bottom: 1px solid var(--app-line) !important;
+  background: var(--app-panel) !important;
 }
 
 .ant-card-head-title {
   color: var(--app-ink);
-  font-weight: 700;
+  font-weight: 750;
+}
+
+.ant-typography {
+  color: inherit;
 }
 
 .ant-btn {
-  border-radius: 9px;
-  border-color: #d4d4d4;
+  min-height: 36px;
+  border-color: var(--app-line-strong);
+  border-radius: 8px;
   color: var(--app-ink);
   box-shadow: none;
+  transition: background var(--app-motion-fast) var(--app-ease-out), border-color var(--app-motion-fast) var(--app-ease-out), color var(--app-motion-fast) var(--app-ease-out), transform var(--app-motion-fast) var(--app-ease-out);
 }
 
 .ant-btn:hover,
 .ant-btn:focus-visible {
-  border-color: var(--app-ink) !important;
-  color: var(--app-ink) !important;
+  border-color: var(--app-accent-strong) !important;
+  color: var(--app-accent-strong) !important;
+}
+
+.ant-btn:active {
+  transform: translateY(1px);
 }
 
 .ant-btn-primary,
 .ant-btn-primary:hover,
 .ant-btn-primary:focus-visible {
-  border-color: var(--app-ink) !important;
-  background: var(--app-ink) !important;
+  border-color: var(--app-accent-strong) !important;
+  background: var(--app-accent-strong) !important;
   color: #ffffff !important;
 }
 
@@ -79,8 +224,8 @@ body {
 .ant-picker,
 .ant-input-number,
 .ant-input-number-input {
-  border-color: #d8d8d8 !important;
-  border-radius: 9px !important;
+  border-color: var(--app-line-strong) !important;
+  border-radius: 8px !important;
   box-shadow: none !important;
 }
 
@@ -89,7 +234,7 @@ body {
 .ant-select:hover .ant-select-selector,
 .ant-picker:hover,
 .ant-input-number:hover {
-  border-color: #999999 !important;
+  border-color: var(--app-accent) !important;
 }
 
 .ant-input:focus,
@@ -97,35 +242,39 @@ body {
 .ant-select-focused .ant-select-selector,
 .ant-picker-focused,
 .ant-input-number-focused {
-  border-color: var(--app-ink) !important;
-  box-shadow: 0 0 0 2px rgba(17, 17, 17, 0.08) !important;
+  border-color: var(--app-accent-strong) !important;
+  box-shadow: 0 0 0 3px rgba(249, 99, 2, 0.15) !important;
 }
 
 .ant-table {
-  border: 1px solid var(--app-border);
-  border-radius: 12px;
   overflow: hidden;
+  border: 1px solid var(--app-line);
+  border-radius: 10px;
 }
 
 .ant-table-thead > tr > th {
-  background: var(--app-header) !important;
-  border-bottom: 1px solid var(--app-border) !important;
-  color: #444444 !important;
-  font-size: 12px;
+  background: #f0ede7 !important;
+  border-bottom: 1px solid var(--app-line) !important;
+  color: var(--app-muted) !important;
+  font-family: var(--app-mono);
+  font-size: 11px;
   font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .ant-table-tbody > tr > td {
-  border-bottom-color: #eeeeee !important;
+  border-bottom-color: #e4edef !important;
+  color: var(--app-ink);
 }
 
 .ant-table-tbody > tr:hover > td {
-  background: #fafafa !important;
+  background: var(--app-accent-wash) !important;
 }
 
 .ant-pagination-item-active {
-  border-color: var(--app-ink) !important;
-  background: var(--app-ink) !important;
+  border-color: var(--app-accent-strong) !important;
+  background: var(--app-accent-strong) !important;
 }
 
 .ant-pagination-item-active a {
@@ -135,41 +284,71 @@ body {
 .ant-tabs-tab-btn,
 .ant-tabs-tab:hover,
 .ant-tabs-tab-active .ant-tabs-tab-btn {
-  color: var(--app-ink) !important;
+  color: var(--app-accent-strong) !important;
 }
 
 .ant-tabs-ink-bar {
-  background: var(--app-ink) !important;
+  background: var(--app-accent) !important;
 }
 
 .ant-modal-content,
 .ant-drawer-content {
-  border: 1px solid var(--app-border);
-  border-radius: 16px;
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.14);
+  border: 1px solid var(--app-line);
+  border-radius: 14px;
+  box-shadow: var(--app-shadow-md);
 }
 
 .ant-modal-header,
 .ant-drawer-header {
-  border-bottom: 1px solid var(--app-border) !important;
-  background: var(--app-header);
+  border-bottom: 1px solid var(--app-line) !important;
+  background: var(--app-panel) !important;
 }
 
 .ant-tag {
   border-radius: 6px;
+  font-weight: 650;
 }
 
 .ant-switch-checked {
-  background: var(--app-ink) !important;
+  background: var(--app-accent-strong) !important;
 }
 
 .ant-checkbox-checked .ant-checkbox-inner,
 .ant-radio-checked .ant-radio-inner {
-  border-color: var(--app-ink) !important;
-  background: var(--app-ink) !important;
+  border-color: var(--app-accent-strong) !important;
+  background: var(--app-accent-strong) !important;
 }
 
-.ant-checkbox-wrapper:hover .ant-checkbox-inner,
-.ant-radio-wrapper:hover .ant-radio-inner {
-  border-color: var(--app-ink) !important;
+.ant-dropdown,
+.ant-dropdown-menu {
+  border: 1px solid var(--app-line) !important;
+  border-radius: 10px !important;
+  box-shadow: var(--app-shadow-md) !important;
+}
+
+.ant-dropdown-menu-item:hover {
+  background: var(--app-accent-soft) !important;
+}
+
+.ant-dropdown-menu-item-selected {
+  color: var(--app-accent-strong) !important;
+  background: var(--app-accent-soft) !important;
+}
+
+.ant-statistic-content,
+.kpi-value,
+.sale-amount,
+.inventory-value-summary strong {
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

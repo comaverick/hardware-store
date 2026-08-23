@@ -1,19 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 import {
-  ArrowDownOutlined,
   ArrowRightOutlined,
-  ArrowUpOutlined,
   BulbOutlined,
   CheckCircleOutlined,
-  CheckOutlined,
   ExclamationCircleOutlined,
   InboxOutlined,
   ShoppingCartOutlined,
   ShopOutlined,
   ThunderboltOutlined,
   WarningOutlined,
-  DownOutlined,
 } from "@ant-design/icons";
 
 import { Alert, Card, Col, Row, Skeleton, Spin, Typography } from "antd";
@@ -65,7 +62,11 @@ const getRefundAmountInRange = (sales, start, end) => sales.reduce((total, sale)
   }, 0)
 ), 0);
 
-const Dashboard = () => {
+const Dashboard = ({
+  branchScope = {},
+  onBranchOptionsChange = () => {},
+}) => {
+  const navigate = useNavigate();
   const { user } = useAuth();
   const currentHour = new Date().getHours();
   const greeting = currentHour < 12 ? "Good morning" : currentHour < 18 ? "Good afternoon" : "Good evening";
@@ -79,9 +80,7 @@ const Dashboard = () => {
 
   const [error, setError] = useState(null);
 
-  const [selectedBranch, setSelectedBranch] = useState("ALL");
-
-  const [branchOpen, setBranchOpen] = useState(false);
+  const selectedBranch = branchScope.selectedBranch || "ALL";
 
   const [salesPeriod, setSalesPeriod] = useState("WEEK");
 
@@ -142,6 +141,10 @@ const Dashboard = () => {
 
     return Array.from(branchMap.values());
   }, [inventory]);
+
+  useEffect(() => {
+    onBranchOptionsChange(availableBranches);
+  }, [availableBranches, onBranchOptionsChange]);
 
   const selectedBranchName = useMemo(() => {
     if (selectedBranch === "ALL") {
@@ -259,7 +262,7 @@ const Dashboard = () => {
     return {
       start: periodStart,
       end: periodEnd,
-      label: salesPeriod === "TODAY" ? "REFUNDS TODAY" : `REFUNDS THIS ${salesPeriod}`,
+      label: salesPeriod === "TODAY" ? "Refunds today" : `Refunds this ${salesPeriod.toLowerCase()}`,
     };
   }, [salesPeriod]);
 
@@ -406,6 +409,10 @@ const Dashboard = () => {
     (total, day) => total + day.transactions,
     0,
   );
+  const periodRefundTotal = salesPeriodData.reduce(
+    (total, day) => total + day.refunds,
+    0,
+  );
   const periodComparison = useMemo(() => {
     const now = new Date();
     let previousStart;
@@ -451,6 +458,16 @@ const Dashboard = () => {
 
     return { comparisonLabel, salesChange, transactionChange };
   }, [filteredSales, periodSalesTotal, periodTransactions, salesPeriod]);
+  const chartHasActivity = chartMetric === "SALES"
+    ? periodSalesTotal > 0 || periodTransactions > 0
+    : periodRefundTotal > 0 || refundPeriodSummary.count > 0;
+  const chartSummary = chartMetric === "SALES"
+    ? chartHasActivity
+      ? `Sales totaled ₱${periodSalesTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })} across ${periodTransactions} transactions for this ${salesPeriod.toLowerCase()} period, ${periodComparison.comparisonLabel}.`
+      : "No completed sales for this period."
+    : chartHasActivity
+      ? `Refunds totaled ₱${periodRefundTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })} across ${refundPeriodSummary.count} processed refunds for this ${salesPeriod.toLowerCase()} period.`
+      : "No refunds for this period.";
 
   // ========================================
   // BRANCH OVERVIEW
@@ -602,10 +619,25 @@ const Dashboard = () => {
     return <CheckCircleOutlined />;
   };
 
+  const getRiskLabel = (risk) => {
+    const normalizedRisk = String(risk || "").toLowerCase();
+    return normalizedRisk ? `${normalizedRisk.charAt(0).toUpperCase()}${normalizedRisk.slice(1)}` : "Unknown";
+  };
+
   const smartRecommendations =
     smartData?.recommendations
       ?.filter((item) => item.risk !== "LOW" || item.recommendedOrder > 0)
       .slice(0, 4) || [];
+
+  const prioritizeInventory = lowStockItems.length > 0
+    || Number(smartData?.criticalCount || 0) > 0
+    || Number(smartData?.highCount || 0) > 0;
+  const overviewTone = prioritizeInventory && todaySalesAmount === 0 && todayTransactions === 0
+    ? "attention"
+    : "sales";
+  const inventoryPriorityCount = lowStockItems.length > 0
+    ? lowStockItems.length
+    : Number(smartData?.criticalCount || 0) + Number(smartData?.highCount || 0);
 
   // ========================================
   // RECENT SALES
@@ -681,197 +713,107 @@ const Dashboard = () => {
       <section className="dashboard-header">
         <div className="dashboard-heading">
 
-          <Title level={1}>{greeting}, {user?.name || "there"}</Title>
+          <Title level={3}>{greeting}, {user?.name || "there"}</Title>
 
           <Text className="dashboard-subtitle">
             Here's what's happening across your store today.
           </Text>
         </div>
 
-        {/* BRANCH SELECTOR */}
-
-        <div className="branch-picker">
-          <button
-            type="button"
-            className={`branch-picker-button ${branchOpen ? "open" : ""}`}
-            onClick={() => setBranchOpen(!branchOpen)}
-          >
-            <div className="branch-picker-icon">
-              <ShopOutlined />
-            </div>
-
-            <div className="branch-picker-text">
-              <span>CURRENT BRANCH</span>
-
-              <strong>{selectedBranchName}</strong>
-            </div>
-
-            <DownOutlined />
-          </button>
-
-          {branchOpen && (
-            <div className="branch-picker-menu">
-              <div className="branch-picker-title">SELECT BRANCH</div>
-
-              <button
-                type="button"
-                className={`branch-option ${
-                  selectedBranch === "ALL" ? "selected" : ""
-                }`}
-                onClick={() => {
-                  setSelectedBranch("ALL");
-
-                  setBranchOpen(false);
-                }}
-              >
-                <span className="branch-option-icon">
-                  <ShopOutlined />
-                </span>
-
-                <span className="branch-option-content">
-                  <strong>All Branches</strong>
-
-                  <small>View all stores</small>
-                </span>
-
-                {selectedBranch === "ALL" && (
-                  <CheckOutlined className="branch-check" />
-                )}
-              </button>
-
-              {availableBranches.map((branch) => (
-                <button
-                  type="button"
-                  key={branch.id}
-                  className={`branch-option ${
-                    selectedBranch === branch.id ? "selected" : ""
-                  }`}
-                  onClick={() => {
-                    setSelectedBranch(branch.id);
-
-                    setBranchOpen(false);
-                  }}
-                >
-                  <span className="branch-option-icon">
-                    <ShopOutlined />
-                  </span>
-
-                  <span className="branch-option-content">
-                    <strong>{branch.name}</strong>
-
-                    <small>{branch.code || "Branch"}</small>
-                  </span>
-
-                  {selectedBranch === branch.id && (
-                    <CheckOutlined className="branch-check" />
-                  )}
-                </button>
-              ))}
-            </div>
-          )}
+        <div className="dashboard-scope-context" aria-live="polite">
+          <ShopOutlined />
+          <span>
+            <small>Viewing</small>
+            <strong>{selectedBranchName}</strong>
+          </span>
         </div>
       </section>
 
       {/* ==================================
-          KPI CARDS
+          SYSTEM OVERVIEW
       ================================== */}
 
-      <section className="dashboard-kpis">
-        <Row gutter={[16, 16]}>
-          <Col xs={24} sm={12} lg={6}>
-            <Card className="kpi-card">
-              <div className="kpi-top">
-                <span className="kpi-label">Today's Sales</span>
+      <section className={`dashboard-overview dashboard-overview-${overviewTone}`} aria-labelledby="overview-heading">
+        <div className="dashboard-overview-head">
+          <div>
+            <h2 id="overview-heading">System overview</h2>
+            <p>Live operating signals for the selected branch scope.</p>
+          </div>
 
-                <span className="kpi-icon sales">&#8369;</span>
-              </div>
+          <div className="overview-live-state">
+            <span className="overview-live-dot" aria-hidden="true" />
+            Current operating scope
+          </div>
+        </div>
 
-              <div className="kpi-value">
-                &#8369;
-                {todaySalesAmount.toLocaleString(undefined, {
-                  minimumFractionDigits: 2,
-                })}
-              </div>
+        <div className="dashboard-overview-grid">
+          <article className="overview-primary overview-primary-inventory" aria-label="Inventory attention summary">
+            <div className="overview-primary-top">
+              <span className="overview-label">Inventory needs attention</span>
+              <span className="overview-mark" aria-hidden="true"><WarningOutlined /></span>
+            </div>
 
-              <div className="kpi-footer positive">
-                <ArrowUpOutlined />
-                {todayTransactions} completed
-              </div>
-            </Card>
-          </Col>
+            <strong className="overview-primary-value">{inventoryPriorityCount.toLocaleString()}</strong>
 
-          <Col xs={24} sm={12} lg={6}>
-            <Card className="kpi-card">
-              <div className="kpi-top">
-                <span className="kpi-label">Transactions</span>
+            <div className="overview-primary-footer">
+              <span>{lowStockItems.length > 0 ? "low-stock items" : "items need attention"}</span>
+              <button type="button" className="overview-primary-action" onClick={() => navigate("/inventory")}>
+                Review inventory
+                <ArrowRightOutlined />
+              </button>
+            </div>
+          </article>
 
-                <span className="kpi-icon blue">
-                  <ShoppingCartOutlined />
-                </span>
-              </div>
+          <article className="overview-primary overview-primary-sales">
+            <div className="overview-primary-top">
+              <span className="overview-label">Today's completed sales</span>
+              <span className="overview-mark" aria-hidden="true">₱</span>
+            </div>
 
-              <div className="kpi-value">{todayTransactions}</div>
+            <strong className="overview-primary-value">
+              ₱{todaySalesAmount.toLocaleString(undefined, {
+                minimumFractionDigits: 2,
+              })}
+            </strong>
 
-              <div className="kpi-footer">Completed today</div>
-            </Card>
-          </Col>
+            <div className="overview-primary-footer">
+              <span>{todayTransactions} completed transactions</span>
+              <span>{selectedBranchName}</span>
+            </div>
+          </article>
 
-          <Col xs={24} sm={12} lg={6}>
-            <Card className="kpi-card">
-              <div className="kpi-top">
-                <span className="kpi-label">Total Stock</span>
+          <div className="overview-stat-list">
+            <article className="overview-stat">
+              <span className="overview-label">Units on hand</span>
+              <strong>{totalStock.toLocaleString()}</strong>
+              <span>{selectedBranch === "ALL" ? `${branches.length} branches` : "Current branch"}</span>
+            </article>
 
-                <span className="kpi-icon purple">
-                  <InboxOutlined />
-                </span>
-              </div>
+            <article className="overview-stat">
+              <span className="overview-label">Inventory at cost</span>
+              <strong>₱{inventoryCostValue.toLocaleString(undefined, { minimumFractionDigits: 2 })}</strong>
+              <span>Value on hand</span>
+            </article>
 
-              <div className="kpi-value">{totalStock.toLocaleString()}</div>
+            <article className={`overview-stat overview-stat-low-stock ${lowStockItems.length > 0 ? "overview-stat-warning" : "overview-stat-good"}`}>
+              <span className="overview-label">Needs attention</span>
+              <strong>{lowStockItems.length}</strong>
+              <span>{lowStockItems.length > 0 ? "Low-stock items" : "Inventory healthy"}</span>
+            </article>
 
-              <div className="kpi-footer">
-                {selectedBranch === "ALL"
-                  ? `Across ${branches.length} branches`
-                  : "Current branch"}
-              </div>
-            </Card>
-          </Col>
+            <article className="overview-stat">
+              <span className="overview-label">Branches in scope</span>
+              <strong>{branches.length}</strong>
+              <span>{selectedBranch === "ALL" ? "All locations" : "Filtered view"}</span>
+            </article>
 
-          <Col xs={24} sm={12} lg={6}>
-            <Card
-              className={`kpi-card ${
-                lowStockItems.length > 0 ? "kpi-warning" : ""
-              }`}
-            >
-              <div className="kpi-top">
-                <span className="kpi-label">Stock Alerts</span>
-
-                <span className="kpi-icon orange">
-                  <WarningOutlined />
-                </span>
-              </div>
-
-              <div className="kpi-value">{lowStockItems.length}</div>
-
-              <div
-                className={`kpi-footer ${
-                  lowStockItems.length > 0 ? "negative" : "positive"
-                }`}
-              >
-                {lowStockItems.length > 0 ? (
-                  <>
-                    <ArrowDownOutlined />
-                    Needs attention
-                  </>
-                ) : (
-                  <>
-                    <CheckCircleOutlined />
-                    Inventory healthy
-                  </>
-                )}
-              </div>
-            </Card>
-          </Col>
-        </Row>
+            <article className="overview-stat overview-stat-sales">
+              <span className="overview-label">Today's sales</span>
+              <strong>&#8369;{todaySalesAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</strong>
+              <span>{todayTransactions} completed transactions</span>
+            </article>
+          </div>
+        </div>
       </section>
 
       {/* ==================================
@@ -886,8 +828,6 @@ const Dashboard = () => {
         <Card className="sales-overview-card">
           <div className="sales-overview-header">
             <div>
-              <Text className="section-eyebrow">PERFORMANCE</Text>
-
               <Title level={3}>{chartMetric === "SALES" ? "Sales Overview" : "Refund Overview"}</Title>
 
               <Text className="section-description">
@@ -898,10 +838,11 @@ const Dashboard = () => {
             </div>
 
             <div className="sales-overview-controls">
-              <div className={`sales-period-selector sales-metric-toggle ${chartMetric === "REFUNDS" ? "refunds-active" : "sales-active"}`}>
+              <div className={`sales-period-selector sales-metric-toggle ${chartMetric === "REFUNDS" ? "refunds-active" : "sales-active"}`} role="group" aria-label="Chart metric">
                 <button
                   type="button"
                   className={chartMetric === "SALES" ? "active" : ""}
+                  aria-pressed={chartMetric === "SALES"}
                   onClick={() => setChartMetric("SALES")}
                 >
                   Sales
@@ -910,16 +851,18 @@ const Dashboard = () => {
                 <button
                   type="button"
                   className={chartMetric === "REFUNDS" ? "active" : ""}
+                  aria-pressed={chartMetric === "REFUNDS"}
                   onClick={() => setChartMetric("REFUNDS")}
                 >
                   Refunds
                 </button>
               </div>
 
-              <div className={`sales-period-selector sales-range-toggle ${salesPeriod.toLowerCase()}-active`}>
+              <div className={`sales-period-selector sales-range-toggle ${salesPeriod.toLowerCase()}-active`} role="group" aria-label="Chart period">
                 <button
                   type="button"
                   className={salesPeriod === "TODAY" ? "active" : ""}
+                  aria-pressed={salesPeriod === "TODAY"}
                   onClick={() => setSalesPeriod("TODAY")}
                 >
                   Today
@@ -928,6 +871,7 @@ const Dashboard = () => {
                 <button
                   type="button"
                   className={salesPeriod === "WEEK" ? "active" : ""}
+                  aria-pressed={salesPeriod === "WEEK"}
                   onClick={() => setSalesPeriod("WEEK")}
                 >
                   Week
@@ -936,17 +880,18 @@ const Dashboard = () => {
                 <button
                   type="button"
                   className={salesPeriod === "MONTH" ? "active" : ""}
+                  aria-pressed={salesPeriod === "MONTH"}
                   onClick={() => setSalesPeriod("MONTH")}
                 >
                   Month
                 </button>
               </div>
             </div>
-          </div>
+            </div>
 
-          <div className="sales-overview-summary">
-            <div>
-              <span>SALES</span>
+            <div className="sales-overview-summary">
+              <div>
+              <span>Sales</span>
 
               <strong>
                 &#8369;
@@ -961,7 +906,7 @@ const Dashboard = () => {
             </div>
 
             <div>
-              <span>TRANSACTIONS</span>
+              <span>Transactions</span>
 
               <strong>{periodTransactions}</strong>
 
@@ -982,82 +927,124 @@ const Dashboard = () => {
             </div>
           </div>
 
-          <div className="sales-chart">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart
-                data={salesChartData}
-                barGap={-28}
-                margin={{
-                  top: 10,
-                  right: 5,
-                  left: 0,
-                  bottom: 0,
-                }}
-              >
-<CartesianGrid vertical={false} stroke="#eeeeee" />
-
-                <XAxis
-                  dataKey="label"
-                  axisLine={false}
-                  tickLine={false}
-                  tick={{
-                    fill: "#8e8e93",
-                    fontSize: 10,
+          <div
+            className="sales-chart"
+            role="img"
+            aria-describedby={chartHasActivity ? "sales-chart-summary" : undefined}
+            aria-label={`${chartMetric === "SALES" ? "Sales" : "Refund"} overview chart for the selected ${salesPeriod.toLowerCase()} period`}
+          >
+            {chartHasActivity ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={salesChartData}
+                  barGap={6}
+                  barCategoryGap="20%"
+                  margin={{
+                    top: 10,
+                    right: 5,
+                    left: 0,
+                    bottom: 0,
                   }}
-                  minTickGap={15}
-                />
+                >
+                  <defs>
+                    <linearGradient id="dashboard-sales-bar-gradient" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="var(--app-accent-light)" />
+                      <stop offset="100%" stopColor="var(--app-accent-deep)" />
+                    </linearGradient>
 
-                <YAxis
-                  axisLine={false}
-                  tickLine={false}
-                  tick={{
-                    fill: "#8e8e93",
-                    fontSize: 10,
-                  }}
-                  tickFormatter={(value) =>
-                    value >= 1000
-                      ? `\u20B1${(value / 1000).toFixed(0)}k`
-                      : `\u20B1${value}`
-                  }
-                  width={45}
-                />
+                    <linearGradient id="dashboard-refund-bar-gradient" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="var(--app-warning)" />
+                      <stop offset="100%" stopColor="var(--app-accent-deep)" />
+                    </linearGradient>
+                  </defs>
 
-                <Tooltip
-                  cursor={{
-                    stroke: "#d9d9d9",
-                  }}
-                  contentStyle={{
-                    border: "1px solid #eeeeee",
-                    borderRadius: "12px",
-                    boxShadow: "0 8px 24px rgba(0,0,0,0.08)",
-                  }}
-                  formatter={(value, name) => [
-                    (name === "sales" || name === "Sales" || name === "refunds" || name === "Refunds" || name === "Previous period") ? `\u20B1${Number(value).toLocaleString(undefined, {
-                          minimumFractionDigits: 2,
-                        })}`
-                      : value,
-                    name === "sales" || name === "Sales" ? "Sales" : name === "refunds" || name === "Refunds" ? "Refunds" : name === "Previous period" ? "Previous period" : "Transactions",
-                  ]}
-                />
+                  <CartesianGrid vertical={false} stroke="var(--app-chart-grid)" strokeDasharray="2 4" strokeOpacity={0.72} />
 
-                <Bar
-                  dataKey={chartMetric === "SALES" ? "previousSales" : "previousRefunds"}
-                  name="Previous period"
-                  fill="#eeeeee"
-                  radius={[4, 4, 0, 0]}
-                  maxBarSize={32}
-                />
+                  <XAxis
+                    dataKey="label"
+                    axisLine={false}
+                    tickLine={false}
+                    tick={{
+                      fill: "var(--app-muted)",
+                      fontSize: 11,
+                      fontWeight: 600,
+                    }}
+                    minTickGap={15}
+                  />
 
-                <Bar
-                  dataKey={chartMetric === "SALES" ? "sales" : "refunds"}
-                  name={chartMetric === "SALES" ? "Sales" : "Refunds"}
-                  fill="#111111"
-                  radius={[4, 4, 0, 0]}
-                  maxBarSize={22}
-                />
-              </BarChart>
-            </ResponsiveContainer>
+                  <YAxis
+                    axisLine={false}
+                    tickLine={false}
+                    tick={{
+                      fill: "var(--app-ink)",
+                      fontSize: 11,
+                      fontWeight: 600,
+                    }}
+                    tickFormatter={(value) =>
+                      value >= 1000
+                        ? `\u20B1${(value / 1000).toFixed(0)}k`
+                        : `\u20B1${Number(value).toLocaleString()}`
+                    }
+                    width={48}
+                  />
+
+                  <Tooltip
+                    cursor={{
+                      fill: "var(--app-chart-cursor)",
+                      stroke: "var(--app-line-strong)",
+                    }}
+                    contentStyle={{
+                      border: "1px solid var(--app-glass-border)",
+                      borderRadius: "10px",
+                      background: "var(--app-glass-background-raised)",
+                      boxShadow: "var(--app-glass-shadow)",
+                      padding: "10px 12px",
+                    }}
+                    labelStyle={{
+                      color: "var(--app-ink)",
+                      fontWeight: 700,
+                      marginBottom: "4px",
+                    }}
+                    itemStyle={{
+                      color: "var(--app-muted)",
+                      padding: "2px 0",
+                    }}
+                    formatter={(value, name) => [
+                      `\u20B1${Number(value).toLocaleString(undefined, {
+                        minimumFractionDigits: 2,
+                      })}`,
+                      name === "sales" || name === "Sales" ? "Sales" : name === "refunds" || name === "Refunds" ? "Refunds" : "Previous period",
+                    ]}
+                  />
+
+                  <Bar
+                    dataKey={chartMetric === "SALES" ? "previousSales" : "previousRefunds"}
+                    name="Previous period"
+                    fill="var(--app-chart-previous)"
+                    radius={[4, 4, 0, 0]}
+                    maxBarSize={20}
+                  />
+
+                  <Bar
+                    dataKey={chartMetric === "SALES" ? "sales" : "refunds"}
+                    name={chartMetric === "SALES" ? "Sales" : "Refunds"}
+                    fill={chartMetric === "REFUNDS" ? "url(#dashboard-refund-bar-gradient)" : "url(#dashboard-sales-bar-gradient)"}
+                    radius={[4, 4, 0, 0]}
+                    maxBarSize={20}
+                  />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div id="sales-chart-summary" className="sales-chart-empty">
+                <strong>{chartSummary}</strong>
+                <span>Choose another period to view activity.</span>
+              </div>
+            )}
           </div>
+
+          {chartHasActivity && (
+            <p id="sales-chart-summary" className="sales-chart-summary">{chartSummary}</p>
+          )}
         </Card>
 
         {/* ==================================
@@ -1077,7 +1064,7 @@ const Dashboard = () => {
 
                   <span className="smart-ai-pill">
                     <ThunderboltOutlined />
-                    SMART
+                    Smart
                   </span>
                 </div>
 
@@ -1143,7 +1130,7 @@ const Dashboard = () => {
                   <div className={`smart-risk ${getRiskClass(item.risk)}`}>
                     {getRiskIcon(item.risk)}
 
-                    {item.risk}
+                    {getRiskLabel(item.risk)}
                   </div>
 
                   <div className="smart-action">
@@ -1173,7 +1160,12 @@ const Dashboard = () => {
               <Text>Latest completed transactions</Text>
             </div>
 
-            <button type="button" className="text-action">
+            <button
+              type="button"
+              className="text-action"
+              onClick={() => navigate("/reports")}
+              aria-label="View all sales reports"
+            >
               View all
               <ArrowRightOutlined />
             </button>
@@ -1215,7 +1207,7 @@ const Dashboard = () => {
 
         {/* BRANCH OVERVIEW */}
 
-        <Card className="modern-card">
+        <Card className="modern-card branch-overview-card">
           <div className="section-header">
             <div>
               <Title level={3}>Branch Overview</Title>

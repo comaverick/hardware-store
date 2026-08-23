@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" role="img" aria-labelledby="title desc">
+  <title id="title">Hardware Ops mark</title>
+  <desc id="desc">A compact system grid with connected hardware nodes.</desc>
+  <rect width="40" height="40" rx="9" fill="#2fada5"/>
+  <path d="M10 12h20M10 20h11M10 28h20M24 16v8M29 16v8" fill="none" stroke="#f3fffd" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="24" cy="12" r="2" fill="#f3fffd"/>
+  <circle cx="29" cy="28" r="2" fill="#f3fffd"/>
+</svg>

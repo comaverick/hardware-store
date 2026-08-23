@@ -1,13 +1,15 @@
 import {
-  BellOutlined,
   DownOutlined,
   EnvironmentOutlined,
+  CheckOutlined,
+  CloseOutlined,
   LogoutOutlined,
+  MenuOutlined,
   UserOutlined,
   SettingOutlined,
 } from "@ant-design/icons";
 
-import { Avatar, Badge, Dropdown } from "antd";
+import { Avatar, Dropdown } from "antd";
 
 import { useLocation, useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
@@ -17,13 +19,22 @@ import api from "../../../services/api";
 
 import "./Topbar.css";
 
-const Topbar = ({ sidebarExpanded }) => {
+const Topbar = ({
+  sidebarExpanded,
+  mobileOpen = false,
+  onMenuClick = () => {},
+  branchOptions = [],
+  selectedBranch = "ALL",
+  onBranchChange = () => {},
+}) => {
   const { user, logout } = useAuth();
 
   const location = useLocation();
 
   const navigate = useNavigate();
   const [systemStatus, setSystemStatus] = useState("checking");
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [branchOpen, setBranchOpen] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -45,6 +56,28 @@ const Topbar = ({ sidebarExpanded }) => {
       window.clearInterval(interval);
     };
   }, []);
+
+  useEffect(() => {
+    setBranchOpen(false);
+  }, [location.pathname]);
+
+  useEffect(() => {
+    if (!branchOpen) return undefined;
+
+    const closeBranchMenu = (event) => {
+      if (event.key === "Escape" || !event.target?.closest?.(".topbar-branch-picker")) {
+        setBranchOpen(false);
+      }
+    };
+
+    document.addEventListener("keydown", closeBranchMenu);
+    document.addEventListener("pointerdown", closeBranchMenu);
+
+    return () => {
+      document.removeEventListener("keydown", closeBranchMenu);
+      document.removeEventListener("pointerdown", closeBranchMenu);
+    };
+  }, [branchOpen]);
 
   const pageTitles = {
     "/dashboard": {
@@ -173,7 +206,11 @@ const Topbar = ({ sidebarExpanded }) => {
     }
   };
 
-  const branchCode = user?.branch?.code || "ALL BRANCHES";
+  const selectedBranchOption = branchOptions.find(
+    (branch) => String(branch.id) === String(selectedBranch),
+  );
+  const branchName = selectedBranchOption?.name || "All branches";
+  const branchCode = selectedBranchOption?.code || (selectedBranch === "ALL" ? "All branches" : "Branch");
 
   return (
     <header
@@ -186,6 +223,17 @@ const Topbar = ({ sidebarExpanded }) => {
       ================================= */}
 
       <div className="topbar-left">
+        <button
+          type="button"
+          className="topbar-mobile-menu"
+          aria-label={mobileOpen ? "Close navigation" : "Open navigation"}
+          aria-controls="primary-navigation"
+          aria-expanded={mobileOpen}
+          onClick={onMenuClick}
+        >
+          {mobileOpen ? <CloseOutlined /> : <MenuOutlined />}
+        </button>
+
         <div className="page-heading">
           <span className="breadcrumb-category">{currentPage.category}</span>
           <span className="breadcrumb-separator" aria-hidden="true">&gt;</span>
@@ -198,37 +246,76 @@ const Topbar = ({ sidebarExpanded }) => {
       ================================= */}
 
       <div className="topbar-right">
-        {/* NOTIFICATIONS */}
-
-        <button
-          type="button"
-          className="topbar-icon-button"
-          aria-label="Notifications"
-        >
-          <Badge dot offset={[-2, 2]}>
-            <BellOutlined />
-          </Badge>
-        </button>
-
         {/* BRANCH */}
 
-        <div className="topbar-branch">
-          <div className="branch-icon">
-            <EnvironmentOutlined />
-          </div>
+        <div className={`topbar-branch-picker ${branchOpen ? "open" : ""}`}>
+          <button
+            type="button"
+            className="topbar-branch"
+            aria-haspopup="listbox"
+            aria-controls="topbar-branch-options"
+            aria-expanded={branchOpen}
+            aria-label={`Select branch, currently ${branchName}`}
+            onClick={() => setBranchOpen((open) => !open)}
+          >
+            <span className="branch-icon">
+              <EnvironmentOutlined />
+            </span>
 
-          <div className="branch-info">
-            <span className="branch-label">Current Branch</span>
+            <span className="topbar-branch-info">
+              <span className="branch-label">Branch scope</span>
 
-            <span className="branch-value">{branchCode}</span>
-          </div>
+              <span className="branch-value">{branchCode}</span>
+            </span>
 
-          <DownOutlined className="branch-arrow" />
+            <DownOutlined className="branch-arrow" />
+          </button>
+
+          {branchOpen && (
+            <div id="topbar-branch-options" className="topbar-branch-menu" role="listbox" aria-label="Branch scope options">
+              <div className="topbar-branch-menu-title">Branch scope</div>
+
+              <button
+                type="button"
+                role="option"
+                aria-selected={selectedBranch === "ALL"}
+                className={`topbar-branch-option ${selectedBranch === "ALL" ? "selected" : ""}`}
+                onClick={() => {
+                  onBranchChange("ALL");
+                  setBranchOpen(false);
+                }}
+              >
+                <span className="topbar-branch-option-icon"><EnvironmentOutlined /></span>
+                <span>
+                  <strong>All branches</strong>
+                  <small>View every store</small>
+                </span>
+                {selectedBranch === "ALL" && <CheckOutlined />}
+              </button>
+
+              {branchOptions.map((branch) => (
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={String(selectedBranch) === String(branch.id)}
+                  className={`topbar-branch-option ${String(selectedBranch) === String(branch.id) ? "selected" : ""}`}
+                  key={branch.id}
+                  onClick={() => {
+                    onBranchChange(branch.id);
+                    setBranchOpen(false);
+                  }}
+                >
+                  <span className="topbar-branch-option-icon"><EnvironmentOutlined /></span>
+                  <span>
+                    <strong>{branch.name}</strong>
+                    <small>{branch.code || "Branch"}</small>
+                  </span>
+                  {String(selectedBranch) === String(branch.id) && <CheckOutlined />}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
-
-        {/* DIVIDER */}
-
-        <div className="topbar-divider" />
 
         <div className={`topbar-system-status topbar-system-status-${systemStatus}`} title="API and database connection status">
           <span className="topbar-system-dot" />
@@ -244,8 +331,17 @@ const Topbar = ({ sidebarExpanded }) => {
           }}
           trigger={["click"]}
           placement="bottomRight"
+          overlayClassName="topbar-user-menu"
+          getPopupContainer={(triggerNode) => triggerNode.closest(".topbar") || document.body}
+          open={userMenuOpen}
+          onOpenChange={setUserMenuOpen}
         >
-          <button type="button" className="topbar-user">
+          <button
+            type="button"
+            className={`topbar-user ${userMenuOpen ? "topbar-user-open" : ""}`}
+            aria-haspopup="menu"
+            aria-expanded={userMenuOpen}
+          >
             <Avatar className="topbar-avatar" icon={<UserOutlined />} />
 
             <div className="topbar-user-info">
