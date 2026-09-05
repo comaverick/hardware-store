@@ -63,6 +63,7 @@ export class VoxelCloud {
     this.cells = new Map();
     this.full = false;
     this.compactions = 0;
+    this.repeatedCells = 0;
   }
   key(p) {
     return `${Math.floor(p.x / this.size)},${Math.floor(p.y / this.size)},${Math.floor(p.z / this.size)}`;
@@ -95,6 +96,9 @@ export class VoxelCloud {
     }
     this.size = nextSize;
     this.cells = compacted;
+    this.repeatedCells = [...compacted.values()].filter(
+      (point) => point.hits >= 2,
+    ).length;
     this.compactions++;
     return true;
   }
@@ -112,6 +116,7 @@ export class VoxelCloud {
       if (previous) {
         if (previous.frameId === frameId) continue;
         previous.frameId = frameId;
+        if (previous.hits === 1) this.repeatedCells++;
         previous.hits++;
         const weight = 1 / Math.min(previous.hits, 8);
         ["x", "y", "z"].forEach((k) => {
@@ -125,6 +130,9 @@ export class VoxelCloud {
         this.cells.set(key, { ...p, frameId, hits: 1 });
       else this.full = this.size >= this.maxSize;
     }
+  }
+  previewStableCount() {
+    return this.repeatedCells;
   }
   values(filtered = false) {
     const all = [...this.cells.values()];

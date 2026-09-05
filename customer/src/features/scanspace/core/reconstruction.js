@@ -1,22 +1,5 @@
 import { normalizeRoom, area, distance } from "./domain";
 
-function clip(poly, nx, nz, d) {
-  const result = [];
-  for (let i = 0; i < poly.length; i++) {
-    const a = poly[i],
-      b = poly[(i + 1) % poly.length],
-      da = nx * a.x + nz * a.z - d,
-      db = nx * b.x + nz * b.z - d;
-    if (da <= 1e-7) result.push(a);
-    const aIsInside = da < 0;
-    const bIsInside = db < 0;
-    if (aIsInside !== bIsInside) {
-      const t = da / (da - db);
-      result.push({ x: a.x + t * (b.x - a.x), z: a.z + t * (b.z - a.z) });
-    }
-  }
-  return result;
-}
 function heightPeak(points, min, max) {
   const bins = new Map();
   points.forEach((p) => {
@@ -30,23 +13,75 @@ function heightPeak(points, min, max) {
   const b = [...bins.values()].sort((a, b) => b.length - a.length)[0];
   return b && b.length >= 30 ? b.reduce((s, v) => s + v, 0) / b.length : null;
 }
+function percentile(values, ratio) {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * ratio))];
+}
+function wallSupport(points, start, end, floor, height) {
+  const len = distance(start, end);
+  const support = points.filter(
+    (point) =>
+      Math.abs(
+        ((end.z - start.z) * (point.x - start.x) -
+          (end.x - start.x) * (point.z - start.z)) /
+          len,
+      ) < 0.14 &&
+      point.y > floor + 0.25 &&
+      point.y < floor + height - 0.15,
+  );
+  const projections = support
+    .map(
+      (point) =>
+        ((point.x - start.x) * (end.x - start.x) +
+          (point.z - start.z) * (end.z - start.z)) /
+        len,
+    )
+    .filter((value) => value >= 0 && value <= len);
+  return {
+    samples: support.length,
+    coverage: Math.min(
+      1,
+      (new Set(projections.map((value) => Math.floor(value / 0.3))).size *
+        0.3) /
+        len,
+    ),
+  };
+}
+function bestWallPair(planes) {
+  let best = null;
+  for (let i = 0; i < planes.length; i++)
+    for (let j = i + 1; j < planes.length; j++) {
+      const alignment = Math.abs(
+        planes[i].nx * planes[j].nx + planes[i].nz * planes[j].nz,
+      );
+      if (alignment > 0.45) continue;
+      const score = (planes[i].score + planes[j].score) * (1 - alignment * 0.5);
+      if (!best || score > best.score)
+        best = { first: planes[i], second: planes[j], score };
+    }
+  return best;
+}
 
-// Conservative convex enclosure fitting. Unbounded/partial observations never become a room.
-// Re-entrant (L-shaped) rooms use the assisted polygon workflow instead.
+// Automatic rectangular fitting. Two strong non-parallel walls define the axes;
+// observed surface extents supply the opposite boundaries without user-entered dimensions.
 export function reconstructRoom(points, options = {}) {
   if (points.length < 300)
     throw new Error(
       "Too little stable depth. Scan every wall slowly, or mark the floor corners.",
     );
-  const floor = options.floorY ?? heightPeak(points, -2, 0.6);
+  const measuredFloor = heightPeak(points, -2, 0.7);
+  const floor = measuredFloor ?? options.floorY;
   if (floor === null)
     throw new Error(
-      "The floor was not observed. Point down and calibrate the floor.",
+      "The floor was not observed. Point the camera toward the floor while moving slowly.",
     );
   const ceiling = heightPeak(points, floor + 1.8, floor + 5);
   const height = ceiling === null ? options.height : ceiling - floor;
   if (!height || height < 1.8 || height > 8)
-    throw new Error("Enter the measured ceiling height, or scan the ceiling.");
+    throw new Error(
+      "The room height could not be determined. Include some floor or ceiling in the scan.",
+    );
   let remaining = points.filter(
     (p) => p.y > floor + 0.3 && p.y < floor + height - 0.25,
   );
@@ -101,58 +136,115 @@ export function reconstructRoom(points, options = {}) {
       (p) => Math.abs(best.nx * p.x + best.nz * p.z - best.d) > 0.09,
     );
   }
-  if (planes.length < 3)
+  const pair = bestWallPair(planes);
+  if (!pair)
     throw new Error(
-      "Not enough full-height walls were observed. Scan all sides or mark the corners.",
+      "Two connected wall directions were not clear yet. Scan across one corner so both adjoining walls receive stable depth.",
     );
-  let polygon = [
-    { x: -50, z: -50 },
-    { x: 50, z: -50 },
-    { x: 50, z: 50 },
-    { x: -50, z: 50 },
-  ];
-  planes
-    .sort((a, b) => b.score - a.score)
-    .forEach((p) => {
-      polygon = clip(polygon, p.nx, p.nz, p.d);
-    });
-  polygon = polygon.filter(
-    (p, i) => distance(p, polygon[(i + 1) % polygon.length]) > 0.2,
+
+  const u = { x: pair.first.nx, z: pair.first.nz };
+  let v = { x: -u.z, z: u.x };
+  if (v.x * pair.second.nx + v.z * pair.second.nz < 0) v = { x: -v.x, z: -v.z };
+  const project = (point, axis) => point.x * axis.x + point.z * axis.z;
+  const uHigh = percentile(
+    pair.first.inliers.map((point) => project(point, u)),
+    0.5,
   );
+  const vHigh = percentile(
+    pair.second.inliers.map((point) => project(point, v)),
+    0.5,
+  );
+  const structural = points.filter(
+    (point) => point.y > floor - 0.18 && point.y < floor + height + 0.18,
+  );
+  const opposingCoordinate = (axis, selected) => {
+    const opposite = planes
+      .filter(
+        (plane) =>
+          plane !== selected && plane.nx * axis.x + plane.nz * axis.z < -0.85,
+      )
+      .sort((a, b) => b.score - a.score)[0];
+    return opposite
+      ? percentile(
+          opposite.inliers.map((point) => project(point, axis)),
+          0.5,
+        )
+      : null;
+  };
+  const edgeAllowance = 0.12;
+  const measuredULow = opposingCoordinate(u, pair.first);
+  const measuredVLow = opposingCoordinate(v, pair.second);
+  const uLow =
+    measuredULow ??
+    percentile(
+      structural.map((point) => project(point, u)),
+      0.02,
+    ) - edgeAllowance;
+  const vLow =
+    measuredVLow ??
+    percentile(
+      structural.map((point) => project(point, v)),
+      0.02,
+    ) - edgeAllowance;
+  const width = uHigh - uLow,
+    depth = vHigh - vLow;
   if (
-    polygon.length < 3 ||
-    polygon.some((p) => Math.abs(p.x) > 49 || Math.abs(p.z) > 49) ||
-    area(polygon) < 1
+    ![uHigh, vHigh, uLow, vLow, width, depth].every(Number.isFinite) ||
+    width < 0.8 ||
+    depth < 0.8 ||
+    width > 20 ||
+    depth > 20
   )
     throw new Error(
-      "The scan does not enclose a room yet. Capture missing walls, or use assisted corners.",
+      "The two wall extents are not stable yet. Sweep across the full length of both walls and include their shared corner.",
     );
-  const boundary = polygon.map((p, i) => {
-    const b = polygon[(i + 1) % polygon.length],
-      len = distance(p, b);
-    const support = points.filter(
-      (v) =>
-        Math.abs((b.z - p.z) * (v.x - p.x) - (b.x - p.x) * (v.z - p.z)) / len <
-          0.12 &&
-        v.y > floor + 0.3 &&
-        v.y < floor + height - 0.2,
+  const observerU = project(origin, u),
+    observerV = project(origin, v);
+  if (
+    observerU < uLow - 0.5 ||
+    observerU > uHigh + 0.5 ||
+    observerV < vLow - 0.5 ||
+    observerV > vHigh + 0.5
+  )
+    throw new Error(
+      "The measured walls do not surround the camera position. Move inside the room and rescan the corner.",
     );
-    const projections = support
-      .map((v) => ((v.x - p.x) * (b.x - p.x) + (v.z - p.z) * (b.z - p.z)) / len)
-      .filter((t) => t >= 0 && t <= len);
-    const covered =
-      (new Set(projections.map((t) => Math.floor(t / 0.25))).size * 0.25) / len;
-    if (support.length < 40 || covered < 0.5) {
-      const detail =
-        support.length < 40
-          ? `only ${support.length} stable samples`
-          : `${Math.round(covered * 100)}% depth coverage`;
-      throw new Error(
-        `A proposed wall has ${detail} (50% coverage needs 40 stable samples). Walk slowly along that wall, or complete the outline with marked corners.`,
-      );
-    }
-    return { material: { color: "#e6e1d8" }, openings: [] };
+  const fromAxes = (alongU, alongV) => ({
+    x: u.x * alongU + v.x * alongV,
+    z: u.z * alongU + v.z * alongV,
   });
+  const polygon = [
+    fromAxes(uLow, vLow),
+    fromAxes(uHigh, vLow),
+    fromAxes(uHigh, vHigh),
+    fromAxes(uLow, vHigh),
+  ];
+  if (area(polygon) < 1)
+    throw new Error(
+      "The observed room area is too small to reconstruct reliably.",
+    );
+  const supports = polygon.map((start, index) =>
+    wallSupport(
+      points,
+      start,
+      polygon[(index + 1) % polygon.length],
+      floor,
+      height,
+    ),
+  );
+  const measuredWalls = supports.filter(
+    (support) => support.samples >= 35 && support.coverage >= 0.4,
+  ).length;
+  if (measuredWalls < 2)
+    throw new Error(
+      "Two walls need clearer depth. Scan both sides of one corner from top to bottom before finishing.",
+    );
+  const boundary = supports.map((support) => ({
+    material: { color: "#e6e1d8" },
+    openings: [],
+    inferred: support.samples < 35 || support.coverage < 0.4,
+  }));
+  const inferredWallCount = 4 - measuredWalls;
   const room = normalizeRoom({
     name: "Scanned room",
     floorPolygon: polygon,
@@ -164,13 +256,20 @@ export function reconstructRoom(points, options = {}) {
       capturedColorSupported: points.some((p) => p.color),
       pointCount: points.length,
       depthFrames: options.depthFrames || 0,
-      confidence: Math.min(0.95, points.length / 16000),
+      confidence: Math.min(
+        0.92,
+        0.42 + measuredWalls * 0.1 + (ceiling !== null ? 0.08 : 0),
+      ),
+      partial: inferredWallCount > 0 || ceiling === null,
+      coverage: Math.round((measuredWalls / 4) * 100),
+      inferredWallCount,
     },
   });
   return {
     room,
     floorY: floor,
     planes: planes.length,
+    inferredWallCount,
     ceilingMeasured: ceiling !== null,
   };
 }

@@ -24,12 +24,7 @@ function CoverageCompass({ sectors = [], heading = 0 }) {
   );
 }
 
-export default function ScannerPanel({
-  capabilities,
-  onComplete,
-  onCancel,
-  onManual,
-}) {
+export default function ScannerPanel({ capabilities, onComplete, onCancel }) {
   const canvas = useRef(),
     overlay = useRef(),
     scanner = useRef(),
@@ -65,7 +60,7 @@ export default function ScannerPanel({
       onEnd: () => {
         setActive(false);
         if (!finished.current)
-          setError("Scan ended. Start again, or use manual measurements.");
+          setError("Scan ended before a room was built. Start the scan again.");
       },
     });
     scanner.current = s;
@@ -78,10 +73,10 @@ export default function ScannerPanel({
       setBusy(false);
     }
   }
-  async function useMeasurements() {
+  async function cancelScan() {
     finished.current = true;
     await scanner.current?.stop();
-    onManual?.();
+    onCancel();
   }
   async function finish(allowPartial = true) {
     setBusy(true);
@@ -135,7 +130,8 @@ export default function ScannerPanel({
         textures,
         ceilingMeasured,
         stats: raw.stats,
-        partial: false,
+        partial: room.scanMetadata.partial,
+        inferredWallCount: room.scanMetadata.inferredWallCount,
       });
     } catch (e) {
       setError(e.message);
@@ -250,14 +246,7 @@ export default function ScannerPanel({
               )}
               {!partial ? (
                 <div className="ss-actions">
-                  <button
-                    disabled={busy}
-                    onClick={async () => {
-                      finished.current = true;
-                      await scanner.current.stop();
-                      onCancel();
-                    }}
-                  >
+                  <button disabled={busy} onClick={cancelScan}>
                     Cancel scan
                   </button>
                   <button
@@ -290,9 +279,7 @@ export default function ScannerPanel({
                     >
                       Keep scanning
                     </button>
-                    <button onClick={useMeasurements}>
-                      Use room measurements instead
-                    </button>
+                    <button onClick={cancelScan}>Cancel scan</button>
                   </div>
                 </section>
               )}

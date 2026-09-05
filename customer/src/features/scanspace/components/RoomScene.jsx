@@ -47,7 +47,7 @@ function makePattern(m) {
   t.anisotropy = 4;
   return t;
 }
-function SurfaceMaterial({ material: m, captured, onError }) {
+function SurfaceMaterial({ material: m, captured, inferred = false, onError }) {
   const [external, setExternal] = useState(null);
   const pattern = useMemo(() => makePattern(m), [m]);
   useEffect(() => () => pattern.dispose(), [pattern]);
@@ -98,7 +98,10 @@ function SurfaceMaterial({ material: m, captured, onError }) {
       map={texture}
       roughness={m.kind === "tile" ? 0.65 : 0.9}
       metalness={0}
-      side={THREE.FrontSide}
+      transparent={inferred}
+      opacity={inferred ? 0.72 : 1}
+      depthWrite={!inferred}
+      side={inferred ? THREE.DoubleSide : THREE.FrontSide}
     />
   );
 }
@@ -159,6 +162,7 @@ function Wall({ wall, selected, onSelect, flip, texture, onError }) {
         <SurfaceMaterial
           material={wall.material}
           captured={texture}
+          inferred={wall.inferred}
           onError={onError}
         />
       </mesh>

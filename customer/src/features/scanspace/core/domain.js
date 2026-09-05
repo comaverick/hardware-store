@@ -250,6 +250,7 @@ function normalizeRoom(input) {
       start,
       end,
       height,
+      inferred: src.inferred === true,
       openings,
       material: material(src.material),
     };
@@ -316,6 +317,12 @@ function normalizeRoom(input) {
       confidence: number(sm.confidence ?? 0, 0, 1, "Scan quality"),
       partial: sm.partial === true,
       coverage: number(sm.coverage ?? 0, 0, 100, "Scan coverage"),
+      inferredWallCount: number(
+        sm.inferredWallCount ?? 0,
+        0,
+        32,
+        "Inferred wall count",
+      ),
       deviceInfo: text(sm.deviceInfo, 250),
     },
   };

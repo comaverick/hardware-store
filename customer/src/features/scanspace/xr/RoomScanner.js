@@ -6,7 +6,6 @@ export class RoomScanner {
   constructor({ canvas, overlay, onUpdate, onEnd }) {
     Object.assign(this, { canvas, overlay, onUpdate, onEnd });
     this.cloud = new VoxelCloud();
-    this.corners = [];
     this.paused = false;
     this.floorY = null;
     this.closed = false;
@@ -36,10 +35,8 @@ export class RoomScanner {
   publish() {
     this.onUpdate({
       ...this.stats,
-      corners: this.corners.map((p) => ({ ...p })),
       floorY: this.floorY,
       paused: this.paused,
-      canCapture: !!this.hit,
       full: this.cloud.full,
     });
   }
@@ -70,7 +67,7 @@ export class RoomScanner {
       // Without DOM overlay, provide a visible refusal instead of trapping the user in AR.
       if (!this.session.domOverlayState)
         throw new Error(
-          "This browser cannot display ScanSpace controls in AR. Use manual measurements.",
+          "This browser cannot display ScanSpace controls in AR. Try a compatible Android browser.",
         );
       this.stats.features = Array.from(this.session.enabledFeatures || []);
       this.renderer = new THREE.WebGLRenderer({
@@ -105,19 +102,9 @@ export class RoomScanner {
       });
       this.scene = new THREE.Scene();
       this.camera = new THREE.PerspectiveCamera();
-      this.reticle = new THREE.Mesh(
-        new THREE.RingGeometry(0.055, 0.075, 28).rotateX(-Math.PI / 2),
-        new THREE.MeshBasicMaterial({
-          color: "#ffb36d",
-          side: THREE.DoubleSide,
-        }),
-      );
-      this.reticle.matrixAutoUpdate = false;
-      this.reticle.visible = false;
-      this.scene.add(this.reticle);
       this.pointGeometry = new THREE.BufferGeometry();
-      this.positions = new Float32Array(24000 * 3);
-      this.colors = new Float32Array(24000 * 3);
+      this.positions = new Float32Array(12000 * 3);
+      this.colors = new Float32Array(12000 * 3);
       this.pointGeometry.setAttribute(
         "position",
         new THREE.BufferAttribute(this.positions, 3),
@@ -139,20 +126,11 @@ export class RoomScanner {
       );
       points.frustumCulled = false;
       this.scene.add(points);
-      this.cornerGroup = new THREE.Group();
-      this.scene.add(this.cornerGroup);
       if (typeof window.XRWebGLBinding === "function")
         this.binding = new window.XRWebGLBinding(
           this.session,
           this.renderer.getContext(),
         );
-      this.session.addEventListener("select", () => {
-        if (!this.paused) this.captureCorner();
-      });
-      this.overlay.addEventListener(
-        "beforexrselect",
-        (this.preventSelect = (e) => e.preventDefault()),
-      );
       this.renderer.setAnimationLoop((time, frame) => this.frame(time, frame));
       this.publish();
     } catch (error) {
@@ -166,7 +144,6 @@ export class RoomScanner {
       const pose = frame.getViewerPose(this.space);
       this.stats.tracking = !!pose;
       this.hit = null;
-      this.reticle.visible = false;
       if (pose) {
         this.observer = {
           x: pose.transform.position.x,
@@ -181,8 +158,6 @@ export class RoomScanner {
             y: hit.transform.position.y,
             z: hit.transform.position.z,
           };
-          this.reticle.matrix.fromArray(hit.transform.matrix);
-          this.reticle.visible = true;
           // Prefer the lowest stable horizontal hit. This avoids asking the
           // customer to calibrate a floor while naturally correcting a table
           // or counter hit once the actual floor comes into view.
@@ -191,7 +166,7 @@ export class RoomScanner {
             this.stats.floorAutoDetected = true;
           }
         }
-        if (!this.paused && time - (this.lastCapture || 0) > 320) {
+        if (!this.paused && time - (this.lastCapture || 0) > 400) {
           this.lastCapture = time;
           const view = pose.views[0];
           let depth = null;
@@ -207,7 +182,12 @@ export class RoomScanner {
             this.stats.format = this.session.depthDataFormat;
             this.stats.dimensions = `${depth.width} × ${depth.height}`;
             let colorAt = null;
-            if (this.binding && view.camera && !this.colorFailed) {
+            if (
+              this.binding &&
+              view.camera &&
+              !this.colorFailed &&
+              this.stats.depthFrames % 5 === 1
+            ) {
               try {
                 this.colorReader ??= createCameraColorReader(
                   this.renderer.getContext(),
@@ -224,7 +204,7 @@ export class RoomScanner {
               }
             }
             this.cloud.add(
-              unprojectDepth(depth, view, 44, 32, colorAt),
+              unprojectDepth(depth, view, 36, 27, colorAt),
               this.stats.depthFrames,
             );
             this.stats.cloudCellSize = this.cloud.size;
@@ -255,7 +235,7 @@ export class RoomScanner {
           }
         }
       }
-      if (time - (this.lastPublish || 0) > 500) {
+      if (time - (this.lastPublish || 0) > 800) {
         this.stats.depthCurrent =
           !!this.lastDepthAt && time - this.lastDepthAt < 2000;
         this.lastPublish = time;
@@ -271,17 +251,14 @@ export class RoomScanner {
   }
   updatePreview() {
     const points = this.cloud.values(),
-      stable = new Set(this.cloud.values(true)),
-      stride = Math.max(1, Math.ceil(points.length / 24000));
+      stride = Math.max(1, Math.ceil(points.length / 12000));
     let count = 0;
     for (let i = 0; i < points.length; i += stride) {
       const p = points[i];
       this.positions.set([p.x, p.y, p.z], count * 3);
       // These are measured points, not reconstructed surfaces. Brighter mint
       // means the depth is stable; subdued points are still being confirmed.
-      const c = new THREE.Color(
-        stable.has(p) ? "#83f2cb" : p.hits > 1 ? "#4db892" : "#3d7565",
-      );
+      const c = new THREE.Color(p.hits > 1 ? "#83f2cb" : "#3d7565");
       this.colors.set([c.r, c.g, c.b], count * 3);
       count++;
     }
@@ -289,61 +266,7 @@ export class RoomScanner {
     this.pointGeometry.attributes.color.needsUpdate = true;
     this.pointGeometry.setDrawRange(0, count);
     this.stats.pointCount = points.length;
-    this.stats.stablePointCount = stable.size;
-  }
-  calibrateFloor() {
-    if (!this.hit) throw new Error("Aim at the floor until the ring appears.");
-    this.floorY = this.hit.y;
-    this.publish();
-  }
-  captureCorner() {
-    if (!this.hit || this.paused) return;
-    if (this.floorY === null) this.floorY = this.hit.y;
-    if (Math.abs(this.hit.y - this.floorY) > 0.18) {
-      this.stats.errors.push("Aim at a corner on the calibrated floor.");
-      this.publish();
-      return;
-    }
-    const last = this.corners[this.corners.length - 1];
-    if (
-      this.corners.length >= 32 ||
-      (last && Math.hypot(last.x - this.hit.x, last.z - this.hit.z) < 0.2)
-    )
-      return;
-    this.corners.push({ ...this.hit });
-    this.redrawCorners();
-    this.publish();
-  }
-  redrawCorners() {
-    for (const child of [...this.cornerGroup.children]) {
-      this.cornerGroup.remove(child);
-      child.geometry.dispose();
-      child.material.dispose();
-    }
-    this.corners.forEach((p, i) => {
-      const dot = new THREE.Mesh(
-        new THREE.SphereGeometry(0.035, 10, 8),
-        new THREE.MeshBasicMaterial({ color: "#ff8d48" }),
-      );
-      dot.position.set(p.x, p.y + 0.025, p.z);
-      this.cornerGroup.add(dot);
-      if (i) {
-        const prev = this.corners[i - 1],
-          line = new THREE.Line(
-            new THREE.BufferGeometry().setFromPoints([
-              new THREE.Vector3(prev.x, prev.y + 0.025, prev.z),
-              new THREE.Vector3(p.x, p.y + 0.025, p.z),
-            ]),
-            new THREE.LineBasicMaterial({ color: "#ffb36d" }),
-          );
-        this.cornerGroup.add(line);
-      }
-    });
-  }
-  undo() {
-    this.corners.pop();
-    this.redrawCorners();
-    this.publish();
+    this.stats.stablePointCount = this.cloud.previewStableCount();
   }
   togglePause() {
     if (this.originChanged) return;
@@ -357,7 +280,6 @@ export class RoomScanner {
       );
     return {
       points: this.cloud.values(true),
-      corners: this.corners.map((p) => ({ ...p })),
       floorY: this.floorY,
       observer: this.observer,
       stats: { ...this.stats },
@@ -383,7 +305,6 @@ export class RoomScanner {
       if (o.material) o.material.dispose();
     });
     this.renderer?.dispose();
-    this.overlay?.removeEventListener("beforexrselect", this.preventSelect);
     this.onEnd?.();
   }
 }

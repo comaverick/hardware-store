@@ -229,11 +229,6 @@ export default function ScanSpace() {
           <ScannerPanel
             capabilities={capabilities || {}}
             onCancel={() => setStage("welcome")}
-            onManual={() => {
-              setReviewRoom(null);
-              setCapture({});
-              setStage("review");
-            }}
             onComplete={(room, data) => {
               setReviewRoom(room);
               setCapture(data);
@@ -262,13 +257,13 @@ export default function ScanSpace() {
                   : "Depth outline complete · "}
                 {capture.ceilingMeasured
                   ? "Ceiling observed"
-                  : "Ceiling height supplied manually"}
+                  : "Ceiling height estimated"}
               </p>
               {capture.partial && (
                 <p>
-                  The room outline was completed with your marked corners.
-                  Recheck wall measurements before relying on material
-                  estimates.
+                  ScanSpace inferred {capture.inferredWallCount || "some"}{" "}
+                  unscanned wall boundaries from the measured surfaces. Recheck
+                  the room outline before relying on material estimates.
                 </p>
               )}
               <p>

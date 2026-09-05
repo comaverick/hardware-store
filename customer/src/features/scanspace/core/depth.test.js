@@ -80,12 +80,14 @@ test("adaptive compaction preserves room coverage before reporting a hard limit"
   expect(cloud.size).toBeGreaterThan(0.05);
   expect(cloud.full).toBe(false);
 });
-function fixture(missing = false) {
+function fixture(wallCount = 4) {
   const points = [];
   for (let y = 0.4; y < 2.5; y += 0.13)
     for (let t = 0.1; t < 3.9; t += 0.13) {
-      points.push({ x: 0, y, z: t }, { x: 4, y, z: t }, { x: t, y, z: 0 });
-      if (!missing) points.push({ x: t, y, z: 4 });
+      if (wallCount >= 1) points.push({ x: 0, y, z: t });
+      if (wallCount >= 2) points.push({ x: t, y, z: 0 });
+      if (wallCount >= 3) points.push({ x: 4, y, z: t });
+      if (wallCount >= 4) points.push({ x: t, y, z: 4 });
     }
   for (let x = 0.1; x < 4; x += 0.18)
     for (let z = 0.1; z < 4; z += 0.18)
@@ -101,15 +103,26 @@ test("reconstructs a bounded room from synthetic measured points", () => {
   });
   expect(area(result.room.floorPolygon)).toBeCloseTo(16, 0);
   expect(result.room.scanMetadata.mode).toBe("depth");
+  expect(result.room.scanMetadata.partial).toBe(false);
   expect(result.ceilingMeasured).toBe(true);
 });
-test("incomplete scans do not fabricate the missing wall", () => {
+test("two adjoining walls infer a bounded rectangular room without measurements", () => {
+  const result = reconstructRoom(fixture(2), {
+    floorY: 0,
+    observer: { x: 2, z: 2 },
+    height: 2.7,
+  });
+  expect(area(result.room.floorPolygon)).toBeCloseTo(16, 0);
+  expect(result.room.scanMetadata.partial).toBe(true);
+  expect(result.room.scanMetadata.inferredWallCount).toBe(2);
+});
+test("one wall cannot establish an automatic room footprint", () => {
   expect(() =>
-    reconstructRoom(fixture(true), {
+    reconstructRoom(fixture(1), {
       floorY: 0,
       observer: { x: 2, z: 2 },
       height: 2.7,
     }),
-  ).toThrow(/enclose|coverage/);
+  ).toThrow(/Two connected wall directions/);
   expect(() => reconstructRoom([])).toThrow(/Too little/);
 });
