@@ -1,0 +1,44 @@
+:root {
+  color-scheme: light;
+  font-family: "Aptos", "Segoe UI Variable", "Segoe UI", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  --background: #ffffff;
+  --surface: #ffffff;
+  --surface-soft: #f4f6f7;
+  --surface-strong: #202428;
+  --text: #202428;
+  --text-soft: #667078;
+  --line: #e2e6e8;
+  --accent: #d85824;
+  --accent-hover: #b94719;
+  --accent-soft: #fff0e9;
+  --accent-text: #ffffff;
+  --success: #287a4d;
+  --shadow: 0 12px 32px rgba(32, 36, 40, 0.07);
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100dvh;
+  background: var(--background);
+  color: var(--text);
+}
+button, input { font: inherit; }
+button, a { -webkit-tap-highlight-color: transparent; }
+button { color: inherit; }
+a { color: inherit; text-decoration: none; }
+img { display: block; max-width: 100%; }
+button:focus-visible, a:focus-visible, input:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 48%, transparent);
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { transition-duration: 0.01ms !important; }
+}
