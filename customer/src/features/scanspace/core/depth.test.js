@@ -38,7 +38,7 @@ test("invalid depths do not become geometry", () => {
       unprojectDepth({ getDepthInMeters: () => meters }, view, 2, 2),
     ).toHaveLength(0);
 });
-test("voxel downsampling bounds memory and rejects isolated observations", () => {
+test("voxel downsampling compacts before reporting a hard memory limit", () => {
   const cloud = new VoxelCloud(0.1, 3);
   cloud.add(
     [
@@ -51,7 +51,8 @@ test("voxel downsampling bounds memory and rejects isolated observations", () =>
     1,
   );
   expect(cloud.values()).toHaveLength(3);
-  expect(cloud.full).toBe(true);
+  expect(cloud.compactions).toBeGreaterThan(0);
+  expect(cloud.full).toBe(false);
   expect(cloud.values(true)).toHaveLength(0);
 });
 test("repeat observations and neighbors produce stable geometry", () => {
@@ -64,6 +65,20 @@ test("repeat observations and neighbors produce stable geometry", () => {
   cloud.add(points, 1);
   cloud.add(points, 2);
   expect(cloud.values(true)).toHaveLength(3);
+});
+test("adaptive compaction preserves room coverage before reporting a hard limit", () => {
+  const cloud = new VoxelCloud(0.05, 10, 0.2);
+  cloud.add(
+    Array.from({ length: 40 }, (_, index) => ({
+      x: index * 0.03,
+      y: 0,
+      z: 0,
+    })),
+    1,
+  );
+  expect(cloud.compactions).toBeGreaterThan(0);
+  expect(cloud.size).toBeGreaterThan(0.05);
+  expect(cloud.full).toBe(false);
 });
 function fixture(missing = false) {
   const points = [];

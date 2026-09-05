@@ -229,6 +229,11 @@ export default function ScanSpace() {
           <ScannerPanel
             capabilities={capabilities || {}}
             onCancel={() => setStage("welcome")}
+            onManual={() => {
+              setReviewRoom(null);
+              setCapture({});
+              setStage("review");
+            }}
             onComplete={(room, data) => {
               setReviewRoom(room);
               setCapture(data);

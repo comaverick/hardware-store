@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import { RoomScanner } from "../xr/RoomScanner";
-import { normalizeRoom } from "../core/domain";
 import { surfaceTextures } from "../core/reconstruction";
 
 function CoverageCompass({ sectors = [], heading = 0 }) {
@@ -25,7 +24,12 @@ function CoverageCompass({ sectors = [], heading = 0 }) {
   );
 }
 
-export default function ScannerPanel({ capabilities, onComplete, onCancel }) {
+export default function ScannerPanel({
+  capabilities,
+  onComplete,
+  onCancel,
+  onManual,
+}) {
   const canvas = useRef(),
     overlay = useRef(),
     scanner = useRef(),
@@ -40,7 +44,6 @@ export default function ScannerPanel({ capabilities, onComplete, onCancel }) {
       features: [],
       errors: [],
     }),
-    [height, setHeight] = useState(2.7),
     [partial, setPartial] = useState(null),
     [error, setError] = useState("");
   useEffect(
@@ -75,7 +78,12 @@ export default function ScannerPanel({ capabilities, onComplete, onCancel }) {
       setBusy(false);
     }
   }
-  async function finish(assisted, allowPartial = false) {
+  async function useMeasurements() {
+    finished.current = true;
+    await scanner.current?.stop();
+    onManual?.();
+  }
+  async function finish(allowPartial = true) {
     setBusy(true);
     setError("");
     try {
@@ -83,63 +91,43 @@ export default function ScannerPanel({ capabilities, onComplete, onCancel }) {
       let room,
         floorY = raw.floorY,
         ceilingMeasured = false;
-      if (assisted) {
-        room = normalizeRoom({
-          name: "Scanned room",
-          floorPolygon: raw.corners.map((p) => ({ x: p.x, z: p.z })),
-          ceilingHeight: Number(height),
-          scanMetadata: {
-            mode: "assisted",
-            depthSupported: raw.stats.depthActive,
-            capturedColorSupported: raw.stats.colorActive,
-            depthFrames: raw.stats.depthFrames,
-            pointCount: raw.points.length,
-            partial: !!partial,
-            coverage: raw.stats.coverage || 0,
-            deviceInfo: capabilities.browser,
-          },
+      scanner.current.paused = true;
+      const stride = Math.max(1, Math.ceil(raw.points.length / 16000));
+      const points = raw.points.filter((_, i) => i % stride === 0);
+      worker.current = new Worker(
+        new URL("../core/reconstruction.worker.js", import.meta.url),
+      );
+      try {
+        const result = await new Promise((resolve, reject) => {
+          worker.current.onmessage = (e) =>
+            e.data.error
+              ? reject(new Error(e.data.error))
+              : resolve(e.data.result);
+          worker.current.onerror = () =>
+            reject(
+              new Error("Room reconstruction failed. Keep scanning the room."),
+            );
+          worker.current.postMessage({
+            points,
+            options: {
+              floorY: raw.floorY,
+              height: 2.7,
+              observer: raw.observer,
+              depthFrames: raw.stats.depthFrames,
+            },
+          });
         });
-      } else {
-        scanner.current.paused = true;
-        const stride = Math.max(1, Math.ceil(raw.points.length / 16000));
-        const points = raw.points.filter((_, i) => i % stride === 0);
-        worker.current = new Worker(
-          new URL("../core/reconstruction.worker.js", import.meta.url),
-        );
-        try {
-          const result = await new Promise((resolve, reject) => {
-            worker.current.onmessage = (e) =>
-              e.data.error
-                ? reject(new Error(e.data.error))
-                : resolve(e.data.result);
-            worker.current.onerror = () =>
-              reject(
-                new Error(
-                  "Room reconstruction failed. Try assisted corner capture.",
-                ),
-              );
-            worker.current.postMessage({
-              points,
-              options: {
-                floorY: raw.floorY,
-                height: Number(height),
-                observer: raw.observer,
-                depthFrames: raw.stats.depthFrames,
-              },
-            });
-          });
-          ({ room, floorY, ceilingMeasured } = result);
-        } catch (reconstructionError) {
-          if (!allowPartial) throw reconstructionError;
-          setPartial({
-            reason: reconstructionError.message,
-            pointCount: raw.points.length,
-            coverage: raw.stats.coverage || 0,
-          });
-          return;
-        }
-        room.scanMetadata.deviceInfo = capabilities.browser;
+        ({ room, floorY, ceilingMeasured } = result);
+      } catch (reconstructionError) {
+        if (!allowPartial) throw reconstructionError;
+        setPartial({
+          reason: reconstructionError.message,
+          pointCount: raw.points.length,
+          coverage: raw.stats.coverage || 0,
+        });
+        return;
       }
+      room.scanMetadata.deviceInfo = capabilities.browser;
       const textures = surfaceTextures(room, raw.points, floorY || 0);
       finished.current = true;
       await scanner.current.stop();
@@ -147,7 +135,7 @@ export default function ScannerPanel({ capabilities, onComplete, onCancel }) {
         textures,
         ceilingMeasured,
         stats: raw.stats,
-        partial: !!partial,
+        partial: false,
       });
     } catch (e) {
       setError(e.message);
@@ -168,7 +156,7 @@ export default function ScannerPanel({ capabilities, onComplete, onCancel }) {
             {active
               ? stats.depthActive
                 ? "Depth scanning"
-                : "Mark your room corners"
+                : "Looking for depth"
               : "Bring your room into ScanSpace."}
           </h2>
           <p>
@@ -178,8 +166,8 @@ export default function ScannerPanel({ capabilities, onComplete, onCancel }) {
                 : !stats.tracking
                   ? "Tracking lost. Move slowly toward an area you already scanned."
                   : stats.depthActive
-                    ? "Move slowly along every wall. Include the floor and ceiling."
-                    : "Aim at the floor until a ring appears, then mark each corner in order."
+                    ? "Move slowly around the room. ScanSpace finds the floor, walls, and ceiling automatically."
+                    : "Move slowly around the room while ScanSpace looks for depth."
               : "Your room stays on this phone during scanning. Depth and captured colors depend on the capabilities granted by your browser."}
           </p>
         </div>
@@ -199,12 +187,14 @@ export default function ScannerPanel({ capabilities, onComplete, onCancel }) {
           <>
             <div className="ss-scan-live">
               <div>
-                <strong>{stats.pointCount.toLocaleString()}</strong>
-                <span>depth points</span>
+                <strong>
+                  {(stats.stablePointCount || 0).toLocaleString()}
+                </strong>
+                <span>stable surface points</span>
               </div>
               <div>
-                <strong>{stats.corners.length}</strong>
-                <span>marked corners</span>
+                <strong>{stats.floorAutoDetected ? "Ready" : "Finding"}</strong>
+                <span>floor detection</span>
               </div>
               <div className="ss-scan-sweep">
                 <CoverageCompass
@@ -244,60 +234,20 @@ export default function ScannerPanel({ capabilities, onComplete, onCancel }) {
               </p>
               <p className="ss-scan-hint">
                 Mint overlays are areas AR has recognized. Turn until the view
-                sweep fills, then move around the room to improve depth
-                coverage.
+                sweep fills, then walk one or two steps along each wall to
+                improve depth coverage.
               </p>
-              {stats.full && (
-                <p className="ss-error">
-                  Capture memory limit reached. Finish this room or start a new
-                  scan.
+              {stats.cloudCompactions > 0 && (
+                <p className="ss-scan-hint">
+                  Capture density was optimized to retain room coverage.
                 </p>
               )}
-              <label>
-                Ceiling height fallback (m)
-                <input
-                  type="number"
-                  min="1.8"
-                  max="8"
-                  step="0.01"
-                  value={height}
-                  onChange={(e) => setHeight(e.target.value)}
-                />
-              </label>
-              <div className="ss-actions">
-                <button
-                  disabled={busy || !stats.canCapture}
-                  onClick={() => {
-                    try {
-                      scanner.current.calibrateFloor();
-                    } catch (e) {
-                      setError(e.message);
-                    }
-                  }}
-                >
-                  Set floor
-                </button>
-                <button
-                  disabled={busy || !stats.canCapture || stats.paused}
-                  onClick={() => scanner.current.captureCorner()}
-                >
-                  Mark corner
-                </button>
-                <button
-                  disabled={busy || !stats.corners.length}
-                  onClick={() => scanner.current.undo()}
-                >
-                  Undo corner
-                </button>
-                {!partial && (
-                  <button
-                    disabled={busy}
-                    onClick={() => scanner.current.togglePause()}
-                  >
-                    {stats.paused ? "Resume" : "Pause"}
-                  </button>
-                )}
-              </div>
+              {stats.full && (
+                <p className="ss-error">
+                  Capture density is at its safe limit. Finish with the measured
+                  area, or keep scanning only the missing wall.
+                </p>
+              )}
               {!partial ? (
                 <div className="ss-actions">
                   <button
@@ -310,17 +260,14 @@ export default function ScannerPanel({ capabilities, onComplete, onCancel }) {
                   >
                     Cancel scan
                   </button>
-                  {stats.corners.length >= 3 && (
-                    <button disabled={busy} onClick={() => finish(true)}>
-                      Use marked corners
-                    </button>
-                  )}
                   <button
                     className="ss-primary"
                     disabled={
-                      busy || !stats.depthActive || stats.pointCount < 300
+                      busy ||
+                      !stats.depthActive ||
+                      (stats.stablePointCount || 0) < 300
                     }
-                    onClick={() => finish(false, true)}
+                    onClick={() => finish()}
                   >
                     Finish scan
                   </button>
@@ -343,12 +290,8 @@ export default function ScannerPanel({ capabilities, onComplete, onCancel }) {
                     >
                       Keep scanning
                     </button>
-                    <button
-                      className="ss-primary"
-                      disabled={busy || stats.corners.length < 3}
-                      onClick={() => finish(true)}
-                    >
-                      Use marked outline
+                    <button onClick={useMeasurements}>
+                      Use room measurements instead
                     </button>
                   </div>
                 </section>
@@ -378,6 +321,9 @@ export default function ScannerPanel({ capabilities, onComplete, onCancel }) {
               depthFormat: stats.format || "Unavailable",
               depthDimensions: stats.dimensions || "Unavailable",
               pointCount: stats.pointCount,
+              stablePointCount: stats.stablePointCount || 0,
+              cloudCellSize: `${Math.round((stats.cloudCellSize || 0) * 100)} cm`,
+              cloudOptimizations: stats.cloudCompactions || 0,
               detectedPlanes: stats.planes || 0,
               tracking: !!stats.tracking,
               floorCalibrated: stats.floorY != null,

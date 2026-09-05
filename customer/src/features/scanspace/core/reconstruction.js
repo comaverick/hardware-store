@@ -142,10 +142,15 @@ export function reconstructRoom(points, options = {}) {
       .filter((t) => t >= 0 && t <= len);
     const covered =
       (new Set(projections.map((t) => Math.floor(t / 0.25))).size * 0.25) / len;
-    if (support.length < 40 || covered < 0.5)
+    if (support.length < 40 || covered < 0.5) {
+      const detail =
+        support.length < 40
+          ? `only ${support.length} stable samples`
+          : `${Math.round(covered * 100)}% depth coverage`;
       throw new Error(
-        "A proposed wall has insufficient coverage. Continue scanning it or correct the outline manually.",
+        `A proposed wall has ${detail} (50% coverage needs 40 stable samples). Walk slowly along that wall, or complete the outline with marked corners.`,
       );
+    }
     return { material: { color: "#e6e1d8" }, openings: [] };
   });
   const room = normalizeRoom({

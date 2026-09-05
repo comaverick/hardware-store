@@ -13,6 +13,10 @@ export class RoomScanner {
     this.stats = {
       depthFrames: 0,
       pointCount: 0,
+      stablePointCount: 0,
+      cloudCellSize: this.cloud.size,
+      cloudCompactions: 0,
+      floorAutoDetected: false,
       depthActive: false,
       colorActive: false,
       tracking: false,
@@ -180,8 +184,15 @@ export class RoomScanner {
           };
           this.reticle.matrix.fromArray(hit.transform.matrix);
           this.reticle.visible = true;
+          // Prefer the lowest stable horizontal hit. This avoids asking the
+          // customer to calibrate a floor while naturally correcting a table
+          // or counter hit once the actual floor comes into view.
+          if (this.floorY === null || hit.transform.position.y < this.floorY) {
+            this.floorY = hit.transform.position.y;
+            this.stats.floorAutoDetected = true;
+          }
         }
-        if (!this.paused && time - (this.lastCapture || 0) > 180) {
+        if (!this.paused && time - (this.lastCapture || 0) > 320) {
           this.lastCapture = time;
           const view = pose.views[0];
           let depth = null;
@@ -214,9 +225,11 @@ export class RoomScanner {
               }
             }
             this.cloud.add(
-              unprojectDepth(depth, view, 56, 42, colorAt),
+              unprojectDepth(depth, view, 44, 32, colorAt),
               this.stats.depthFrames,
             );
+            this.stats.cloudCellSize = this.cloud.size;
+            this.stats.cloudCompactions = this.cloud.compactions;
             const m = view.transform.matrix;
             const direction =
               Math.floor(
@@ -293,6 +306,7 @@ export class RoomScanner {
     this.pointGeometry.attributes.color.needsUpdate = true;
     this.pointGeometry.setDrawRange(0, count);
     this.stats.pointCount = points.length;
+    this.stats.stablePointCount = this.cloud.values(true).length;
   }
   updatePlaneOverlay() {
     if (!this.planeGroup) return;

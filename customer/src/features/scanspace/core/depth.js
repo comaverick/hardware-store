@@ -56,21 +56,59 @@ export function unprojectDepth(
 }
 
 export class VoxelCloud {
-  constructor(size = 0.045, limit = 100000) {
+  constructor(size = 0.08, limit = 60000, maxSize = 0.18) {
     this.size = size;
     this.limit = limit;
+    this.maxSize = maxSize;
     this.cells = new Map();
     this.full = false;
+    this.compactions = 0;
   }
   key(p) {
     return `${Math.floor(p.x / this.size)},${Math.floor(p.y / this.size)},${Math.floor(p.z / this.size)}`;
+  }
+  compact() {
+    if (this.size >= this.maxSize) return false;
+    const nextSize = Math.min(this.maxSize, this.size * 1.35);
+    const compacted = new Map();
+    for (const point of this.cells.values()) {
+      const key = `${Math.floor(point.x / nextSize)},${Math.floor(
+        point.y / nextSize,
+      )},${Math.floor(point.z / nextSize)}`;
+      const current = compacted.get(key);
+      if (!current) compacted.set(key, { ...point });
+      else {
+        const hits = Math.min(current.hits + point.hits, 255);
+        const weight = point.hits / hits;
+        ["x", "y", "z"].forEach((name) => {
+          current[name] += (point[name] - current[name]) * weight;
+        });
+        if (point.color)
+          current.color = current.color
+            ? current.color.map(
+                (value, index) => value + (point.color[index] - value) * weight,
+              )
+            : point.color;
+        current.hits = hits;
+        current.frameId = Math.max(current.frameId, point.frameId);
+      }
+    }
+    this.size = nextSize;
+    this.cells = compacted;
+    this.compactions++;
+    return true;
   }
   add(points, frameId) {
     for (const p of points) {
       if (![p.x, p.y, p.z].every((v) => Number.isFinite(v) && Math.abs(v) < 60))
         continue;
-      const key = this.key(p),
+      let key = this.key(p),
         previous = this.cells.get(key);
+      if (!previous && this.cells.size >= this.limit * 0.92) {
+        this.compact();
+        key = this.key(p);
+        previous = this.cells.get(key);
+      }
       if (previous) {
         if (previous.frameId === frameId) continue;
         previous.frameId = frameId;
@@ -85,14 +123,13 @@ export class VoxelCloud {
             : p.color;
       } else if (this.cells.size < this.limit)
         this.cells.set(key, { ...p, frameId, hits: 1 });
-      else this.full = true;
+      else this.full = this.size >= this.maxSize;
     }
   }
   values(filtered = false) {
     const all = [...this.cells.values()];
     if (!filtered) return all;
     return all.filter((p) => {
-      if (p.hits < 2) return false;
       const [x, y, z] = this.key(p).split(",").map(Number);
       let neighbors = 0;
       for (let dx = -1; dx <= 1; dx++)
@@ -103,7 +140,9 @@ export class VoxelCloud {
               this.cells.has(`${x + dx},${y + dy},${z + dz}`)
             )
               neighbors++;
-      return neighbors >= 2;
+      // A repeated voxel is stable; a dense, adjacent surface patch is also
+      // stable even if its individual samples were only seen once while moving.
+      return p.hits >= 2 || neighbors >= 4;
     });
   }
 }
