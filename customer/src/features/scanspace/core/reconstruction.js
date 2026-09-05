@@ -8,7 +8,9 @@ function clip(poly, nx, nz, d) {
       da = nx * a.x + nz * a.z - d,
       db = nx * b.x + nz * b.z - d;
     if (da <= 1e-7) result.push(a);
-    if (da < 0 !== db < 0) {
+    const aIsInside = da < 0;
+    const bIsInside = db < 0;
+    if (aIsInside !== bIsInside) {
       const t = da / (da - db);
       result.push({ x: a.x + t * (b.x - a.x), z: a.z + t * (b.z - a.z) });
     }
