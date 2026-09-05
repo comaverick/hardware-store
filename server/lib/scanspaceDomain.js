@@ -314,6 +314,8 @@ function normalizeRoom(input) {
       depthFrames: number(sm.depthFrames ?? 0, 0, 1e7, "Frame count"),
       pointCount: number(sm.pointCount ?? 0, 0, 1e6, "Point count"),
       confidence: number(sm.confidence ?? 0, 0, 1, "Scan quality"),
+      partial: sm.partial === true,
+      coverage: number(sm.coverage ?? 0, 0, 100, "Scan coverage"),
       deviceInfo: text(sm.deviceInfo, 250),
     },
   };

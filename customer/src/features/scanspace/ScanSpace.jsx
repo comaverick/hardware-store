@@ -252,10 +252,20 @@ export default function ScanSpace() {
               <p>
                 {capture.stats.depthFrames} depth frames ·{" "}
                 {capture.stats.pointCount.toLocaleString()} points ·{" "}
+                {capture.partial
+                  ? `Partial scan · ${capture.stats.coverage || 0}% view sweep · `
+                  : "Depth outline complete · "}
                 {capture.ceilingMeasured
                   ? "Ceiling observed"
                   : "Ceiling height supplied manually"}
               </p>
+              {capture.partial && (
+                <p>
+                  The room outline was completed with your marked corners.
+                  Recheck wall measurements before relying on material
+                  estimates.
+                </p>
+              )}
               <p>
                 {Object.keys(capture.textures || {}).length
                   ? "Captured wall colors available in the editor."

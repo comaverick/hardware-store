@@ -22,6 +22,8 @@ export class RoomScanner {
       format: "Unavailable",
       dimensions: "Unavailable",
       coverage: 0,
+      directionCoverage: Array(24).fill(false),
+      currentDirection: 0,
     };
     this.directions = new Set();
     this.observer = { x: 0, z: 0 };
@@ -124,14 +126,16 @@ export class RoomScanner {
       const points = new THREE.Points(
         this.pointGeometry,
         new THREE.PointsMaterial({
-          size: 0.018,
+          size: 0.022,
           vertexColors: true,
           transparent: true,
-          opacity: 0.8,
+          opacity: 0.9,
         }),
       );
       points.frustumCulled = false;
       this.scene.add(points);
+      this.planeGroup = new THREE.Group();
+      this.scene.add(this.planeGroup);
       this.cornerGroup = new THREE.Group();
       this.scene.add(this.cornerGroup);
       if (typeof window.XRWebGLBinding === "function")
@@ -214,10 +218,15 @@ export class RoomScanner {
               this.stats.depthFrames,
             );
             const m = view.transform.matrix;
-            this.directions.add(
+            const direction =
               Math.floor(
                 ((Math.atan2(-m[8], -m[10]) + Math.PI) / (Math.PI * 2)) * 24,
-              ),
+              ) % 24;
+            this.directions.add(direction);
+            this.stats.currentDirection = direction;
+            this.stats.directionCoverage = Array.from(
+              { length: 24 },
+              (_, index) => this.directions.has(index),
             );
             this.stats.coverage = Math.min(
               100,
@@ -231,12 +240,20 @@ export class RoomScanner {
               const pp = frame.getPose(plane.planeSpace, this.space);
               if (!pp) continue;
               const matrix = new THREE.Matrix4().fromArray(pp.transform.matrix);
+              const localPolygon = Array.from(
+                plane.polygon,
+                (p) => new THREE.Vector3(p.x, p.y, p.z),
+              );
               this.planes.set(plane, {
                 orientation: plane.orientation,
-                polygon: Array.from(plane.polygon, (p) =>
-                  new THREE.Vector3(p.x, p.y, p.z).applyMatrix4(matrix),
+                polygon: localPolygon.map((p) =>
+                  p.clone().applyMatrix4(matrix),
                 ),
               });
+            }
+            if (time - (this.lastPlanePreview || 0) > 500) {
+              this.lastPlanePreview = time;
+              this.updatePlaneOverlay();
             }
             this.stats.planes = this.planes.size;
           }
@@ -268,7 +285,7 @@ export class RoomScanner {
             ...p.color.map((v) => v / 255),
             THREE.SRGBColorSpace,
           )
-        : new THREE.Color("#eba46c");
+        : new THREE.Color("#64ddb4");
       this.colors.set([c.r, c.g, c.b], count * 3);
       count++;
     }
@@ -276,6 +293,40 @@ export class RoomScanner {
     this.pointGeometry.attributes.color.needsUpdate = true;
     this.pointGeometry.setDrawRange(0, count);
     this.stats.pointCount = points.length;
+  }
+  updatePlaneOverlay() {
+    if (!this.planeGroup) return;
+    for (const child of [...this.planeGroup.children]) {
+      this.planeGroup.remove(child);
+      child.geometry?.dispose();
+      child.material?.dispose();
+    }
+    for (const plane of this.planes.values()) {
+      if (plane.polygon.length < 3) continue;
+      const vertices = [];
+      for (let i = 1; i < plane.polygon.length - 1; i++)
+        vertices.push(plane.polygon[0], plane.polygon[i], plane.polygon[i + 1]);
+      const fill = new THREE.BufferGeometry().setFromPoints(vertices);
+      const fillMesh = new THREE.Mesh(
+        fill,
+        new THREE.MeshBasicMaterial({
+          color: "#55e6bb",
+          transparent: true,
+          opacity: 0.16,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+        }),
+      );
+      const edge = new THREE.LineLoop(
+        new THREE.BufferGeometry().setFromPoints(plane.polygon),
+        new THREE.LineBasicMaterial({
+          color: "#a4ffe0",
+          transparent: true,
+          opacity: 0.8,
+        }),
+      );
+      this.planeGroup.add(fillMesh, edge);
+    }
   }
   calibrateFloor() {
     if (!this.hit) throw new Error("Aim at the floor until the ring appears.");

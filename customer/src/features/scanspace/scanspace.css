@@ -923,6 +923,79 @@
   gap: 4px;
   text-align: center;
 }
+.ss-scan-live .ss-scan-sweep {
+  display: flex;
+  grid-template-columns: none;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+}
+.ss-coverage-compass {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  border-radius: 50%;
+  background: #203d33;
+  box-shadow: 0 0 0 1px #c6ffe914;
+}
+.ss-coverage-compass > span {
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  -webkit-mask: radial-gradient(transparent 0 44%, #000 47%);
+  mask: radial-gradient(transparent 0 44%, #000 47%);
+}
+.ss-coverage-compass::after {
+  content: "";
+  position: absolute;
+  inset: 11px;
+  border-radius: 50%;
+  background: #193127;
+}
+.ss-coverage-compass i {
+  position: absolute;
+  z-index: 2;
+  top: 3px;
+  left: calc(50% - 1px);
+  width: 2px;
+  height: 13px;
+  background: #ffbf79;
+  border-radius: 2px;
+  transform-origin: 1px 14px;
+  transition: transform 0.2s ease;
+}
+.ss-scan-area-key {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: -3px auto 8px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: #182921b8;
+  color: #dcebe2;
+  font-size: 9px;
+}
+.ss-scan-area-key span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.ss-scan-area-key i {
+  width: 7px;
+  height: 7px;
+  border: 1px solid #80978c;
+  border-radius: 2px;
+}
+.ss-scan-area-key .is-observed {
+  border-color: #9effd9;
+  background: #55e6bb99;
+}
+.ss-scan-area-key .is-next {
+  border-color: #ffd093;
+  background: #ffb969;
+}
 .ss-scan-live strong {
   font-size: 18px;
 }
@@ -970,6 +1043,32 @@
   line-height: 1.5;
   color: #dfebe2;
   margin: 0 0 10px;
+}
+.ss-scan-hint {
+  margin: -4px 0 10px;
+  color: #b9d8c9;
+  font-size: 10px;
+  line-height: 1.45;
+}
+.ss-partial-capture {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid #ffca8b;
+  border-radius: 9px;
+  background: #4b321ee8;
+  color: #fff5e9;
+}
+.ss-partial-capture strong {
+  color: #ffd09b;
+  font-size: 12px;
+}
+.ss-partial-capture p {
+  margin: 6px 0;
+  font-size: 10px;
+  line-height: 1.45;
+}
+.ss-partial-capture .ss-partial-reason {
+  color: #ffe1bd;
 }
 .is-scanning .ss-diagnostics {
   background: #17261edd;

@@ -3,6 +3,28 @@ import { RoomScanner } from "../xr/RoomScanner";
 import { normalizeRoom } from "../core/domain";
 import { surfaceTextures } from "../core/reconstruction";
 
+function CoverageCompass({ sectors = [], heading = 0 }) {
+  const views = sectors.length ? sectors : Array(24).fill(false);
+  const step = 360 / views.length;
+  const gradient = views
+    .map((seen, index) => {
+      const start = index * step + 1;
+      const end = (index + 1) * step - 1;
+      return `${seen ? "#65dcb7" : "#456257"} ${start}deg ${end}deg`;
+    })
+    .join(", ");
+  return (
+    <div
+      className="ss-coverage-compass"
+      role="img"
+      aria-label={`${views.filter(Boolean).length} of ${views.length} view directions scanned`}
+    >
+      <span style={{ background: `conic-gradient(${gradient})` }} />
+      <i style={{ transform: `rotate(${heading * step}deg)` }} />
+    </div>
+  );
+}
+
 export default function ScannerPanel({ capabilities, onComplete, onCancel }) {
   const canvas = useRef(),
     overlay = useRef(),
@@ -19,6 +41,7 @@ export default function ScannerPanel({ capabilities, onComplete, onCancel }) {
       errors: [],
     }),
     [height, setHeight] = useState(2.7),
+    [partial, setPartial] = useState(null),
     [error, setError] = useState("");
   useEffect(
     () => () => {
@@ -29,6 +52,7 @@ export default function ScannerPanel({ capabilities, onComplete, onCancel }) {
   );
   async function start() {
     setError("");
+    setPartial(null);
     setBusy(true);
     finished.current = false;
     const s = new RoomScanner({
@@ -51,7 +75,7 @@ export default function ScannerPanel({ capabilities, onComplete, onCancel }) {
       setBusy(false);
     }
   }
-  async function finish(assisted) {
+  async function finish(assisted, allowPartial = false) {
     setBusy(true);
     setError("");
     try {
@@ -70,6 +94,8 @@ export default function ScannerPanel({ capabilities, onComplete, onCancel }) {
             capturedColorSupported: raw.stats.colorActive,
             depthFrames: raw.stats.depthFrames,
             pointCount: raw.points.length,
+            partial: !!partial,
+            coverage: raw.stats.coverage || 0,
             deviceInfo: capabilities.browser,
           },
         });
@@ -80,34 +106,49 @@ export default function ScannerPanel({ capabilities, onComplete, onCancel }) {
         worker.current = new Worker(
           new URL("../core/reconstruction.worker.js", import.meta.url),
         );
-        const result = await new Promise((resolve, reject) => {
-          worker.current.onmessage = (e) =>
-            e.data.error
-              ? reject(new Error(e.data.error))
-              : resolve(e.data.result);
-          worker.current.onerror = () =>
-            reject(
-              new Error(
-                "Room reconstruction failed. Try assisted corner capture.",
-              ),
-            );
-          worker.current.postMessage({
-            points,
-            options: {
-              floorY: raw.floorY,
-              height: Number(height),
-              observer: raw.observer,
-              depthFrames: raw.stats.depthFrames,
-            },
+        try {
+          const result = await new Promise((resolve, reject) => {
+            worker.current.onmessage = (e) =>
+              e.data.error
+                ? reject(new Error(e.data.error))
+                : resolve(e.data.result);
+            worker.current.onerror = () =>
+              reject(
+                new Error(
+                  "Room reconstruction failed. Try assisted corner capture.",
+                ),
+              );
+            worker.current.postMessage({
+              points,
+              options: {
+                floorY: raw.floorY,
+                height: Number(height),
+                observer: raw.observer,
+                depthFrames: raw.stats.depthFrames,
+              },
+            });
           });
-        });
-        ({ room, floorY, ceilingMeasured } = result);
+          ({ room, floorY, ceilingMeasured } = result);
+        } catch (reconstructionError) {
+          if (!allowPartial) throw reconstructionError;
+          setPartial({
+            reason: reconstructionError.message,
+            pointCount: raw.points.length,
+            coverage: raw.stats.coverage || 0,
+          });
+          return;
+        }
         room.scanMetadata.deviceInfo = capabilities.browser;
       }
       const textures = surfaceTextures(room, raw.points, floorY || 0);
       finished.current = true;
       await scanner.current.stop();
-      onComplete(room, { textures, ceilingMeasured, stats: raw.stats });
+      onComplete(room, {
+        textures,
+        ceilingMeasured,
+        stats: raw.stats,
+        partial: !!partial,
+      });
     } catch (e) {
       setError(e.message);
       if (scanner.current) scanner.current.paused = false;
@@ -165,10 +206,27 @@ export default function ScannerPanel({ capabilities, onComplete, onCancel }) {
                 <strong>{stats.corners.length}</strong>
                 <span>marked corners</span>
               </div>
-              <div>
-                <strong>{stats.coverage || 0}%</strong>
-                <span>directions viewed</span>
+              <div className="ss-scan-sweep">
+                <CoverageCompass
+                  sectors={stats.directionCoverage}
+                  heading={stats.currentDirection}
+                />
+                <div>
+                  <strong>{stats.coverage || 0}%</strong>
+                  <span>view sweep</span>
+                </div>
               </div>
+            </div>
+            <div className="ss-scan-area-key" aria-label="Scanned area legend">
+              <span>
+                <i className="is-observed" /> Observed plane area
+              </span>
+              <span>
+                <i className="is-next" /> Current direction
+              </span>
+              <span>
+                <i /> Not viewed yet
+              </span>
             </div>
             <div className="ss-scanning-target" aria-hidden="true">
               +
@@ -183,6 +241,11 @@ export default function ScannerPanel({ capabilities, onComplete, onCancel }) {
                 {stats.colorActive
                   ? "Camera colors captured."
                   : "Captured colors unavailable."}
+              </p>
+              <p className="ss-scan-hint">
+                Mint overlays are areas AR has recognized. Turn until the view
+                sweep fills, then move around the room to improve depth
+                coverage.
               </p>
               {stats.full && (
                 <p className="ss-error">
@@ -226,39 +289,70 @@ export default function ScannerPanel({ capabilities, onComplete, onCancel }) {
                 >
                   Undo corner
                 </button>
-                <button
-                  disabled={busy}
-                  onClick={() => scanner.current.togglePause()}
-                >
-                  {stats.paused ? "Resume" : "Pause"}
-                </button>
-              </div>
-              <div className="ss-actions">
-                <button
-                  disabled={busy}
-                  onClick={async () => {
-                    finished.current = true;
-                    await scanner.current.stop();
-                    onCancel();
-                  }}
-                >
-                  Cancel scan
-                </button>
-                {stats.corners.length >= 3 && (
-                  <button disabled={busy} onClick={() => finish(true)}>
-                    Use marked corners
+                {!partial && (
+                  <button
+                    disabled={busy}
+                    onClick={() => scanner.current.togglePause()}
+                  >
+                    {stats.paused ? "Resume" : "Pause"}
                   </button>
                 )}
-                <button
-                  className="ss-primary"
-                  disabled={
-                    busy || !stats.depthActive || stats.pointCount < 300
-                  }
-                  onClick={() => finish(false)}
-                >
-                  Build from depth
-                </button>
               </div>
+              {!partial ? (
+                <div className="ss-actions">
+                  <button
+                    disabled={busy}
+                    onClick={async () => {
+                      finished.current = true;
+                      await scanner.current.stop();
+                      onCancel();
+                    }}
+                  >
+                    Cancel scan
+                  </button>
+                  {stats.corners.length >= 3 && (
+                    <button disabled={busy} onClick={() => finish(true)}>
+                      Use marked corners
+                    </button>
+                  )}
+                  <button
+                    className="ss-primary"
+                    disabled={
+                      busy || !stats.depthActive || stats.pointCount < 300
+                    }
+                    onClick={() => finish(false, true)}
+                  >
+                    Finish scan
+                  </button>
+                </div>
+              ) : (
+                <section className="ss-partial-capture" role="status">
+                  <strong>Partial depth captured</strong>
+                  <p>
+                    {partial.pointCount.toLocaleString()} points across{" "}
+                    {partial.coverage}% of the view sweep. The missing room
+                    outline has not been guessed.
+                  </p>
+                  <p className="ss-partial-reason">{partial.reason}</p>
+                  <div className="ss-actions">
+                    <button
+                      onClick={() => {
+                        setPartial(null);
+                        scanner.current.togglePause();
+                      }}
+                    >
+                      Keep scanning
+                    </button>
+                    <button
+                      className="ss-primary"
+                      disabled={busy || stats.corners.length < 3}
+                      onClick={() => finish(true)}
+                    >
+                      Use marked outline
+                    </button>
+                  </div>
+                </section>
+              )}
             </div>
           </>
         )}
@@ -288,6 +382,8 @@ export default function ScannerPanel({ capabilities, onComplete, onCancel }) {
               tracking: !!stats.tracking,
               floorCalibrated: stats.floorY != null,
               colorCaptured: !!stats.colorActive,
+              viewSweep: `${stats.coverage || 0}%`,
+              observedPlanes: stats.planes || 0,
             }).map(([k, v]) => (
               <div key={k}>
                 <dt>{k}</dt>
