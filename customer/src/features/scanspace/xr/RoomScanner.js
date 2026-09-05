@@ -130,16 +130,15 @@ export class RoomScanner {
       const points = new THREE.Points(
         this.pointGeometry,
         new THREE.PointsMaterial({
-          size: 0.022,
+          size: 0.03,
           vertexColors: true,
           transparent: true,
-          opacity: 0.9,
+          opacity: 0.82,
+          depthWrite: false,
         }),
       );
       points.frustumCulled = false;
       this.scene.add(points);
-      this.planeGroup = new THREE.Group();
-      this.scene.add(this.planeGroup);
       this.cornerGroup = new THREE.Group();
       this.scene.add(this.cornerGroup);
       if (typeof window.XRWebGLBinding === "function")
@@ -250,23 +249,7 @@ export class RoomScanner {
             for (const plane of this.planes.keys())
               if (!frame.detectedPlanes.has(plane)) this.planes.delete(plane);
             for (const plane of frame.detectedPlanes) {
-              const pp = frame.getPose(plane.planeSpace, this.space);
-              if (!pp) continue;
-              const matrix = new THREE.Matrix4().fromArray(pp.transform.matrix);
-              const localPolygon = Array.from(
-                plane.polygon,
-                (p) => new THREE.Vector3(p.x, p.y, p.z),
-              );
-              this.planes.set(plane, {
-                orientation: plane.orientation,
-                polygon: localPolygon.map((p) =>
-                  p.clone().applyMatrix4(matrix),
-                ),
-              });
-            }
-            if (time - (this.lastPlanePreview || 0) > 500) {
-              this.lastPlanePreview = time;
-              this.updatePlaneOverlay();
+              this.planes.set(plane, { orientation: plane.orientation });
             }
             this.stats.planes = this.planes.size;
           }
@@ -288,17 +271,17 @@ export class RoomScanner {
   }
   updatePreview() {
     const points = this.cloud.values(),
+      stable = new Set(this.cloud.values(true)),
       stride = Math.max(1, Math.ceil(points.length / 24000));
     let count = 0;
     for (let i = 0; i < points.length; i += stride) {
       const p = points[i];
       this.positions.set([p.x, p.y, p.z], count * 3);
-      const c = p.color
-        ? new THREE.Color().setRGB(
-            ...p.color.map((v) => v / 255),
-            THREE.SRGBColorSpace,
-          )
-        : new THREE.Color("#64ddb4");
+      // These are measured points, not reconstructed surfaces. Brighter mint
+      // means the depth is stable; subdued points are still being confirmed.
+      const c = new THREE.Color(
+        stable.has(p) ? "#83f2cb" : p.hits > 1 ? "#4db892" : "#3d7565",
+      );
       this.colors.set([c.r, c.g, c.b], count * 3);
       count++;
     }
@@ -306,41 +289,7 @@ export class RoomScanner {
     this.pointGeometry.attributes.color.needsUpdate = true;
     this.pointGeometry.setDrawRange(0, count);
     this.stats.pointCount = points.length;
-    this.stats.stablePointCount = this.cloud.values(true).length;
-  }
-  updatePlaneOverlay() {
-    if (!this.planeGroup) return;
-    for (const child of [...this.planeGroup.children]) {
-      this.planeGroup.remove(child);
-      child.geometry?.dispose();
-      child.material?.dispose();
-    }
-    for (const plane of this.planes.values()) {
-      if (plane.polygon.length < 3) continue;
-      const vertices = [];
-      for (let i = 1; i < plane.polygon.length - 1; i++)
-        vertices.push(plane.polygon[0], plane.polygon[i], plane.polygon[i + 1]);
-      const fill = new THREE.BufferGeometry().setFromPoints(vertices);
-      const fillMesh = new THREE.Mesh(
-        fill,
-        new THREE.MeshBasicMaterial({
-          color: "#55e6bb",
-          transparent: true,
-          opacity: 0.16,
-          side: THREE.DoubleSide,
-          depthWrite: false,
-        }),
-      );
-      const edge = new THREE.LineLoop(
-        new THREE.BufferGeometry().setFromPoints(plane.polygon),
-        new THREE.LineBasicMaterial({
-          color: "#a4ffe0",
-          transparent: true,
-          opacity: 0.8,
-        }),
-      );
-      this.planeGroup.add(fillMesh, edge);
-    }
+    this.stats.stablePointCount = stable.size;
   }
   calibrateFloor() {
     if (!this.hit) throw new Error("Aim at the floor until the ring appears.");

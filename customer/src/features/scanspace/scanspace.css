@@ -989,12 +989,12 @@
   border-radius: 2px;
 }
 .ss-scan-area-key .is-observed {
-  border-color: #9effd9;
-  background: #55e6bb99;
+  border-color: #b6ffe5;
+  background: #83f2cb;
 }
 .ss-scan-area-key .is-next {
-  border-color: #ffd093;
-  background: #ffb969;
+  border-color: #70c9ad;
+  background: #4db892;
 }
 .ss-scan-live strong {
   font-size: 18px;

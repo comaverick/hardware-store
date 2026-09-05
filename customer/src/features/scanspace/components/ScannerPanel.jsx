@@ -209,13 +209,13 @@ export default function ScannerPanel({
             </div>
             <div className="ss-scan-area-key" aria-label="Scanned area legend">
               <span>
-                <i className="is-observed" /> Observed plane area
+                <i className="is-observed" /> Stable scanned depth
               </span>
               <span>
-                <i className="is-next" /> Current direction
+                <i className="is-next" /> Still stabilizing
               </span>
               <span>
-                <i /> Not viewed yet
+                <i /> Not scanned yet
               </span>
             </div>
             <div className="ss-scanning-target" aria-hidden="true">
@@ -233,9 +233,9 @@ export default function ScannerPanel({
                   : "Captured colors unavailable."}
               </p>
               <p className="ss-scan-hint">
-                Mint overlays are areas AR has recognized. Turn until the view
-                sweep fills, then walk one or two steps along each wall to
-                improve depth coverage.
+                Bright mint dots are measured, stable depth. Soft mint dots are
+                still being confirmed. Turn until the view sweep fills, then
+                walk one or two steps along each wall.
               </p>
               {stats.cloudCompactions > 0 && (
                 <p className="ss-scan-hint">
