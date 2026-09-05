@@ -106,23 +106,28 @@ test("reconstructs a bounded room from synthetic measured points", () => {
   expect(result.room.scanMetadata.partial).toBe(false);
   expect(result.ceilingMeasured).toBe(true);
 });
-test("two adjoining walls infer a bounded rectangular room without measurements", () => {
+test("two adjoining walls remain an open observed-surface scan", () => {
   const result = reconstructRoom(fixture(2), {
     floorY: 0,
     observer: { x: 2, z: 2 },
     height: 2.7,
   });
-  expect(area(result.room.floorPolygon)).toBeCloseTo(16, 0);
-  expect(result.room.scanMetadata.partial).toBe(true);
-  expect(result.room.scanMetadata.inferredWallCount).toBe(2);
+  expect(result.room).toBeNull();
+  expect(result.partial.kind).toBe("observed-surfaces");
+  expect(result.partial.walls).toHaveLength(2);
+  expect(result.inferredWallCount).toBe(0);
 });
-test("one wall cannot establish an automatic room footprint", () => {
-  expect(() =>
-    reconstructRoom(fixture(1), {
-      floorY: 0,
-      observer: { x: 2, z: 2 },
-      height: 2.7,
-    }),
-  ).toThrow(/Two connected wall directions/);
+test("one measured wall renders alone without inventing a room", () => {
+  const result = reconstructRoom(fixture(1), {
+    floorY: 0,
+    observer: { x: 2, z: 2 },
+    height: 2.7,
+  });
+  expect(result.room).toBeNull();
+  expect(result.partial.walls).toHaveLength(1);
+  expect(result.partial.reason).toMatch(/One wall was measured/);
+  expect(result.inferredWallCount).toBe(0);
+});
+test("no stable wall still cannot produce a partial scan", () => {
   expect(() => reconstructRoom([])).toThrow(/Too little/);
 });

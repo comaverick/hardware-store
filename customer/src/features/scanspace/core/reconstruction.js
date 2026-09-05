@@ -63,8 +63,107 @@ function bestWallPair(planes) {
   return best;
 }
 
-// Automatic rectangular fitting. Two strong non-parallel walls define the axes;
-// observed surface extents supply the opposite boundaries without user-entered dimensions.
+function measuredColor(points) {
+  const colors = points.filter((point) => Array.isArray(point.color));
+  if (colors.length < 12) return "#e6e1d8";
+  const channels = [0, 1, 2].map((channel) =>
+    Math.max(
+      0,
+      Math.min(
+        255,
+        Math.round(
+          colors.reduce((sum, point) => sum + point.color[channel], 0) /
+            colors.length,
+        ),
+      ),
+    ),
+  );
+  return `#${channels.map((value) => value.toString(16).padStart(2, "0")).join("")}`;
+}
+
+function observedWall(plane, index, floor, roomHeight) {
+  const tangent = { x: -plane.nz, z: plane.nx };
+  const along = plane.inliers.map(
+    (point) => point.x * tangent.x + point.z * tangent.z,
+  );
+  const alongStart = percentile(along, 0.02);
+  const alongEnd = percentile(along, 0.98);
+  const bottom = Math.max(
+    0,
+    percentile(
+      plane.inliers.map((point) => point.y - floor),
+      0.02,
+    ),
+  );
+  const top = Math.min(
+    roomHeight,
+    percentile(
+      plane.inliers.map((point) => point.y - floor),
+      0.98,
+    ),
+  );
+  const fromPlane = (value) => ({
+    x: plane.nx * plane.d + tangent.x * value,
+    z: plane.nz * plane.d + tangent.z * value,
+  });
+  const start = fromPlane(alongStart);
+  const end = fromPlane(alongEnd);
+  const length = distance(start, end);
+  const height = top - bottom;
+  if (length < 0.5 || height < 0.5) return null;
+  return {
+    id: `observed-wall-${index}`,
+    start,
+    end,
+    bottom,
+    height,
+    sampleCount: plane.inliers.length,
+    material: { color: measuredColor(plane.inliers) },
+  };
+}
+
+function partialResult({
+  reason,
+  planes,
+  points,
+  floor,
+  height,
+  ceilingMeasured,
+  floorMeasured,
+  depthFrames,
+}) {
+  const walls = planes
+    .sort((a, b) => b.score - a.score)
+    .map((plane, index) => observedWall(plane, index, floor, height))
+    .filter(Boolean);
+  if (!walls.length)
+    throw new Error(
+      "No stable wall surface was found yet. Scan one wall slowly from side to side.",
+    );
+  return {
+    room: null,
+    partial: {
+      version: 1,
+      kind: "observed-surfaces",
+      name: "Partial room scan",
+      walls,
+      floorObserved: floorMeasured,
+      ceilingObserved: ceilingMeasured,
+      ceilingHeight: height,
+      capturedColorSupported: points.some((point) => point.color),
+      pointCount: points.length,
+      depthFrames: depthFrames || 0,
+      reason,
+    },
+    floorY: floor,
+    planes: walls.length,
+    inferredWallCount: 0,
+    ceilingMeasured,
+  };
+}
+
+// Automatic rectangular fitting. Incomplete scans return only observed surfaces;
+// hidden room boundaries are never synthesized from partial point-cloud extents.
 export function reconstructRoom(points, options = {}) {
   if (points.length < 300)
     throw new Error(
@@ -72,7 +171,7 @@ export function reconstructRoom(points, options = {}) {
     );
   const measuredFloor = heightPeak(points, -2, 0.7);
   const floor = measuredFloor ?? options.floorY;
-  if (floor === null)
+  if (floor == null)
     throw new Error(
       "The floor was not observed. Point the camera toward the floor while moving slowly.",
     );
@@ -136,10 +235,23 @@ export function reconstructRoom(points, options = {}) {
       (p) => Math.abs(best.nx * p.x + best.nz * p.z - best.d) > 0.09,
     );
   }
+  const partial = (reason) =>
+    partialResult({
+      reason,
+      planes: [...planes],
+      points,
+      floor,
+      height,
+      ceilingMeasured: ceiling !== null,
+      floorMeasured: measuredFloor !== null || options.floorY != null,
+      depthFrames: options.depthFrames,
+    });
   const pair = bestWallPair(planes);
   if (!pair)
-    throw new Error(
-      "Two connected wall directions were not clear yet. Scan across one corner so both adjoining walls receive stable depth.",
+    return partial(
+      planes.length === 1
+        ? "One wall was measured. Scan more walls when you want a complete editable room."
+        : "The measured walls do not form a closed room yet.",
     );
 
   const u = { x: pair.first.nx, z: pair.first.nz };
@@ -153,9 +265,6 @@ export function reconstructRoom(points, options = {}) {
   const vHigh = percentile(
     pair.second.inliers.map((point) => project(point, v)),
     0.5,
-  );
-  const structural = points.filter(
-    (point) => point.y > floor - 0.18 && point.y < floor + height + 0.18,
   );
   const opposingCoordinate = (axis, selected) => {
     const opposite = planes
@@ -171,21 +280,14 @@ export function reconstructRoom(points, options = {}) {
         )
       : null;
   };
-  const edgeAllowance = 0.12;
   const measuredULow = opposingCoordinate(u, pair.first);
   const measuredVLow = opposingCoordinate(v, pair.second);
-  const uLow =
-    measuredULow ??
-    percentile(
-      structural.map((point) => project(point, u)),
-      0.02,
-    ) - edgeAllowance;
-  const vLow =
-    measuredVLow ??
-    percentile(
-      structural.map((point) => project(point, v)),
-      0.02,
-    ) - edgeAllowance;
+  if (measuredULow === null || measuredVLow === null)
+    return partial(
+      `${planes.length} wall${planes.length === 1 ? "" : "s"} measured. Only those observed surfaces are shown; ScanSpace did not guess the missing boundaries.`,
+    );
+  const uLow = measuredULow;
+  const vLow = measuredVLow;
   const width = uHigh - uLow,
     depth = vHigh - vLow;
   if (
@@ -195,8 +297,8 @@ export function reconstructRoom(points, options = {}) {
     width > 20 ||
     depth > 20
   )
-    throw new Error(
-      "The two wall extents are not stable yet. Sweep across the full length of both walls and include their shared corner.",
+    return partial(
+      "The measured boundaries do not make a reliable room footprint yet.",
     );
   const observerU = project(origin, u),
     observerV = project(origin, v);
@@ -206,8 +308,8 @@ export function reconstructRoom(points, options = {}) {
     observerV < vLow - 0.5 ||
     observerV > vHigh + 0.5
   )
-    throw new Error(
-      "The measured walls do not surround the camera position. Move inside the room and rescan the corner.",
+    return partial(
+      "The measured walls do not yet surround the camera position.",
     );
   const fromAxes = (alongU, alongV) => ({
     x: u.x * alongU + v.x * alongV,
@@ -220,9 +322,7 @@ export function reconstructRoom(points, options = {}) {
     fromAxes(uLow, vHigh),
   ];
   if (area(polygon) < 1)
-    throw new Error(
-      "The observed room area is too small to reconstruct reliably.",
-    );
+    return partial("The observed room area is too small to close reliably.");
   const supports = polygon.map((start, index) =>
     wallSupport(
       points,
@@ -235,16 +335,15 @@ export function reconstructRoom(points, options = {}) {
   const measuredWalls = supports.filter(
     (support) => support.samples >= 35 && support.coverage >= 0.4,
   ).length;
-  if (measuredWalls < 2)
-    throw new Error(
-      "Two walls need clearer depth. Scan both sides of one corner from top to bottom before finishing.",
+  if (measuredWalls < 4)
+    return partial(
+      "Some detected boundaries do not have enough measured depth to close the room.",
     );
-  const boundary = supports.map((support) => ({
+  const boundary = supports.map(() => ({
     material: { color: "#e6e1d8" },
     openings: [],
-    inferred: support.samples < 35 || support.coverage < 0.4,
+    inferred: false,
   }));
-  const inferredWallCount = 4 - measuredWalls;
   const room = normalizeRoom({
     name: "Scanned room",
     floorPolygon: polygon,
@@ -256,20 +355,18 @@ export function reconstructRoom(points, options = {}) {
       capturedColorSupported: points.some((p) => p.color),
       pointCount: points.length,
       depthFrames: options.depthFrames || 0,
-      confidence: Math.min(
-        0.92,
-        0.42 + measuredWalls * 0.1 + (ceiling !== null ? 0.08 : 0),
-      ),
-      partial: inferredWallCount > 0 || ceiling === null,
-      coverage: Math.round((measuredWalls / 4) * 100),
-      inferredWallCount,
+      confidence: ceiling !== null ? 0.92 : 0.84,
+      partial: ceiling === null,
+      coverage: 100,
+      inferredWallCount: 0,
     },
   });
   return {
     room,
     floorY: floor,
     planes: planes.length,
-    inferredWallCount,
+    partial: null,
+    inferredWallCount: 0,
     ceilingMeasured: ceiling !== null,
   };
 }
@@ -295,7 +392,7 @@ export function surfaceTextures(room, points, floorY) {
     points.forEach((p) => {
       if (!p.color) return;
       const u = (p.x - w.start.x) * dx + (p.z - w.start.z) * dz,
-        y = p.y - floorY,
+        y = p.y - floorY - (w.bottom || 0),
         n = Math.abs((p.x - w.start.x) * dz - (p.z - w.start.z) * dx);
       if (n > 0.08 || u < 0 || u > len || y < 0 || y > w.height) return;
       const x = Math.floor((u / len) * resX),

@@ -24,7 +24,12 @@ function CoverageCompass({ sectors = [], heading = 0 }) {
   );
 }
 
-export default function ScannerPanel({ capabilities, onComplete, onCancel }) {
+export default function ScannerPanel({
+  capabilities,
+  onComplete,
+  onPartial,
+  onCancel,
+}) {
   const canvas = useRef(),
     overlay = useRef(),
     scanner = useRef(),
@@ -113,6 +118,23 @@ export default function ScannerPanel({ capabilities, onComplete, onCancel }) {
           });
         });
         ({ room, floorY, ceilingMeasured } = result);
+        if (!room && result.partial) {
+          const textures = surfaceTextures(
+            result.partial,
+            raw.points,
+            floorY || 0,
+          );
+          finished.current = true;
+          await scanner.current.stop();
+          onPartial(
+            { ...result.partial, textures },
+            {
+              stats: raw.stats,
+              ceilingMeasured,
+            },
+          );
+          return;
+        }
       } catch (reconstructionError) {
         if (!allowPartial) throw reconstructionError;
         setPartial({
