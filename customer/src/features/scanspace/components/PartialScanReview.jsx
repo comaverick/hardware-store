@@ -5,30 +5,27 @@ export default function PartialScanReview({ scan, onRescan, onDone }) {
     <section className="ss-partial-review">
       <header>
         <span className="ss-kicker">Partial scan finished</span>
-        <h2>Only what the camera measured.</h2>
+        <h2>Your captured room.</h2>
         <p>
-          ScanSpace found {scan.walls.length} stable wall
-          {scan.walls.length === 1 ? "" : "s"}. Missing walls were left open
-          instead of being guessed.
+          This view is built from the camera colors and depth points that were
+          actually captured. Missing areas remain open instead of becoming
+          generated walls.
         </p>
       </header>
       <PartialScanScene scan={scan} />
       <div className="ss-partial-facts">
         <span>
-          <strong>{scan.walls.length}</strong>
-          measured wall{scan.walls.length === 1 ? "" : "s"}
+          <strong>{scan.cloud?.count?.toLocaleString() || 0}</strong>
+          rendered depth points
         </span>
         <span>
-          <strong>{scan.ceilingObserved ? "Measured" : "Not measured"}</strong>
-          ceiling
+          <strong>{scan.cloud?.colorCoverage || 0}%</strong>
+          captured color coverage
         </span>
       </div>
       <p className="ss-notice">
-        {scan.reason} The room editor and material estimates stay unavailable
-        until a closed footprint is measured.
-      </p>
-      <p className="ss-small">
-        The grid is only a scale reference. It is not a generated floor.
+        The room editor and material estimates stay unavailable until a closed
+        footprint is measured. Structural detection status: {scan.reason}
       </p>
       <div className="ss-actions">
         <button type="button" onClick={onDone}>

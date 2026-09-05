@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { RoomScanner } from "../xr/RoomScanner";
 import { surfaceTextures } from "../core/reconstruction";
+import { buildScanCloud } from "../core/scanCloud";
 
 function CoverageCompass({ sectors = [], heading = 0 }) {
   const views = sectors.length ? sectors : Array(24).fill(false);
@@ -88,6 +89,11 @@ export default function ScannerPanel({
     setError("");
     try {
       const raw = scanner.current.result();
+      const scanCloud = buildScanCloud(raw.points, {
+        floorY: raw.floorY,
+        observer: raw.observer,
+        voxelSize: raw.stats.cloudCellSize,
+      });
       let room,
         floorY = raw.floorY,
         ceilingMeasured = false;
@@ -119,15 +125,10 @@ export default function ScannerPanel({
         });
         ({ room, floorY, ceilingMeasured } = result);
         if (!room && result.partial) {
-          const textures = surfaceTextures(
-            result.partial,
-            raw.points,
-            floorY || 0,
-          );
           finished.current = true;
           await scanner.current.stop();
           onPartial(
-            { ...result.partial, textures },
+            { ...result.partial, cloud: scanCloud },
             {
               stats: raw.stats,
               ceilingMeasured,
@@ -137,6 +138,25 @@ export default function ScannerPanel({
         }
       } catch (reconstructionError) {
         if (!allowPartial) throw reconstructionError;
+        if (scanCloud) {
+          finished.current = true;
+          await scanner.current.stop();
+          onPartial(
+            {
+              version: 1,
+              kind: "observed-depth",
+              name: "Partial room scan",
+              walls: [],
+              floorObserved: Number.isFinite(raw.floorY),
+              ceilingObserved: false,
+              pointCount: raw.points.length,
+              reason: reconstructionError.message,
+              cloud: scanCloud,
+            },
+            { stats: raw.stats, ceilingMeasured: false },
+          );
+          return;
+        }
         setPartial({
           reason: reconstructionError.message,
           pointCount: raw.points.length,
@@ -154,6 +174,7 @@ export default function ScannerPanel({
         stats: raw.stats,
         partial: room.scanMetadata.partial,
         inferredWallCount: room.scanMetadata.inferredWallCount,
+        scanCloud,
       });
     } catch (e) {
       setError(e.message);

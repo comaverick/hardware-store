@@ -293,7 +293,7 @@ export default function RoomEditor({ onExit }) {
           onCancel={() => setReview(false)}
           onComplete={(room) => {
             change((r) => Object.assign(r, room));
-            s.update({ textures: {}, showCapture: false });
+            s.update({ textures: {}, scanCloud: null, showCapture: false });
             setReview(false);
             setReset((v) => v + 1);
           }}
@@ -386,6 +386,8 @@ export default function RoomEditor({ onExit }) {
               onMove={move}
               textures={s.textures}
               showCapture={s.showCapture}
+              scanCloud={s.scanCloud}
+              showScan={s.before && !!s.scanCloud}
               onError={reportError}
               reset={reset}
               snap={snap}
@@ -397,9 +399,17 @@ export default function RoomEditor({ onExit }) {
             onClick={s.toggleBefore}
           >
             <Eye size={16} />
-            {s.before ? "Viewing original" : "Before & after"}
+            {s.before
+              ? s.scanCloud
+                ? "Viewing scan"
+                : "Viewing original"
+              : "Before & after"}
           </button>
-          {s.before && <div className="ss-before-label">Original design</div>}
+          {s.before && (
+            <div className="ss-before-label">
+              {s.scanCloud ? "Captured room" : "Original design"}
+            </div>
+          )}
         </div>
         <aside className="ss-inspector">
           <nav className="ss-editor-tabs" aria-label="Editor tools">

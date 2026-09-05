@@ -136,10 +136,6 @@ function partialResult({
     .sort((a, b) => b.score - a.score)
     .map((plane, index) => observedWall(plane, index, floor, height))
     .filter(Boolean);
-  if (!walls.length)
-    throw new Error(
-      "No stable wall surface was found yet. Scan one wall slowly from side to side.",
-    );
   return {
     room: null,
     partial: {
@@ -251,7 +247,7 @@ export function reconstructRoom(points, options = {}) {
     return partial(
       planes.length === 1
         ? "One wall was measured. Scan more walls when you want a complete editable room."
-        : "The measured walls do not form a closed room yet.",
+        : "The captured depth does not form a closed room boundary yet.",
     );
 
   const u = { x: pair.first.nx, z: pair.first.nz };
@@ -284,7 +280,7 @@ export function reconstructRoom(points, options = {}) {
   const measuredVLow = opposingCoordinate(v, pair.second);
   if (measuredULow === null || measuredVLow === null)
     return partial(
-      `${planes.length} wall${planes.length === 1 ? "" : "s"} measured. Only those observed surfaces are shown; ScanSpace did not guess the missing boundaries.`,
+      "The captured depth does not contain all enclosing wall boundaries. ScanSpace did not guess the missing walls.",
     );
   const uLow = measuredULow;
   const vLow = measuredVLow;

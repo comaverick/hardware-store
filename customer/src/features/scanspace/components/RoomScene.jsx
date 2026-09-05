@@ -8,6 +8,7 @@ import {
   Html,
 } from "@react-three/drei";
 import * as THREE from "three";
+import ScanPointCloud from "./ScanPointCloud";
 import {
   distance,
   roomCenter,
@@ -486,6 +487,8 @@ export default function RoomScene({
   onMove,
   textures = {},
   showCapture = false,
+  scanCloud = null,
+  showScan = false,
   onError,
   reset = 0,
   snap = true,
@@ -613,7 +616,10 @@ export default function RoomScene({
           </div>
         }
       >
-        <color attach="background" args={["#edf0ef"]} />
+        <color
+          attach="background"
+          args={[showScan ? "#18211e" : "#edf0ef"]}
+        />
         {mode === "top" ? (
           <OrthographicCamera
             key="top"
@@ -654,10 +660,12 @@ export default function RoomScene({
           shadow-camera-bottom={-8}
           shadow-bias={-0.0004}
         />
+        {showScan && scanCloud && <ScanPointCloud cloud={scanCloud} low={low} />}
         <mesh
           geometry={geometry}
           rotation={[-Math.PI / 2, 0, 0]}
           receiveShadow
+          visible={!showScan}
           onClick={(e) => {
             e.stopPropagation();
             if (!dragging) onSelect("floor");
@@ -665,7 +673,7 @@ export default function RoomScene({
         >
           <SurfaceMaterial material={room.floorMaterial} onError={onError} />
         </mesh>
-        {mode === "first" && (
+        {mode === "first" && !showScan && (
           <mesh
             geometry={ceilingGeo}
             rotation={[-Math.PI / 2, 0, 0]}
@@ -677,7 +685,7 @@ export default function RoomScene({
             />
           </mesh>
         )}
-        {room.walls.map((w) => (
+        {!showScan && room.walls.map((w) => (
           <Wall
             key={w.id}
             wall={w}
@@ -688,7 +696,7 @@ export default function RoomScene({
             onError={onError}
           />
         ))}
-        {room.placedProducts.map((o) => (
+        {!showScan && room.placedProducts.map((o) => (
           <ObjectMesh
             key={o.id}
             item={
@@ -708,7 +716,7 @@ export default function RoomScene({
             }
           />
         ))}
-        {dragging && (
+        {dragging && !showScan && (
           <mesh
             position={[0, 0.025, 0]}
             rotation={[-Math.PI / 2, 0, 0]}
@@ -718,7 +726,7 @@ export default function RoomScene({
             <meshBasicMaterial transparent opacity={0} depthWrite={false} />
           </mesh>
         )}
-        {mode === "top" &&
+        {!showScan && mode === "top" &&
           room.walls.map((w) => (
             <Html
               key={w.id}
@@ -738,6 +746,7 @@ export default function RoomScene({
           position={[0, -0.05, 0]}
           rotation={[-Math.PI / 2, 0, 0]}
           receiveShadow
+          visible={!showScan}
         >
           <planeGeometry args={[200, 200]} />
           <meshStandardMaterial color="#e8edeb" roughness={1} />

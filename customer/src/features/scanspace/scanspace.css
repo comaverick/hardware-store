@@ -265,6 +265,32 @@
 .ss-partial-scene canvas {
   touch-action: none;
 }
+.ss-partial-viewbar {
+  position: absolute;
+  z-index: 3;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  gap: 6px;
+}
+.ss-partial-viewbar > div {
+  display: flex;
+  padding: 3px;
+  border-radius: 8px;
+  background: #f9fcfae8;
+  backdrop-filter: blur(6px);
+}
+.ss-partial-viewbar button {
+  min-height: 32px;
+  padding: 5px 9px;
+  border-color: transparent;
+  background: transparent;
+  font-size: 10px;
+}
+.ss-partial-viewbar button.is-active {
+  border-color: #b8d7cc;
+  background: #dfece7;
+}
 .ss-partial-legend {
   position: absolute;
   top: 14px;
@@ -284,6 +310,9 @@
   height: 9px;
   border: 2px solid #52b999;
   border-radius: 2px;
+}
+.ss-partial-scene .ss-joystick small {
+  color: #eff8f3;
 }
 .ss-partial-facts {
   display: grid;

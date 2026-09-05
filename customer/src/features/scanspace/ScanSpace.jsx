@@ -271,7 +271,11 @@ export default function ScanSpace() {
             initial={reviewRoom}
             onCancel={() => setStage("welcome")}
             onComplete={(room) =>
-              openRoom(room, { textures: capture.textures || {} })
+              openRoom(room, {
+                textures: capture.textures || {},
+                scanCloud: capture.scanCloud || null,
+                before: !!capture.scanCloud,
+              })
             }
           />
           {capture.stats && (
