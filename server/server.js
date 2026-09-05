@@ -39,6 +39,7 @@ app.use("/api/purchase-orders", purchaseOrderRoutes);
 app.use("/api/sales", saleRoutes);
 app.use("/api/smart-inventory", smartInventoryRoutes);
 app.use("/api/reservations", reservationRoutes);
+app.use("/api/scanspace", require("./routes/scanSpaceRoutes"));
 app.use("/api/product-finder", require("./routes/productFinderRoutes"));
 app.use("/api/assistant", require("./routes/assistantRoutes"));
 app.use("/api/audit-logs", require("./routes/auditLogRoutes"));

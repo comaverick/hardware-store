@@ -4,16 +4,25 @@
   "private": true,
   "dependencies": {
     "@phosphor-icons/react": "^2.1.10",
+    "@react-three/drei": "^10.7.8",
+    "@react-three/fiber": "^9.7.0",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.3",
     "@testing-library/user-event": "^13.5.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
+    "react-router-dom": "^7.18.3",
     "react-scripts": "5.0.1",
-    "web-vitals": "^2.1.4"
+    "three": "^0.185.1",
+    "web-vitals": "^2.1.4",
+    "zustand": "^5.0.15"
   },
   "scripts": {
+    "prestart": "node scripts/sync-scanspace.cjs",
+    "prebuild": "node scripts/sync-scanspace.cjs",
+    "pretest": "node scripts/sync-scanspace.cjs",
+    "samples": "node scripts/build-sample-models.mjs",
     "start": "react-scripts start",
     "build": "react-scripts build",
     "test": "react-scripts test",

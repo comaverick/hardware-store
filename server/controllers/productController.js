@@ -59,6 +59,7 @@ const createProduct = async (req, res) => {
       unit,
       reorderLevel,
       image,
+      scanSpace,
     } = req.body;
 
     const product = await Product.create({
@@ -73,6 +74,7 @@ const createProduct = async (req, res) => {
       unit,
       reorderLevel,
       image,
+      scanSpace,
     });
 
     req.auditTarget = { id: product._id, name: product.name, sku: product.sku };
