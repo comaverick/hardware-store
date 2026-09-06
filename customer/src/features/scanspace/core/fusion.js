@@ -398,6 +398,45 @@ function regularizeVolume(volume) {
       }
 }
 
+function propagateSurfaceColors(volume, passes = 2) {
+  const [width, height, depth] = volume.dimensions;
+  const directions = [];
+  for (let z = -1; z <= 1; z++)
+    for (let y = -1; y <= 1; y++)
+      for (let x = -1; x <= 1; x++)
+        if (x || y || z) directions.push([x, y, z]);
+  for (let pass = 0; pass < passes; pass++) {
+    const sourceColors = new Float32Array(volume.colors);
+    const sourceWeights = new Uint8Array(volume.colorWeights);
+    for (let z = 1; z < depth - 1; z++)
+      for (let y = 1; y < height - 1; y++)
+        for (let x = 1; x < width - 1; x++) {
+          const index = volumeIndex(volume, x, y, z);
+          if (!volume.weights[index] || sourceWeights[index]) continue;
+          let support = 0;
+          const sum = [0, 0, 0];
+          directions.forEach(([dx, dy, dz]) => {
+            const neighbor = volumeIndex(volume, x + dx, y + dy, z + dz);
+            if (!sourceWeights[neighbor]) return;
+            // Propagate only along the same local signed-distance band so a
+            // nearby object cannot paint across onto a wall.
+            if (Math.abs(volume.values[neighbor] - volume.values[index]) > 0.22) return;
+            const offset = neighbor * 3;
+            sum[0] += sourceColors[offset];
+            sum[1] += sourceColors[offset + 1];
+            sum[2] += sourceColors[offset + 2];
+            support++;
+          });
+          if (support < 4) continue;
+          const offset = index * 3;
+          volume.colors[offset] = sum[0] / support;
+          volume.colors[offset + 1] = sum[1] / support;
+          volume.colors[offset + 2] = sum[2] / support;
+          volume.colorWeights[index] = 1;
+        }
+  }
+}
+
 function volumeCorner(volume, x, y, z) {
   const index = volumeIndex(volume, x, y, z);
   const colorOffset = index * 3;
@@ -693,6 +732,19 @@ function texturedMesh(mesh, frames) {
     atlas.frames.forEach((frame) => {
       const projected = projectWorld(frame, center.x, center.y, center.z);
       if (!projected || projected.u < 0.015 || projected.v < 0.015 || projected.u > 0.985 || projected.v > 0.985) return;
+      const projections = triangle.map((vertex) =>
+        projectWorld(
+          frame,
+          mesh.positions[vertex * 3],
+          mesh.positions[vertex * 3 + 1],
+          mesh.positions[vertex * 3 + 2],
+        ),
+      );
+      // A frame may texture a triangle only when the complete triangle is
+      // visible. Falling back to local fused color is better than stretching
+      // one camera pixel across an off-screen corner.
+      if (projections.some((value) =>
+        !value || value.u < 0.01 || value.v < 0.01 || value.u > 0.99 || value.v > 0.99)) return;
       const depthIndex = gridIndex(frame, projected.u, projected.v);
       const measured = frame.filteredDepth[depthIndex];
       if (!measured || Math.abs(measured - projected.depth) > Math.max(0.2, measured * 0.09)) return;
@@ -702,15 +754,15 @@ function texturedMesh(mesh, frames) {
       const distance = Math.hypot(dx, dy, dz) || 1;
       const facing = Math.abs((normal.x * dx + normal.y * dy + normal.z * dz) / distance);
       const score = facing * 2 + 1 / distance;
-      if (!best || score > best.score) best = { frame, score };
+      if (!best || score > best.score) best = { frame, projections, score };
     });
     if (best) texturedTriangles++;
-    triangle.forEach((vertex) => {
+    triangle.forEach((vertex, corner) => {
       const target = positions.length / 3;
       positions.push(mesh.positions[vertex * 3], mesh.positions[vertex * 3 + 1], mesh.positions[vertex * 3 + 2]);
       normals.push(sharedNormals[vertex * 3], sharedNormals[vertex * 3 + 1], sharedNormals[vertex * 3 + 2]);
       if (best) {
-        const projected = projectWorld(best.frame, mesh.positions[vertex * 3], mesh.positions[vertex * 3 + 1], mesh.positions[vertex * 3 + 2]);
+        const projected = best.projections[corner];
         const tileX = best.frame.atlasTile % atlas.columns;
         const tileY = Math.floor(best.frame.atlasTile / atlas.columns);
         const u = projected ? projected.u : 0.5;
@@ -776,6 +828,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   if (confirmedVoxels < 120)
     return { mesh: null, diagnostics: { reason: "The captured views do not overlap enough for a reliable surface.", keyframes: usable.length, confirmedVoxels, voxelSize: volume.voxelSize } };
   regularizeVolume(volume);
+  propagateSurfaceColors(volume);
   report?.("meshing", 68);
   let surface = extractSurfaceNet(volume, report);
   surface = removeSmallComponents(surface);

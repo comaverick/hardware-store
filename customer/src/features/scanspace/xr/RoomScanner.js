@@ -207,8 +207,13 @@ export class RoomScanner {
                 this.renderer.resetState();
               }
             }
-            const columns = colorAt ? 48 : 36;
-            const rows = colorAt ? 36 : 27;
+            // Preserve more of the device depth image while keeping a bounded
+            // grid for mid-range phones. Rows follow the real depth aspect.
+            const columns = Math.min(depth.width, colorAt ? 72 : 60);
+            const rows = Math.min(
+              depth.height,
+              Math.max(36, Math.round((columns * depth.height) / depth.width)),
+            );
             const framePoints = unprojectDepth(
               depth,
               view,

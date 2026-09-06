@@ -39,21 +39,11 @@ export function createCameraColorReader(gl) {
   gl.vertexAttribPointer(location, 2, gl.FLOAT, false, 0, 0);
   gl.bindVertexArray(null);
   const texture = gl.createTexture(),
-    framebuffer = gl.createFramebuffer(),
-    size = 256,
-    pixels = new Uint8Array(size * size * 4);
+    framebuffer = gl.createFramebuffer();
+  let width = 0,
+    height = 0,
+    pixels = null;
   gl.bindTexture(gl.TEXTURE_2D, texture);
-  gl.texImage2D(
-    gl.TEXTURE_2D,
-    0,
-    gl.RGBA,
-    size,
-    size,
-    0,
-    gl.RGBA,
-    gl.UNSIGNED_BYTE,
-    null,
-  );
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
   gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
@@ -69,8 +59,34 @@ export function createCameraColorReader(gl) {
     read(binding, camera) {
       const external = binding.getCameraImage(camera);
       if (!external) return null;
+      const sourceWidth = Number(camera.width) || 1;
+      const sourceHeight = Number(camera.height) || 1;
+      const landscape = sourceWidth >= sourceHeight;
+      const nextWidth = landscape
+        ? 320
+        : Math.max(160, Math.round((320 * sourceWidth) / sourceHeight));
+      const nextHeight = landscape
+        ? Math.max(160, Math.round((320 * sourceHeight) / sourceWidth))
+        : 320;
+      if (width !== nextWidth || height !== nextHeight) {
+        width = nextWidth;
+        height = nextHeight;
+        pixels = new Uint8Array(width * height * 4);
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.texImage2D(
+          gl.TEXTURE_2D,
+          0,
+          gl.RGBA,
+          width,
+          height,
+          0,
+          gl.RGBA,
+          gl.UNSIGNED_BYTE,
+          null,
+        );
+      }
       gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
-      gl.viewport(0, 0, size, size);
+      gl.viewport(0, 0, width, height);
       gl.disable(gl.SCISSOR_TEST);
       gl.disable(gl.DEPTH_TEST);
       gl.disable(gl.BLEND);
@@ -82,12 +98,12 @@ export function createCameraColorReader(gl) {
       gl.bindTexture(gl.TEXTURE_2D, external);
       gl.uniform1i(gl.getUniformLocation(program, "image"), 0);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
-      gl.readPixels(0, 0, size, size, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+      gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
       gl.bindVertexArray(null);
       const sample = (u, v) => {
         const i =
-          (Math.min(size - 1, Math.floor((1 - v) * size)) * size +
-            Math.min(size - 1, Math.floor(u * size))) *
+          (Math.min(height - 1, Math.floor((1 - v) * height)) * width +
+            Math.min(width - 1, Math.floor(u * width))) *
           4;
         return [pixels[i], pixels[i + 1], pixels[i + 2]];
       };
@@ -95,8 +111,8 @@ export function createCameraColorReader(gl) {
       // copy so it can be projected onto the final mesh after the session ends.
       sample.snapshot = () => ({
         data: new Uint8Array(pixels),
-        width: size,
-        height: size,
+        width,
+        height,
         channels: 4,
       });
       return sample;
