@@ -67,3 +67,25 @@ test("fuses repeated RGB-D views into one bounded surface", () => {
   expect(result.mesh.triangleCount).toBeLessThan(140001);
   expect(result.mesh.colorCoverage).toBe(100);
 });
+
+test("does not fabricate a mesh from an unconfirmed single camera view", () => {
+  const points = [];
+  for (let y = 0; y < 12; y++)
+    for (let x = 0; x < 12; x++)
+      points.push({
+        x: (x - 5.5) * 0.08,
+        y: (y - 5.5) * 0.08,
+        z: 2,
+        depth: 2,
+        gridX: x,
+        gridY: y,
+        gridColumns: 12,
+        gridRows: 12,
+      });
+  const keyframe = createRgbdKeyframe(points, {
+    columns: 12,
+    rows: 12,
+    camera: { x: 0, y: 0, z: 0 },
+  });
+  expect(fuseRgbdKeyframes([keyframe], { floorY: 0 }).mesh).toBeNull();
+});

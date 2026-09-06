@@ -87,12 +87,34 @@ export function createRgbdKeyframe(points, options = {}) {
   };
 }
 
+function hasDepthSupport(frame, index) {
+  const depth = frame.depths[index];
+  if (!Number.isFinite(depth) || depth < 0.25) return false;
+  const x = index % frame.columns;
+  const y = Math.floor(index / frame.columns);
+  const jumpLimit = Math.max(0.08, depth * 0.055);
+  let neighbors = 0;
+  [
+    [x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1],
+  ].forEach(([nextX, nextY]) => {
+    if (nextX < 0 || nextY < 0 || nextX >= frame.columns || nextY >= frame.rows)
+      return;
+    const nextDepth = frame.depths[nextY * frame.columns + nextX];
+    if (Number.isFinite(nextDepth) && nextDepth > 0 && Math.abs(nextDepth - depth) <= jumpLimit)
+      neighbors++;
+  });
+  // Two local neighbors reject isolated depth sparkles while preserving real
+  // walls, floors, and ceilings. Boundary pixels can be absent; we leave those
+  // regions open instead of creating a guessed rim.
+  return neighbors >= 2;
+}
+
 function collectSamples(keyframes, maxSamples = 36000) {
   const available = keyframes.reduce((total, frame) => total + (frame.validCount || 0), 0);
   const stride = Math.max(1, Math.ceil(available / maxSamples));
   const samples = [];
   let cursor = 0;
-  keyframes.forEach((frame) => {
+  keyframes.forEach((frame, frameId) => {
     const camera = frame.camera || [0, 0, 0];
     for (let index = 0; index < frame.depths.length; index++) {
       const offset = index * 3;
@@ -100,6 +122,7 @@ function collectSamples(keyframes, maxSamples = 36000) {
       const y = frame.positions[offset + 1];
       const z = frame.positions[offset + 2];
       if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+      if (!hasDepthSupport(frame, index)) continue;
       if (cursor++ % stride) continue;
       samples.push({
         x,
@@ -108,6 +131,7 @@ function collectSamples(keyframes, maxSamples = 36000) {
         cx: camera[0],
         cy: camera[1],
         cz: camera[2],
+        frameId,
         color: frame.colorMask?.[index]
           ? [frame.colors[offset], frame.colors[offset + 1], frame.colors[offset + 2]]
           : null,
@@ -117,18 +141,34 @@ function collectSamples(keyframes, maxSamples = 36000) {
   return samples;
 }
 
+function percentile(sorted, value) {
+  if (!sorted.length) return 0;
+  return sorted[Math.round((sorted.length - 1) * value)];
+}
+
 function sampleBounds(samples) {
   const bounds = {
     min: { x: Infinity, y: Infinity, z: Infinity },
     max: { x: -Infinity, y: -Infinity, z: -Infinity },
   };
-  samples.forEach((sample) => {
-    ["x", "y", "z"].forEach((axis) => {
-      bounds.min[axis] = Math.min(bounds.min[axis], sample[axis]);
-      bounds.max[axis] = Math.max(bounds.max[axis], sample[axis]);
-    });
+  ["x", "y", "z"].forEach((axis) => {
+    const values = samples.map((sample) => sample[axis]).sort((a, b) => a - b);
+    // A single bad depth return must not set the entire reconstruction extent.
+    bounds.min[axis] = percentile(values, 0.01);
+    bounds.max[axis] = percentile(values, 0.99);
+    if (bounds.max[axis] - bounds.min[axis] < 0.12) {
+      const center = (bounds.min[axis] + bounds.max[axis]) / 2;
+      bounds.min[axis] = center - 0.06;
+      bounds.max[axis] = center + 0.06;
+    }
   });
   return bounds;
+}
+
+function isInsideBounds(sample, bounds, margin) {
+  return ["x", "y", "z"].every(
+    (axis) => sample[axis] >= bounds.min[axis] - margin && sample[axis] <= bounds.max[axis] + margin,
+  );
 }
 
 function makeVolume(bounds, options) {
@@ -161,6 +201,7 @@ function makeVolume(bounds, options) {
     voxelSize,
     values: new Float32Array(count),
     weights: new Uint16Array(count),
+    lastFrame: new Int16Array(count).fill(-1),
     colors: new Float32Array(count * 3),
     colorWeights: new Uint16Array(count),
   };
@@ -202,6 +243,11 @@ function integrate(volume, samples, report) {
           const signedDistance = distance - along;
           if (Math.abs(signedDistance) > truncation || lateral > voxel * 1.45) continue;
           const index = volumeIndex(volume, x, y, z);
+          // A dense patch from one camera is not independent evidence. Count
+          // at most one observation per keyframe and require corroboration at
+          // mesh time below.
+          if (volume.lastFrame[index] === sample.frameId) continue;
+          volume.lastFrame[index] = sample.frameId;
           const previous = volume.weights[index];
           const weight = previous < 32 ? 1 : 0;
           if (!weight) continue;
@@ -264,7 +310,42 @@ function polygonizeTetra(vertices) {
       color: first.color.map((value, index) => value + (second.color[index] - value) * t),
     });
   });
-  return intersections.length >= 3 ? intersections : null;
+  if (intersections.length < 3) return null;
+  if (intersections.length === 3) return intersections;
+  const center = intersections.reduce(
+    (sum, point) => ({ x: sum.x + point.x / intersections.length, y: sum.y + point.y / intersections.length, z: sum.z + point.z / intersections.length }),
+    { x: 0, y: 0, z: 0 },
+  );
+  const negative = vertices.filter((point) => point.value < 0);
+  const positive = vertices.filter((point) => point.value >= 0);
+  const average = (points, axis) => points.reduce((sum, point) => sum + point[axis], 0) / points.length;
+  let nx = average(positive, "x") - average(negative, "x");
+  let ny = average(positive, "y") - average(negative, "y");
+  let nz = average(positive, "z") - average(negative, "z");
+  const normalLength = Math.hypot(nx, ny, nz) || 1;
+  nx /= normalLength;
+  ny /= normalLength;
+  nz /= normalLength;
+  let ux = intersections[0].x - center.x;
+  let uy = intersections[0].y - center.y;
+  let uz = intersections[0].z - center.z;
+  const tangentLength = Math.hypot(ux, uy, uz) || 1;
+  ux /= tangentLength;
+  uy /= tangentLength;
+  uz /= tangentLength;
+  const vx = ny * uz - nz * uy;
+  const vy = nz * ux - nx * uz;
+  const vz = nx * uy - ny * ux;
+  return intersections.sort((left, right) => {
+    const leftX = left.x - center.x;
+    const leftY = left.y - center.y;
+    const leftZ = left.z - center.z;
+    const rightX = right.x - center.x;
+    const rightY = right.y - center.y;
+    const rightZ = right.z - center.z;
+    return Math.atan2(leftX * vx + leftY * vy + leftZ * vz, leftX * ux + leftY * uy + leftZ * uz)
+      - Math.atan2(rightX * vx + rightY * vy + rightZ * vz, rightX * ux + rightY * uy + rightZ * uz);
+  });
 }
 
 function extractMesh(volume, floorY, observer, report) {
@@ -284,12 +365,17 @@ function extractMesh(volume, floorY, observer, report) {
           corner(volume, x, y, z + 1), corner(volume, x + 1, y, z + 1),
           corner(volume, x + 1, y + 1, z + 1), corner(volume, x, y + 1, z + 1),
         ];
-        const observed = cube.filter((point) => point.weight > 0).length;
-        const hasNegative = cube.some((point) => point.value < 0 && point.weight > 0);
-        const hasPositive = cube.some((point) => point.value >= 0 && point.weight > 0);
-        if (observed >= 6 && hasNegative && hasPositive && indices.length / 3 < maxTriangles)
+        if (indices.length / 3 < maxTriangles)
           TETRAHEDRA.forEach((tetra) => {
-            const polygon = polygonizeTetra(tetra.map((index) => cube[index]));
+            const tetraCorners = tetra.map((index) => cube[index]);
+            // Never turn the default zero value of an unobserved voxel into a
+            // surface. A triangle is emitted only when all four corners have
+            // evidence from at least two distinct keyframes.
+            if (tetraCorners.some((point) => point.weight < 2)) return;
+            const hasNegative = tetraCorners.some((point) => point.value < 0);
+            const hasPositive = tetraCorners.some((point) => point.value >= 0);
+            if (!hasNegative || !hasPositive) return;
+            const polygon = polygonizeTetra(tetraCorners);
             if (!polygon || indices.length / 3 >= maxTriangles) return;
             for (let index = 1; index < polygon.length - 1; index++)
               addTriangle(vertices, indices, vertexCache, [polygon[0], polygon[index], polygon[index + 1]]);
@@ -331,9 +417,12 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   if (samples.length < 400)
     return { mesh: null, diagnostics: { reason: "Not enough stable RGB-D samples for a surface.", keyframes: usable.length, samples: samples.length } };
   const bounds = sampleBounds(samples);
+  const inlierSamples = samples.filter((sample) => isInsideBounds(sample, bounds, 0.25));
+  if (inlierSamples.length < 400)
+    return { mesh: null, diagnostics: { reason: "Not enough inlier RGB-D samples for a surface.", keyframes: usable.length, samples: inlierSamples.length } };
   const volume = makeVolume(bounds, options);
   report?.("fusing", 20, { voxelSize: volume.voxelSize, dimensions: volume.dimensions });
-  integrate(volume, samples, report);
+  integrate(volume, inlierSamples, report);
   report?.("meshing", 66);
   const mesh = extractMesh(volume, Number.isFinite(options.floorY) ? options.floorY : 0, options.observer, report);
   if (mesh) {
@@ -346,7 +435,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     diagnostics: {
       reason: mesh ? "Fused measured RGB-D surfaces." : "Depth was captured, but no stable connected surface could be extracted.",
       keyframes: usable.length,
-      samples: samples.length,
+      samples: inlierSamples.length,
       voxelSize: volume.voxelSize,
       dimensions: volume.dimensions,
       cells: volume.values.length,
