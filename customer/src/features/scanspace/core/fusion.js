@@ -351,6 +351,53 @@ function integrateProjective(volume, frames, report) {
   return volume.weights.reduce((count, weight) => count + (weight >= 2 ? 1 : 0), 0);
 }
 
+function regularizeVolume(volume) {
+  const [width, height, depth] = volume.dimensions;
+  const sourceValues = new Float32Array(volume.values);
+  const sourceWeights = new Uint8Array(volume.weights);
+  const directions = [
+    [-1, 0, 0], [1, 0, 0], [0, -1, 0],
+    [0, 1, 0], [0, 0, -1], [0, 0, 1],
+  ];
+  for (let z = 1; z < depth - 1; z++)
+    for (let y = 1; y < height - 1; y++)
+      for (let x = 1; x < width - 1; x++) {
+        const index = volumeIndex(volume, x, y, z);
+        let valueSum = 0;
+        let colorCount = 0;
+        const colorSum = [0, 0, 0];
+        let support = 0;
+        directions.forEach(([dx, dy, dz]) => {
+          const neighbor = volumeIndex(volume, x + dx, y + dy, z + dz);
+          if (sourceWeights[neighbor] < 2) return;
+          support++;
+          valueSum += sourceValues[neighbor];
+          if (volume.colorWeights[neighbor]) {
+            const offset = neighbor * 3;
+            colorSum[0] += volume.colors[offset];
+            colorSum[1] += volume.colors[offset + 1];
+            colorSum[2] += volume.colors[offset + 2];
+            colorCount++;
+          }
+        });
+        if (sourceWeights[index] >= 2 && support >= 4) {
+          volume.values[index] = sourceValues[index] * 0.72 + valueSum / support * 0.28;
+        } else if (!sourceWeights[index] && support >= 5) {
+          // Repair only a one-voxel hole enclosed by measured neighbors. This
+          // cannot bridge a doorway or a broad unscanned part of the room.
+          volume.values[index] = valueSum / support;
+          volume.weights[index] = 1;
+          if (colorCount) {
+            const offset = index * 3;
+            volume.colors[offset] = colorSum[0] / colorCount;
+            volume.colors[offset + 1] = colorSum[1] / colorCount;
+            volume.colors[offset + 2] = colorSum[2] / colorCount;
+            volume.colorWeights[index] = 1;
+          }
+        }
+      }
+}
+
 function volumeCorner(volume, x, y, z) {
   const index = volumeIndex(volume, x, y, z);
   const colorOffset = index * 3;
@@ -574,20 +621,27 @@ function buildAtlas(frames) {
   if (!images.length) return null;
   const tileWidth = images[0].colorWidth;
   const tileHeight = images[0].colorHeight;
+  const padding = 4;
+  const strideX = tileWidth + padding * 2;
+  const strideY = tileHeight + padding * 2;
   const columns = Math.ceil(Math.sqrt(images.length + 1));
   const rows = Math.ceil((images.length + 1) / columns);
-  const width = columns * tileWidth;
-  const height = rows * tileHeight;
+  const width = columns * strideX;
+  const height = rows * strideY;
   const data = new Uint8Array(width * height * 4).fill(255);
   const globalLuminance = images.reduce((sum, frame) => sum + imageLuminance(frame), 0) / images.length;
   images.forEach((frame, tile) => {
     const scale = clamp(globalLuminance / Math.max(24, imageLuminance(frame)), 0.78, 1.25);
     const tileX = tile % columns;
     const tileY = Math.floor(tile / columns);
-    for (let y = 0; y < tileHeight; y++)
-      for (let x = 0; x < tileWidth; x++) {
-        const source = (y * tileWidth + x) * frame.colorChannels;
-        const target = ((tileY * tileHeight + y) * width + tileX * tileWidth + x) * 4;
+    // Duplicate edge pixels through a gutter so mipmapping never blends one
+    // camera keyframe into the neighboring atlas tile.
+    for (let y = -padding; y < tileHeight + padding; y++)
+      for (let x = -padding; x < tileWidth + padding; x++) {
+        const sourceX = clamp(x, 0, tileWidth - 1);
+        const sourceY = clamp(y, 0, tileHeight - 1);
+        const source = (sourceY * tileWidth + sourceX) * frame.colorChannels;
+        const target = ((tileY * strideY + y + padding) * width + tileX * strideX + x + padding) * 4;
         data[target] = clamp(Math.round(frame.colorImage[source] * scale), 0, 255);
         data[target + 1] = clamp(Math.round(frame.colorImage[source + 1] * scale), 0, 255);
         data[target + 2] = clamp(Math.round(frame.colorImage[source + 2] * scale), 0, 255);
@@ -595,7 +649,18 @@ function buildAtlas(frames) {
       }
     frame.atlasTile = tile;
   });
-  return { data, width, height, tileWidth, tileHeight, columns, frames: images };
+  return {
+    data,
+    width,
+    height,
+    tileWidth,
+    tileHeight,
+    strideX,
+    strideY,
+    padding,
+    columns,
+    frames: images,
+  };
 }
 
 function projectWorld(frame, x, y, z) {
@@ -630,7 +695,7 @@ function texturedMesh(mesh, frames) {
       if (!projected || projected.u < 0.015 || projected.v < 0.015 || projected.u > 0.985 || projected.v > 0.985) return;
       const depthIndex = gridIndex(frame, projected.u, projected.v);
       const measured = frame.filteredDepth[depthIndex];
-      if (!measured || Math.abs(measured - projected.depth) > Math.max(0.14, measured * 0.065)) return;
+      if (!measured || Math.abs(measured - projected.depth) > Math.max(0.2, measured * 0.09)) return;
       const dx = frame.transformMatrix[12] - center.x;
       const dy = frame.transformMatrix[13] - center.y;
       const dz = frame.transformMatrix[14] - center.z;
@@ -650,14 +715,17 @@ function texturedMesh(mesh, frames) {
         const tileY = Math.floor(best.frame.atlasTile / atlas.columns);
         const u = projected ? projected.u : 0.5;
         const v = projected ? 1 - projected.v : 0.5;
-        uvs.push((tileX * atlas.tileWidth + u * (atlas.tileWidth - 1) + 0.5) / atlas.width);
-        uvs.push((tileY * atlas.tileHeight + v * (atlas.tileHeight - 1) + 0.5) / atlas.height);
+        uvs.push((tileX * atlas.strideX + atlas.padding + u * (atlas.tileWidth - 1) + 0.5) / atlas.width);
+        uvs.push((tileY * atlas.strideY + atlas.padding + v * (atlas.tileHeight - 1) + 0.5) / atlas.height);
         colors.push(255, 255, 255);
       } else {
         const blankTile = atlas.frames.length;
         const tileX = blankTile % atlas.columns;
         const tileY = Math.floor(blankTile / atlas.columns);
-        uvs.push((tileX + 0.5) * atlas.tileWidth / atlas.width, (tileY + 0.5) * atlas.tileHeight / atlas.height);
+        uvs.push(
+          (tileX * atlas.strideX + atlas.strideX * 0.5) / atlas.width,
+          (tileY * atlas.strideY + atlas.strideY * 0.5) / atlas.height,
+        );
         colors.push(mesh.colors[vertex * 3], mesh.colors[vertex * 3 + 1], mesh.colors[vertex * 3 + 2]);
       }
       indices.push(target);
@@ -707,12 +775,13 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   const confirmedVoxels = integrateProjective(volume, usable, report);
   if (confirmedVoxels < 120)
     return { mesh: null, diagnostics: { reason: "The captured views do not overlap enough for a reliable surface.", keyframes: usable.length, confirmedVoxels, voxelSize: volume.voxelSize } };
+  regularizeVolume(volume);
   report?.("meshing", 68);
   let surface = extractSurfaceNet(volume, report);
   surface = removeSmallComponents(surface);
   if (!surface.indices.length || surface.surfaceArea < 0.04)
     return { mesh: null, diagnostics: { reason: "Only tiny disconnected surface fragments were confirmed.", keyframes: usable.length, confirmedVoxels, surfaceArea: surface.surfaceArea, triangles: surface.indices.length / 3 } };
-  surface = smoothPositions(surface, options.smoothingPasses ?? 2);
+  surface = smoothPositions(surface, options.smoothingPasses ?? 3);
   report?.("texturing", 88);
   const textured = texturedMesh(surface, usable);
   const floorY = Number.isFinite(options.floorY) ? options.floorY : 0;

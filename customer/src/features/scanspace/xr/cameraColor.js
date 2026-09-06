@@ -40,7 +40,7 @@ export function createCameraColorReader(gl) {
   gl.bindVertexArray(null);
   const texture = gl.createTexture(),
     framebuffer = gl.createFramebuffer(),
-    size = 192,
+    size = 256,
     pixels = new Uint8Array(size * size * 4);
   gl.bindTexture(gl.TEXTURE_2D, texture);
   gl.texImage2D(

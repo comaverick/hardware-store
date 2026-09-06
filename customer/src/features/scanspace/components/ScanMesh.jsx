@@ -48,14 +48,22 @@ export default function ScanMesh({ mesh, low = false }) {
   );
   return (
     <mesh geometry={resources.geometry} frustumCulled={false}>
-      <meshStandardMaterial
-        vertexColors
-        map={resources.texture}
-        side={THREE.DoubleSide}
-        roughness={0.92}
-        metalness={0}
-        flatShading={low}
-      />
+      {resources.texture ? (
+        <meshBasicMaterial
+          vertexColors
+          map={resources.texture}
+          side={THREE.DoubleSide}
+          toneMapped={false}
+        />
+      ) : (
+        <meshStandardMaterial
+          vertexColors
+          side={THREE.DoubleSide}
+          roughness={0.92}
+          metalness={0}
+          flatShading={low}
+        />
+      )}
     </mesh>
   );
 }

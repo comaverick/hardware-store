@@ -315,7 +315,9 @@ export class RoomScanner {
         Math.abs(a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w),
       );
       const turned = 2 * Math.acos(dot);
-      if (moved < 0.12 && turned < 0.14) return;
+      // Slightly denser poses improve projective overlap without retaining
+      // every XR frame. The global keyframe cap still bounds phone memory.
+      if (moved < 0.08 && turned < 0.1) return;
     }
     const keyframe = createRgbdKeyframe(points, {
       columns,
