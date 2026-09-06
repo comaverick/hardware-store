@@ -293,7 +293,12 @@ export default function RoomEditor({ onExit }) {
           onCancel={() => setReview(false)}
           onComplete={(room) => {
             change((r) => Object.assign(r, room));
-            s.update({ textures: {}, scanCloud: null, showCapture: false });
+            s.update({
+              textures: {},
+              scanCloud: null,
+              scanMesh: null,
+              showCapture: false,
+            });
             setReview(false);
             setReset((v) => v + 1);
           }}
@@ -387,7 +392,8 @@ export default function RoomEditor({ onExit }) {
               textures={s.textures}
               showCapture={s.showCapture}
               scanCloud={s.scanCloud}
-              showScan={s.before && !!s.scanCloud}
+              scanMesh={s.scanMesh}
+              showScan={s.before && !!(s.scanMesh || s.scanCloud)}
               onError={reportError}
               reset={reset}
               snap={snap}
@@ -400,14 +406,14 @@ export default function RoomEditor({ onExit }) {
           >
             <Eye size={16} />
             {s.before
-              ? s.scanCloud
+              ? s.scanMesh || s.scanCloud
                 ? "Viewing scan"
                 : "Viewing original"
               : "Before & after"}
           </button>
           {s.before && (
             <div className="ss-before-label">
-              {s.scanCloud ? "Captured room" : "Original design"}
+              {s.scanMesh || s.scanCloud ? "Captured room" : "Original design"}
             </div>
           )}
         </div>

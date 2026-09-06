@@ -50,7 +50,16 @@ export function unprojectDepth(
       ray.multiplyScalar(meters / -ray.z).applyMatrix4(pose);
       if (![ray.x, ray.y, ray.z].every(Number.isFinite)) continue;
       const color = colorAt?.(u, v);
-      points.push({ x: ray.x, y: ray.y, z: ray.z, color });
+      points.push({
+        x: ray.x,
+        y: ray.y,
+        z: ray.z,
+        color,
+        gridX: x,
+        gridY: y,
+        gridColumns: columns,
+        gridRows: rows,
+      });
     }
   return points;
 }

@@ -9,6 +9,7 @@ import {
 } from "@react-three/drei";
 import * as THREE from "three";
 import ScanPointCloud from "./ScanPointCloud";
+import ScanMesh from "./ScanMesh";
 import {
   distance,
   roomCenter,
@@ -488,6 +489,7 @@ export default function RoomScene({
   textures = {},
   showCapture = false,
   scanCloud = null,
+  scanMesh = null,
   showScan = false,
   onError,
   reset = 0,
@@ -660,7 +662,12 @@ export default function RoomScene({
           shadow-camera-bottom={-8}
           shadow-bias={-0.0004}
         />
-        {showScan && scanCloud && <ScanPointCloud cloud={scanCloud} low={low} />}
+        {showScan && scanMesh ? (
+          <ScanMesh mesh={scanMesh} low={low} />
+        ) : (
+          showScan &&
+          scanCloud && <ScanPointCloud cloud={scanCloud} low={low} />
+        )}
         <mesh
           geometry={geometry}
           rotation={[-Math.PI / 2, 0, 0]}

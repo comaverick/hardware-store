@@ -94,6 +94,7 @@ export default function ScannerPanel({
         observer: raw.observer,
         voxelSize: raw.stats.cloudCellSize,
       });
+      const scanMesh = raw.mesh;
       let room,
         floorY = raw.floorY,
         ceilingMeasured = false;
@@ -128,7 +129,7 @@ export default function ScannerPanel({
           finished.current = true;
           await scanner.current.stop();
           onPartial(
-            { ...result.partial, cloud: scanCloud },
+            { ...result.partial, cloud: scanCloud, mesh: scanMesh },
             {
               stats: raw.stats,
               ceilingMeasured,
@@ -152,6 +153,7 @@ export default function ScannerPanel({
               pointCount: raw.points.length,
               reason: reconstructionError.message,
               cloud: scanCloud,
+              mesh: scanMesh,
             },
             { stats: raw.stats, ceilingMeasured: false },
           );
@@ -175,6 +177,7 @@ export default function ScannerPanel({
         partial: room.scanMetadata.partial,
         inferredWallCount: room.scanMetadata.inferredWallCount,
         scanCloud,
+        scanMesh,
       });
     } catch (e) {
       setError(e.message);
@@ -360,6 +363,8 @@ export default function ScannerPanel({
               colorCaptured: !!stats.colorActive,
               viewSweep: `${stats.coverage || 0}%`,
               observedPlanes: stats.planes || 0,
+              meshKeyframes: stats.meshFrames || 0,
+              meshTriangles: stats.meshTriangles || 0,
             }).map(([k, v]) => (
               <div key={k}>
                 <dt>{k}</dt>

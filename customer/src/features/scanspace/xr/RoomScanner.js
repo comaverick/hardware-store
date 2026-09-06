@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { VoxelCloud, unprojectDepth } from "../core/depth";
+import { buildDepthMeshFrame, mergeScanMesh } from "../core/scanMesh";
 import { createCameraColorReader } from "./cameraColor";
 
 export class RoomScanner {
@@ -27,10 +28,16 @@ export class RoomScanner {
       coverage: 0,
       directionCoverage: Array(24).fill(false),
       currentDirection: 0,
+      meshFrames: 0,
+      meshTriangles: 0,
+      meshCompactions: 0,
     };
     this.directions = new Set();
     this.observer = { x: 0, z: 0 };
     this.planes = new Map();
+    this.meshFrames = [];
+    this.meshVertexCount = 0;
+    this.meshTriangleCount = 0;
   }
   publish() {
     this.onUpdate({
@@ -203,10 +210,21 @@ export class RoomScanner {
                 this.renderer.resetState();
               }
             }
-            this.cloud.add(
-              unprojectDepth(depth, view, 36, 27, colorAt),
-              this.stats.depthFrames,
+            const columns = colorAt ? 48 : 36;
+            const rows = colorAt ? 36 : 27;
+            const framePoints = unprojectDepth(
+              depth,
+              view,
+              columns,
+              rows,
+              colorAt,
             );
+            this.cloud.add(framePoints, this.stats.depthFrames);
+            if (
+              colorAt ||
+              (!this.stats.colorActive && this.stats.depthFrames % 5 === 1)
+            )
+              this.captureMeshFrame(framePoints, view, columns, rows);
             this.stats.cloudCellSize = this.cloud.size;
             this.stats.cloudCompactions = this.cloud.compactions;
             const m = view.transform.matrix;
@@ -268,6 +286,60 @@ export class RoomScanner {
     this.stats.pointCount = points.length;
     this.stats.stablePointCount = this.cloud.previewStableCount();
   }
+  captureMeshFrame(points, view, columns, rows) {
+    const position = view.transform.position;
+    const orientation = view.transform.orientation;
+    const pose = {
+      position: { x: position.x, y: position.y, z: position.z },
+      orientation: {
+        x: orientation?.x || 0,
+        y: orientation?.y || 0,
+        z: orientation?.z || 0,
+        w: orientation?.w ?? 1,
+      },
+    };
+    if (this.lastMeshPose) {
+      const moved = Math.hypot(
+        pose.position.x - this.lastMeshPose.position.x,
+        pose.position.y - this.lastMeshPose.position.y,
+        pose.position.z - this.lastMeshPose.position.z,
+      );
+      const a = pose.orientation;
+      const b = this.lastMeshPose.orientation;
+      const dot = Math.min(
+        1,
+        Math.abs(a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w),
+      );
+      const turned = 2 * Math.acos(dot);
+      if (moved < 0.12 && turned < 0.14) return;
+    }
+    const mesh = buildDepthMeshFrame(points, {
+      columns,
+      rows,
+      camera: pose.position,
+    });
+    if (!mesh) return;
+    const limit = 70000;
+    if (this.meshVertexCount + mesh.vertexCount > limit) {
+      this.meshFrames = this.meshFrames.filter((_, index) => index % 2 === 0);
+      this.meshVertexCount = this.meshFrames.reduce(
+        (sum, frame) => sum + frame.vertexCount,
+        0,
+      );
+      this.meshTriangleCount = this.meshFrames.reduce(
+        (sum, frame) => sum + frame.triangleCount,
+        0,
+      );
+      this.stats.meshCompactions = (this.stats.meshCompactions || 0) + 1;
+    }
+    if (this.meshVertexCount + mesh.vertexCount > limit) return;
+    this.meshFrames.push(mesh);
+    this.meshVertexCount += mesh.vertexCount;
+    this.meshTriangleCount += mesh.triangleCount;
+    this.lastMeshPose = pose;
+    this.stats.meshFrames = this.meshFrames.length;
+    this.stats.meshTriangles = this.meshTriangleCount;
+  }
   togglePause() {
     if (this.originChanged) return;
     this.paused = !this.paused;
@@ -280,6 +352,10 @@ export class RoomScanner {
       );
     return {
       points: this.cloud.values(true),
+      mesh: mergeScanMesh(this.meshFrames, {
+        floorY: this.floorY,
+        observer: this.observer,
+      }),
       floorY: this.floorY,
       observer: this.observer,
       stats: { ...this.stats },

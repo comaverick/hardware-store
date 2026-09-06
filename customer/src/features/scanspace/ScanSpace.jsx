@@ -274,7 +274,8 @@ export default function ScanSpace() {
               openRoom(room, {
                 textures: capture.textures || {},
                 scanCloud: capture.scanCloud || null,
-                before: !!capture.scanCloud,
+                scanMesh: capture.scanMesh || null,
+                before: !!(capture.scanMesh || capture.scanCloud),
               })
             }
           />

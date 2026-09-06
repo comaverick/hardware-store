@@ -3,6 +3,7 @@ import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 import ScanPointCloud from "./ScanPointCloud";
+import ScanMesh from "./ScanMesh";
 
 function ScanControls({ cloud, mode, input, view, reset }) {
   const { camera, gl } = useThree();
@@ -122,24 +123,26 @@ export default function PartialScanScene({ scan }) {
   const [reset, setReset] = useState(0);
   const [knob, setKnob] = useState({ x: 0, y: 0 });
   const input = useRef({ x: 0, y: 0, keys: {} });
+  const mesh = scan.mesh;
   const cloud = scan.cloud;
+  const visual = mesh || cloud;
   const view = useMemo(() => {
-    if (!cloud)
+    if (!visual)
       return {
         center: { x: 0, y: 1, z: 0 },
         extent: 3,
         position: [4, 3, 4],
       };
     const center = {
-      x: (cloud.bounds.min.x + cloud.bounds.max.x) / 2,
-      y: (cloud.bounds.min.y + cloud.bounds.max.y) / 2,
-      z: (cloud.bounds.min.z + cloud.bounds.max.z) / 2,
+      x: (visual.bounds.min.x + visual.bounds.max.x) / 2,
+      y: (visual.bounds.min.y + visual.bounds.max.y) / 2,
+      z: (visual.bounds.min.z + visual.bounds.max.z) / 2,
     };
     const extent = Math.max(
       2.2,
-      cloud.bounds.max.x - cloud.bounds.min.x,
-      cloud.bounds.max.y - cloud.bounds.min.y,
-      cloud.bounds.max.z - cloud.bounds.min.z,
+      visual.bounds.max.x - visual.bounds.min.x,
+      visual.bounds.max.y - visual.bounds.min.y,
+      visual.bounds.max.z - visual.bounds.min.z,
     );
     return {
       center,
@@ -150,7 +153,7 @@ export default function PartialScanScene({ scan }) {
         center.z + extent * 1.1,
       ],
     };
-  }, [cloud]);
+  }, [visual]);
   const joystick = (event) => {
     const rect = event.currentTarget.getBoundingClientRect();
     const x = event.clientX - rect.left - rect.width / 2;
@@ -165,7 +168,7 @@ export default function PartialScanScene({ scan }) {
     input.current.x = input.current.y = 0;
     setKnob({ x: 0, y: 0 });
   };
-  if (!cloud)
+  if (!visual)
     return <div className="ss-notice">Captured depth is unavailable.</div>;
   return (
     <div className="ss-partial-scene">
@@ -180,9 +183,16 @@ export default function PartialScanScene({ scan }) {
         }}
       >
         <color attach="background" args={["#18211e"]} />
-        <ScanPointCloud cloud={cloud} low={low} />
+        <hemisphereLight args={["#fff8ed", "#66756f", 2.1]} />
+        <ambientLight intensity={0.35} />
+        <directionalLight position={[3, 7, 4]} intensity={1.6} />
+        {mesh ? (
+          <ScanMesh mesh={mesh} low={low} />
+        ) : (
+          <ScanPointCloud cloud={cloud} low={low} />
+        )}
         <ScanControls
-          cloud={cloud}
+          cloud={visual}
           mode={mode}
           input={input}
           view={view}
@@ -233,7 +243,7 @@ export default function PartialScanScene({ scan }) {
           : "Drag to orbit · Pinch to zoom"}
       </span>
       <span className="ss-partial-legend">
-        <i /> Captured RGB-D points
+        <i /> {mesh ? "Reconstructed RGB-D surface" : "Captured RGB-D points"}
       </span>
       <button className="ss-quality" onClick={() => setLow((value) => !value)}>
         {low ? "Battery saver" : "High quality"}

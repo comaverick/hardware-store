@@ -15,11 +15,17 @@ export default function PartialScanReview({ scan, onRescan, onDone }) {
       <PartialScanScene scan={scan} />
       <div className="ss-partial-facts">
         <span>
-          <strong>{scan.cloud?.count?.toLocaleString() || 0}</strong>
-          rendered depth points
+          <strong>
+            {scan.mesh
+              ? scan.mesh.triangleCount.toLocaleString()
+              : scan.cloud?.count?.toLocaleString() || 0}
+          </strong>
+          {scan.mesh ? "reconstructed triangles" : "rendered depth points"}
         </span>
         <span>
-          <strong>{scan.cloud?.colorCoverage || 0}%</strong>
+          <strong>
+            {scan.mesh?.colorCoverage ?? scan.cloud?.colorCoverage ?? 0}%
+          </strong>
           captured color coverage
         </span>
       </div>
