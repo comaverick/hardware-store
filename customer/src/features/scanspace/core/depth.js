@@ -1,5 +1,11 @@
 import { Matrix4, Vector3 } from "three";
 
+// WebXR depth becomes especially noisy inside arm's reach on phones that infer
+// depth from motion. ScanSpace is a room scanner, so samples closer than this
+// are more likely to be hands, motion artifacts, or invalid near-field depth
+// than useful wall geometry.
+export const MIN_ROOM_DEPTH_METERS = 0.45;
+
 export async function detectCapabilities(
   nav = navigator,
   secure = window.isSecureContext,
@@ -44,7 +50,12 @@ export function unprojectDepth(
       const u = (x + 0.5) / columns,
         v = (y + 0.5) / rows;
       const meters = depth.getDepthInMeters(u, v);
-      if (!Number.isFinite(meters) || meters < 0.25 || meters > 8) continue;
+      if (
+        !Number.isFinite(meters) ||
+        meters < MIN_ROOM_DEPTH_METERS ||
+        meters > 8
+      )
+        continue;
       ray.set(u * 2 - 1, 1 - v * 2, 0.5).applyMatrix4(inverse);
       if (ray.z >= -0.00001) continue;
       ray.multiplyScalar(meters / -ray.z).applyMatrix4(pose);

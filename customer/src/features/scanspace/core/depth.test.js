@@ -33,10 +33,20 @@ test("invalid depths do not become geometry", () => {
       projectionMatrix: camera.projectionMatrix.elements,
       transform: { matrix: new Matrix4().elements },
     };
-  for (const meters of [0, -1, NaN, Infinity, 15])
+  for (const meters of [0, 0.35, -1, NaN, Infinity, 15])
     expect(
       unprojectDepth({ getDepthInMeters: () => meters }, view, 2, 2),
     ).toHaveLength(0);
+});
+test("room-depth capture keeps valid surfaces beyond the near-field guard", () => {
+  const camera = new PerspectiveCamera(),
+    view = {
+      projectionMatrix: camera.projectionMatrix.elements,
+      transform: { matrix: new Matrix4().elements },
+    };
+  expect(
+    unprojectDepth({ getDepthInMeters: () => 0.5 }, view, 2, 2),
+  ).toHaveLength(4);
 });
 test("voxel downsampling compacts before reporting a hard memory limit", () => {
   const cloud = new VoxelCloud(0.1, 3);

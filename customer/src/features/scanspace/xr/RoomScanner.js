@@ -30,6 +30,7 @@ export class RoomScanner {
       currentDirection: 0,
       fusionKeyframes: 0,
       fusionKeyframeCompactions: 0,
+      nearDepthWarning: false,
     };
     this.directions = new Set();
     this.observer = { x: 0, z: 0 };
@@ -221,6 +222,14 @@ export class RoomScanner {
               rows,
               colorAt,
             );
+            const nearPointCount = framePoints.reduce(
+              (count, point) => count + (point.depth < 0.7 ? 1 : 0),
+              0,
+            );
+            const nearRatio = framePoints.length
+              ? nearPointCount / framePoints.length
+              : 0;
+            this.stats.nearDepthWarning = nearRatio > 0.12;
             this.cloud.add(framePoints, this.stats.depthFrames);
             // Pose gating inside captureKeyframe decides whether this depth
             // view adds useful parallax. Checking every depth frame prevents a

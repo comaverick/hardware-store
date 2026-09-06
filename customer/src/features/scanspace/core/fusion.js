@@ -1,4 +1,5 @@
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+const MIN_ROOM_DEPTH_METERS = 0.45;
 const FALLBACK_COLOR = [108, 122, 116];
 const CUBE_CORNERS = [
   [0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0],
@@ -92,7 +93,12 @@ function filterDepth(frame) {
     for (let x = 0; x < frame.columns; x++) {
       const index = y * frame.columns + x;
       const center = frame.depths[index];
-      if (!Number.isFinite(center) || center < 0.25 || center > 8) continue;
+      if (
+        !Number.isFinite(center) ||
+        center < MIN_ROOM_DEPTH_METERS ||
+        center > 8
+      )
+        continue;
       const range = Math.max(0.07, center * 0.045);
       let sum = center * 2;
       let weight = 2;
@@ -267,6 +273,9 @@ function makeVolume(bounds, options) {
     weights: new Uint8Array(count),
     weightSums: new Float32Array(count),
     varianceSums: new Float32Array(count),
+    depthSums: new Float32Array(count),
+    freeSpaceVotes: new Uint8Array(count),
+    occlusionVotes: new Uint8Array(count),
     colors: new Float32Array(count * 3),
     colorWeights: new Uint8Array(count),
   };
@@ -339,8 +348,25 @@ function integrateProjective(volume, frames, report) {
           const measuredDepth = frame.filteredDepth[depthIndex];
           if (!measuredDepth) continue;
           const signedDistance = measuredDepth - projected.depth;
-          if (Math.abs(signedDistance) > truncation) continue;
           const index = volumeIndex(volume, x, y, z);
+          // A ray is also evidence about where a surface cannot be. Keep that
+          // evidence so a transient close-depth blob or a surface ghosted
+          // behind the real wall cannot survive merely because it was seen in
+          // two adjacent frames.
+          if (signedDistance > truncation) {
+            volume.freeSpaceVotes[index] = Math.min(
+              255,
+              volume.freeSpaceVotes[index] + 1,
+            );
+            continue;
+          }
+          if (signedDistance < -truncation) {
+            volume.occlusionVotes[index] = Math.min(
+              255,
+              volume.occlusionVotes[index] + 1,
+            );
+            continue;
+          }
           const previousViews = volume.weights[index];
           const previousWeight = volume.weightSums[index];
           const normalized = signedDistance / truncation;
@@ -353,6 +379,7 @@ function integrateProjective(volume, frames, report) {
           volume.varianceSums[index] += sampleWeight * delta * (normalized - nextMean);
           volume.values[index] = nextMean;
           volume.weightSums[index] = nextWeight;
+          volume.depthSums[index] += projected.depth * sampleWeight;
           volume.weights[index] = Math.min(32, previousViews + 1);
           if (Math.abs(signedDistance) <= volume.voxelSize * 1.15) {
             const color = sampleFrameColor(frame, projected.u, projected.v, depthIndex);
@@ -476,6 +503,11 @@ function volumeCorner(volume, x, y, z) {
     variance: volume.weightSums[index] > 0
       ? Math.sqrt(Math.max(0, volume.varianceSums[index] / volume.weightSums[index])) * volume.truncation
       : Infinity,
+    meanDepth: volume.weightSums[index] > 0
+      ? volume.depthSums[index] / volume.weightSums[index]
+      : Infinity,
+    freeSpaceVotes: volume.freeSpaceVotes[index],
+    occlusionVotes: volume.occlusionVotes[index],
     color: volume.colorWeights[index]
       ? [volume.colors[colorOffset], volume.colors[colorOffset + 1], volume.colors[colorOffset + 2]]
       : FALLBACK_COLOR.map(linearByte),
@@ -502,9 +534,25 @@ function extractSurfaceNet(volume, report) {
         // may be single-view samples, but no completely unknown corner is ever
         // used. This retains open scan boundaries without deleting broad walls.
         if (corners.some((corner) => corner.weight < 1)) continue;
-        const varianceLimit = Math.max(0.055, volume.voxelSize * 1.35);
+        const reliable = (corner) => {
+          const closeRange = corner.meanDepth < 0.9;
+          const requiredViews = closeRange ? 4 : 2;
+          const varianceLimit = closeRange
+            ? Math.max(0.032, volume.voxelSize * 0.8)
+            : Math.max(0.055, volume.voxelSize * 1.35);
+          const contradictedByFreeSpace =
+            corner.freeSpaceVotes >= Math.max(3, corner.weight * 1.25);
+          const contradictedByOcclusion =
+            corner.occlusionVotes >= Math.max(4, corner.weight * 1.75);
+          return (
+            corner.weight >= requiredViews &&
+            corner.variance <= varianceLimit &&
+            !contradictedByFreeSpace &&
+            !contradictedByOcclusion
+          );
+        };
         const confirmed = corners.filter(
-          (corner) => corner.weight >= 2 && corner.variance <= varianceLimit,
+          reliable,
         ).length;
         if (confirmed < 6) continue;
         const negative = corners.some((corner) => corner.value < 0);
@@ -596,7 +644,7 @@ function removeSmallComponents(mesh) {
     join(mesh.indices[index], mesh.indices[index + 1]);
     join(mesh.indices[index], mesh.indices[index + 2]);
   }
-  const areas = new Map();
+  const components = new Map();
   const triangleArea = (index) => {
     const a = mesh.indices[index] * 3;
     const b = mesh.indices[index + 1] * 3;
@@ -615,18 +663,57 @@ function removeSmallComponents(mesh) {
   };
   for (let index = 0; index < mesh.indices.length; index += 3) {
     const root = find(mesh.indices[index]);
-    areas.set(root, (areas.get(root) || 0) + triangleArea(index));
+    const component = components.get(root) || {
+      area: 0,
+      min: [Infinity, Infinity, Infinity],
+      max: [-Infinity, -Infinity, -Infinity],
+    };
+    component.area += triangleArea(index);
+    for (let corner = 0; corner < 3; corner++) {
+      const offset = mesh.indices[index + corner] * 3;
+      for (let axis = 0; axis < 3; axis++) {
+        component.min[axis] = Math.min(component.min[axis], mesh.positions[offset + axis]);
+        component.max[axis] = Math.max(component.max[axis], mesh.positions[offset + axis]);
+      }
+    }
+    components.set(root, component);
   }
-  const totalArea = [...areas.values()].reduce((sum, area) => sum + area, 0);
+  const entries = [...components.entries()];
+  const totalArea = entries.reduce((sum, [, component]) => sum + component.area, 0);
   const minimumArea = Math.max(0.012, totalArea * 0.001);
+  const [dominantRoot, dominant] = entries.reduce(
+    (best, entry) => (!best[1] || entry[1].area > best[1].area ? entry : best),
+    [null, null],
+  );
+  const boundsGap = (left, right) => Math.hypot(
+    ...[0, 1, 2].map((axis) =>
+      Math.max(0, left.min[axis] - right.max[axis], right.min[axis] - left.max[axis]),
+    ),
+  );
+  const keptRoots = new Set(
+    entries
+      .filter(([root, component]) =>
+        component.area >= minimumArea &&
+        (root === dominantRoot ||
+          component.area >= dominant.area * 0.22 ||
+          boundsGap(component, dominant) <= 0.32),
+      )
+      .map(([root]) => root),
+  );
   const kept = [];
   for (let index = 0; index < mesh.indices.length; index += 3)
-    if ((areas.get(find(mesh.indices[index])) || 0) >= minimumArea)
+    if (keptRoots.has(find(mesh.indices[index])))
       kept.push(mesh.indices[index], mesh.indices[index + 1], mesh.indices[index + 2]);
-  const keptArea = [...areas.entries()]
-    .filter(([, area]) => area >= minimumArea)
-    .reduce((sum, [, area]) => sum + area, 0);
-  return { ...mesh, indices: new Uint32Array(kept), surfaceArea: keptArea };
+  const keptArea = entries
+    .filter(([root]) => keptRoots.has(root))
+    .reduce((sum, [, component]) => sum + component.area, 0);
+  return {
+    ...mesh,
+    indices: new Uint32Array(kept),
+    surfaceArea: keptArea,
+    componentCount: components.size,
+    removedComponentCount: components.size - keptRoots.size,
+  };
 }
 
 function stabilizeDominantWalls(mesh, voxelSize) {
@@ -1028,6 +1115,8 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       triangles: mesh.triangleCount,
       surfaceArea: surface.surfaceArea,
       stabilizedPlanes: surface.stabilizedPlaneCount || 0,
+      components: surface.componentCount || 1,
+      removedComponents: surface.removedComponentCount || 0,
       textureCoverage: mesh.textureCoverage,
     },
   };

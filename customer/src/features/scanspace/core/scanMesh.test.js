@@ -24,18 +24,25 @@ const projection = new Float32Array([
   0, 0, -0.2, 0,
 ]);
 
-function planeKeyframe(cameraX = 0, withColor = true, centerMissing = false) {
+function planeKeyframe(
+  cameraX = 0,
+  withColor = true,
+  centerMissing = false,
+  phantomPatch = false,
+) {
   const points = [];
   for (let y = 0; y < 16; y++)
     for (let x = 0; x < 16; x++) {
       if (centerMissing && x >= 6 && x <= 9 && y >= 6 && y <= 9) continue;
       const u = (x + 0.5) / 16;
       const v = (y + 0.5) / 16;
+      const phantomDepth = typeof phantomPatch === "number" ? phantomPatch : 0.62;
+      const depth = phantomPatch && x < 5 && y < 5 ? phantomDepth : 2;
       points.push({
-        x: cameraX + (u * 2 - 1) * 2,
-        y: (1 - v * 2) * 2,
-        z: -2,
-        depth: 2,
+        x: cameraX + (u * 2 - 1) * depth,
+        y: (1 - v * 2) * depth,
+        z: -depth,
+        depth,
         color: withColor ? [180, 120, 80] : undefined,
         gridX: x,
         gridY: y,
@@ -137,4 +144,44 @@ test("preserves a broad unmeasured opening in an otherwise stable wall", () => {
       centerTriangles++;
   }
   expect(centerTriangles).toBe(0);
+});
+
+test("rejects a repeatedly reported near-field phantom contradicted by clear views", () => {
+  const keyframes = [
+    planeKeyframe(0),
+    planeKeyframe(0.04, true, false, true),
+    planeKeyframe(-0.04, true, false, true),
+    planeKeyframe(0.08, true, false, true),
+    planeKeyframe(-0.08, true, false, true),
+    planeKeyframe(0.12),
+    planeKeyframe(-0.12),
+    planeKeyframe(0.16),
+    planeKeyframe(-0.16),
+  ];
+  const result = fuseRgbdKeyframes(keyframes, { floorY: 0 });
+  expect(result.mesh?.triangleCount).toBeGreaterThan(0);
+  let closestSurface = -Infinity;
+  for (let index = 2; index < result.mesh.positions.length; index += 3)
+    closestSurface = Math.max(closestSurface, result.mesh.positions[index]);
+  expect(closestSurface).toBeLessThan(-1.2);
+});
+
+test("rejects a ghost surface behind a wall when nearer depth occludes it", () => {
+  const keyframes = [
+    planeKeyframe(0),
+    planeKeyframe(0.04, true, false, 3.4),
+    planeKeyframe(-0.04, true, false, 3.4),
+    planeKeyframe(0.08, true, false, 3.4),
+    planeKeyframe(-0.08, true, false, 3.4),
+    planeKeyframe(0.12),
+    planeKeyframe(-0.12),
+    planeKeyframe(0.16),
+    planeKeyframe(-0.16),
+  ];
+  const result = fuseRgbdKeyframes(keyframes, { floorY: 0 });
+  expect(result.mesh?.triangleCount).toBeGreaterThan(0);
+  let farthestSurface = Infinity;
+  for (let index = 2; index < result.mesh.positions.length; index += 3)
+    farthestSurface = Math.min(farthestSurface, result.mesh.positions[index]);
+  expect(farthestSurface).toBeGreaterThan(-2.8);
 });

@@ -30,6 +30,8 @@ function captureGuidance(stats) {
     return "Tracking is unstable. Point back at a confirmed area and hold still.";
   if (!stats.depthCurrent)
     return "Depth paused. Move back toward a textured, well-lit surface.";
+  if (stats.nearDepthWarning)
+    return "Something is reading very close. Step back, keep fingers clear, and rescan that area slowly.";
   if ((stats.fusionKeyframes || 0) < 2)
     return "Move slowly sideways while keeping the same surface centered.";
   if ((stats.fusionKeyframes || 0) < 6)
