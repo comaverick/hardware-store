@@ -186,12 +186,14 @@ export class RoomScanner {
             this.stats.depthActive = true;
             this.stats.format = this.session.depthDataFormat;
             this.stats.dimensions = `${depth.width} × ${depth.height}`;
+            const keyframePose = this.keyframePose(view);
+            const keyframeEligible = this.shouldCaptureKeyframe(keyframePose);
             let colorAt = null;
             if (
+              keyframeEligible &&
               this.binding &&
               view.camera &&
-              !this.colorFailed &&
-              this.stats.depthFrames % 5 === 1
+              !this.colorFailed
             ) {
               try {
                 this.colorReader ??= createCameraColorReader(
@@ -200,7 +202,8 @@ export class RoomScanner {
                 colorAt = this.colorReader.read(this.binding, view.camera);
                 if (colorAt) this.stats.colorActive = true;
               } catch (error) {
-                this.colorFailed = true;
+                this.colorFailures = (this.colorFailures || 0) + 1;
+                this.colorFailed = this.colorFailures >= 3;
                 this.stats.errors.push(
                   `Captured color unavailable: ${error.message}`,
                 );
@@ -234,14 +237,16 @@ export class RoomScanner {
             // Pose gating inside captureKeyframe decides whether this depth
             // view adds useful parallax. Checking every depth frame prevents a
             // slow single-wall sweep from falling between a timer cadence.
-            this.captureKeyframe(
-              framePoints,
-              view,
-              columns,
-              rows,
-              time,
-              colorAt,
-            );
+            if (keyframeEligible)
+              this.captureKeyframe(
+                framePoints,
+                view,
+                columns,
+                rows,
+                time,
+                colorAt,
+                keyframePose,
+              );
             this.stats.cloudCellSize = this.cloud.size;
             this.stats.cloudCompactions = this.cloud.compactions;
             const m = view.transform.matrix;
@@ -303,10 +308,10 @@ export class RoomScanner {
     this.stats.pointCount = points.length;
     this.stats.stablePointCount = this.cloud.previewStableCount();
   }
-  captureKeyframe(points, view, columns, rows, timestamp, colorAt) {
+  keyframePose(view) {
     const position = view.transform.position;
     const orientation = view.transform.orientation;
-    const pose = {
+    return {
       position: { x: position.x, y: position.y, z: position.z },
       orientation: {
         x: orientation?.x || 0,
@@ -315,6 +320,8 @@ export class RoomScanner {
         w: orientation?.w ?? 1,
       },
     };
+  }
+  shouldCaptureKeyframe(pose) {
     if (this.lastMeshPose) {
       const moved = Math.hypot(
         pose.position.x - this.lastMeshPose.position.x,
@@ -330,8 +337,19 @@ export class RoomScanner {
       const turned = 2 * Math.acos(dot);
       // Slightly denser poses improve projective overlap without retaining
       // every XR frame. The global keyframe cap still bounds phone memory.
-      if (moved < 0.08 && turned < 0.1) return;
+      if (moved < 0.08 && turned < 0.1) return false;
     }
+    return true;
+  }
+  captureKeyframe(
+    points,
+    view,
+    columns,
+    rows,
+    timestamp,
+    colorAt,
+    pose = this.keyframePose(view),
+  ) {
     const keyframe = createRgbdKeyframe(points, {
       columns,
       rows,

@@ -34,10 +34,11 @@ export default function PartialScanReview({ scan, onRescan, onDone }) {
             : "captured point color coverage"}
         </span>
       </div>
-      {!scan.mesh && scan.fusionReason && (
+      {scan.fusionReason && (
         <p className="ss-notice">
-          Surface reconstruction fallback: {scan.fusionReason} The measured
-          RGB-D points are shown instead.
+          {scan.mesh
+            ? scan.fusionReason
+            : `Surface reconstruction fallback: ${scan.fusionReason} The measured RGB-D points are shown instead.`}
         </p>
       )}
       <p className="ss-notice">

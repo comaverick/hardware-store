@@ -235,7 +235,11 @@ export default function ScannerPanel({
               ...result.partial,
               cloud: scanCloud,
               mesh: scanMesh,
-              fusionReason: scanMesh ? null : raw.stats.fusion?.reason,
+              fusionReason:
+                !scanMesh || raw.stats.fusion?.fallback
+                  ? raw.stats.fusion?.reason
+                  : null,
+              fusionMode: raw.stats.fusion?.fallback || "multi-view",
             },
             {
               stats: raw.stats,
@@ -261,7 +265,11 @@ export default function ScannerPanel({
               reason: reconstructionError.message,
               cloud: scanCloud,
               mesh: scanMesh,
-              fusionReason: scanMesh ? null : raw.stats.fusion?.reason,
+              fusionReason:
+                !scanMesh || raw.stats.fusion?.fallback
+                  ? raw.stats.fusion?.reason
+                  : null,
+              fusionMode: raw.stats.fusion?.fallback || "multi-view",
             },
             { stats: raw.stats, ceilingMeasured: false },
           );

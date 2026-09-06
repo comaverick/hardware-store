@@ -34,7 +34,11 @@ function planeKeyframe(
   const points = [];
   for (let y = 0; y < 16; y++)
     for (let x = 0; x < 16; x++) {
-      if (centerMissing && x >= 6 && x <= 9 && y >= 6 && y <= 9) continue;
+      if (
+        (centerMissing === true && x >= 6 && x <= 9 && y >= 6 && y <= 9) ||
+        (centerMissing === "single" && x === 8 && y === 8)
+      )
+        continue;
       const u = (x + 0.5) / 16;
       const v = (y + 0.5) / 16;
       const phantomDepth = typeof phantomPatch === "number" ? phantomPatch : 0.62;
@@ -147,6 +151,37 @@ test("preserves a broad unmeasured opening in an otherwise stable wall", () => {
       centerTriangles++;
   }
   expect(centerTriangles).toBe(0);
+});
+
+test("repairs an isolated depth dropout without opening a hole in the wall", () => {
+  const result = fuseRgbdKeyframes(
+    [
+      planeKeyframe(0, true, "single"),
+      planeKeyframe(0.08, true, "single"),
+      planeKeyframe(-0.08, true, "single"),
+    ],
+    { floorY: 0 },
+  );
+  expect(result.mesh?.triangleCount).toBeGreaterThan(0);
+  let centerTriangles = 0;
+  for (let index = 0; index < result.mesh.indices.length; index += 3) {
+    const vertices = [
+      result.mesh.indices[index],
+      result.mesh.indices[index + 1],
+      result.mesh.indices[index + 2],
+    ];
+    const centerX = vertices.reduce(
+      (sum, vertex) => sum + result.mesh.positions[vertex * 3] / 3,
+      0,
+    );
+    const centerY = vertices.reduce(
+      (sum, vertex) => sum + result.mesh.positions[vertex * 3 + 1] / 3,
+      0,
+    );
+    if (Math.abs(centerX) < 0.2 && Math.abs(centerY) < 0.2)
+      centerTriangles++;
+  }
+  expect(centerTriangles).toBeGreaterThan(0);
 });
 
 test("rejects a repeatedly reported near-field phantom contradicted by clear views", () => {

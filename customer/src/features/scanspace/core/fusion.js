@@ -125,6 +125,41 @@ function filterDepth(frame) {
         confidence[index] = Math.round(255 * clamp((support / 8) * 0.7 + agreement * 0.3, 0.15, 1));
       }
     }
+  // Close only tiny one-pixel holes whose surrounding measurements agree.
+  // Repeating this twice softens isolated sensor dropouts but cannot fill a
+  // broad unscanned or reflective region.
+  for (let pass = 0; pass < 2; pass++) {
+    const source = new Float32Array(filtered);
+    const sourceConfidence = new Uint8Array(confidence);
+    for (let y = 1; y < frame.rows - 1; y++)
+      for (let x = 1; x < frame.columns - 1; x++) {
+        const index = y * frame.columns + x;
+        if (source[index]) continue;
+        const neighbors = [];
+        for (let offsetY = -1; offsetY <= 1; offsetY++)
+          for (let offsetX = -1; offsetX <= 1; offsetX++) {
+            if (!offsetX && !offsetY) continue;
+            const neighbor = (y + offsetY) * frame.columns + x + offsetX;
+            if (source[neighbor])
+              neighbors.push({
+                depth: source[neighbor],
+                confidence: sourceConfidence[neighbor],
+              });
+          }
+        if (neighbors.length < 6) continue;
+        neighbors.sort((left, right) => left.depth - right.depth);
+        const median = neighbors[Math.floor(neighbors.length / 2)].depth;
+        const agreement = Math.max(0.06, median * 0.035);
+        const agreeing = neighbors.filter(
+          (neighbor) => Math.abs(neighbor.depth - median) <= agreement,
+        );
+        if (agreeing.length < 6) continue;
+        filtered[index] = median;
+        confidence[index] = Math.round(
+          Math.min(...agreeing.map((neighbor) => neighbor.confidence)) * 0.72,
+        );
+      }
+  }
   return { filtered, confidence };
 }
 
@@ -958,8 +993,31 @@ function texturedMesh(mesh, frames) {
       if (projections.some((value) =>
         !value || value.u < 0.01 || value.v < 0.01 || value.u > 0.99 || value.v > 0.99)) return;
       const depthIndex = gridIndex(frame, projected.u, projected.v);
-      const measured = frame.filteredDepth[depthIndex];
-      if (!measured || Math.abs(measured - projected.depth) > Math.max(0.2, measured * 0.09)) return;
+      const centerX = depthIndex % frame.columns;
+      const centerY = Math.floor(depthIndex / frame.columns);
+      let closestAgreement = Infinity;
+      let closestDepth = 0;
+      // Mesh vertices can land just across a depth-pixel boundary after TSDF
+      // smoothing. Check the immediate neighborhood rather than incorrectly
+      // declaring that otherwise visible triangle untextured.
+      for (let offsetY = -1; offsetY <= 1; offsetY++)
+        for (let offsetX = -1; offsetX <= 1; offsetX++) {
+          const x = centerX + offsetX;
+          const y = centerY + offsetY;
+          if (x < 0 || y < 0 || x >= frame.columns || y >= frame.rows) continue;
+          const measured = frame.filteredDepth[y * frame.columns + x];
+          if (!measured) continue;
+          const difference = Math.abs(measured - projected.depth);
+          if (difference < closestAgreement) {
+            closestAgreement = difference;
+            closestDepth = measured;
+          }
+        }
+      if (
+        !closestDepth ||
+        closestAgreement > Math.max(0.2, closestDepth * 0.09)
+      )
+        return;
       const dx = frame.transformMatrix[12] - center.x;
       const dy = frame.transformMatrix[13] - center.y;
       const dz = frame.transformMatrix[14] - center.z;

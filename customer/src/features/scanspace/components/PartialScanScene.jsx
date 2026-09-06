@@ -243,7 +243,12 @@ export default function PartialScanScene({ scan }) {
           : "Drag to orbit · Pinch to zoom"}
       </span>
       <span className="ss-partial-legend">
-        <i /> {mesh ? "Reconstructed RGB-D surface" : "Captured RGB-D points"}
+        <i />{" "}
+        {mesh?.kind === "measured-depth-surface"
+          ? "Measured RGB-D surface"
+          : mesh
+            ? "Reconstructed RGB-D surface"
+            : "Captured RGB-D points"}
       </span>
       <button className="ss-quality" onClick={() => setLow((value) => !value)}>
         {low ? "Battery saver" : "High quality"}
