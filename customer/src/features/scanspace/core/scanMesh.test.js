@@ -1,4 +1,4 @@
-import { buildDepthMeshFrame, mergeScanMesh } from "./scanMesh";
+import { createRgbdKeyframe, fuseRgbdKeyframes } from "./fusion";
 
 function grid(depthAt = () => 0) {
   const points = [];
@@ -17,28 +17,53 @@ function grid(depthAt = () => 0) {
   return points;
 }
 
-test("connects neighboring RGB-D samples into triangle surfaces", () => {
-  const frame = buildDepthMeshFrame(grid(), {
+test("stores a compact transferable RGB-D keyframe instead of a frame mesh", () => {
+  const frame = createRgbdKeyframe(grid(), {
     columns: 3,
     rows: 3,
-    camera: { x: 0, y: 0, z: 2 },
+    projectionMatrix: Array(16).fill(0),
+    transformMatrix: Array(16).fill(0),
+    camera: { x: 1, y: 2, z: 3 },
+    timestamp: 42,
   });
-  expect(frame.vertexCount).toBe(9);
-  expect(frame.triangleCount).toBe(8);
-  const mesh = mergeScanMesh([frame], {
-    floorY: 0,
-    observer: { x: 1, z: 2 },
-  });
-  expect(mesh.triangleCount).toBe(8);
-  expect(mesh.positions).toHaveLength(27);
-  expect(mesh.colorCoverage).toBe(100);
-  expect(mesh.observer).toEqual({ x: 1, y: 1.6, z: 2 });
+  expect(frame.validCount).toBe(9);
+  expect(frame.positions).toHaveLength(27);
+  expect(frame.depths).toHaveLength(9);
+  expect(frame.camera).toEqual(new Float32Array([1, 2, 3]));
+  expect(frame.timestamp).toBe(42);
 });
 
-test("does not bridge a large depth discontinuity", () => {
-  const frame = buildDepthMeshFrame(
-    grid((x) => (x === 2 ? 2 : 0)),
-    { columns: 3, rows: 3, camera: { x: 0, y: 0, z: 2 } },
+test("returns a safe no-mesh result when depth coverage is too small", () => {
+  const result = fuseRgbdKeyframes([], { floorY: 0 });
+  expect(result.mesh).toBeNull();
+  expect(result.diagnostics.reason).toMatch(/Not enough/i);
+});
+
+test("fuses repeated RGB-D views into one bounded surface", () => {
+  const points = [];
+  for (let y = 0; y < 12; y++)
+    for (let x = 0; x < 12; x++)
+      points.push({
+        x: (x - 5.5) * 0.08,
+        y: (y - 5.5) * 0.08,
+        z: 2,
+        depth: 2,
+        color: [180, 120, 80],
+        gridX: x,
+        gridY: y,
+        gridColumns: 12,
+        gridRows: 12,
+      });
+  const keyframes = [0, 0.08, -0.08].map((cameraX, timestamp) =>
+    createRgbdKeyframe(points, {
+      columns: 12,
+      rows: 12,
+      camera: { x: cameraX, y: 0, z: 0 },
+      timestamp,
+    }),
   );
-  expect(frame.triangleCount).toBe(4);
+  const result = fuseRgbdKeyframes(keyframes, { floorY: 0 });
+  expect(result.mesh?.triangleCount).toBeGreaterThan(0);
+  expect(result.mesh.triangleCount).toBeLessThan(140001);
+  expect(result.mesh.colorCoverage).toBe(100);
 });

@@ -35,6 +35,7 @@ export default function ScannerPanel({
     overlay = useRef(),
     scanner = useRef(),
     worker = useRef(),
+    fusionWorker = useRef(),
     finished = useRef(false),
     [active, setActive] = useState(false),
     [busy, setBusy] = useState(false),
@@ -46,10 +47,12 @@ export default function ScannerPanel({
       errors: [],
     }),
     [partial, setPartial] = useState(null),
+    [fusion, setFusion] = useState(null),
     [error, setError] = useState("");
   useEffect(
     () => () => {
       worker.current?.terminate();
+      fusionWorker.current?.terminate();
       scanner.current?.stop();
     },
     [],
@@ -84,9 +87,51 @@ export default function ScannerPanel({
     await scanner.current?.stop();
     onCancel();
   }
+  async function buildFusedMesh(raw) {
+    if (!raw.keyframes?.length) return { mesh: null, diagnostics: null };
+    fusionWorker.current = new Worker(
+      new URL("../core/fusion.worker.js", import.meta.url),
+    );
+    const transfer = raw.keyframes.flatMap((frame) =>
+      [
+        frame.positions,
+        frame.depths,
+        frame.colors,
+        frame.colorMask,
+        frame.projectionMatrix,
+        frame.transformMatrix,
+        frame.camera,
+      ]
+        .filter(Boolean)
+        .map((array) => array.buffer),
+    );
+    return new Promise((resolve, reject) => {
+      fusionWorker.current.onmessage = (event) => {
+        if (event.data.type === "progress") {
+          setFusion(event.data);
+          return;
+        }
+        if (event.data.type === "error") {
+          reject(new Error(event.data.error));
+          return;
+        }
+        if (event.data.type === "complete") resolve(event.data.result);
+      };
+      fusionWorker.current.onerror = () =>
+        reject(new Error("Measured-surface reconstruction failed."));
+      fusionWorker.current.postMessage(
+        {
+          keyframes: raw.keyframes,
+          options: { floorY: raw.floorY, observer: raw.observer },
+        },
+        transfer,
+      );
+    });
+  }
   async function finish(allowPartial = true) {
     setBusy(true);
     setError("");
+    setFusion({ stage: "preparing", progress: 0 });
     try {
       const raw = scanner.current.result();
       const scanCloud = buildScanCloud(raw.points, {
@@ -94,11 +139,23 @@ export default function ScannerPanel({
         observer: raw.observer,
         voxelSize: raw.stats.cloudCellSize,
       });
-      const scanMesh = raw.mesh;
+      let scanMesh = null;
       let room,
         floorY = raw.floorY,
         ceilingMeasured = false;
       scanner.current.paused = true;
+      try {
+        const fused = await buildFusedMesh(raw);
+        scanMesh = fused.mesh;
+        raw.stats.fusion = fused.diagnostics;
+      } catch (fusionError) {
+        // The cloud is the truthful fallback. Do not revive the old per-frame
+        // mesh path, which could turn a failed fusion into invented geometry.
+        raw.stats.fusion = { reason: fusionError.message, triangles: 0 };
+      } finally {
+        fusionWorker.current?.terminate();
+        fusionWorker.current = null;
+      }
       const stride = Math.max(1, Math.ceil(raw.points.length / 16000));
       const points = raw.points.filter((_, i) => i % stride === 0);
       worker.current = new Worker(
@@ -185,6 +242,9 @@ export default function ScannerPanel({
     } finally {
       worker.current?.terminate();
       worker.current = null;
+      fusionWorker.current?.terminate();
+      fusionWorker.current = null;
+      setFusion(null);
       setBusy(false);
     }
   }
@@ -334,7 +394,11 @@ export default function ScannerPanel({
         )}
         {busy && (
           <p className="ss-notice" role="status">
-            {active ? "Reconstructing measured surfaces…" : "Starting camera…"}
+            {active
+              ? fusion
+                ? `${fusion.stage === "fusing" ? "Fusing" : fusion.stage === "meshing" ? "Meshing" : "Preparing"} measured surfaces${Number.isFinite(fusion.progress) ? ` (${fusion.progress}%)` : ""}…`
+                : "Reconstructing measured surfaces…"
+              : "Starting camera…"}
           </p>
         )}
         {error && (
@@ -363,8 +427,12 @@ export default function ScannerPanel({
               colorCaptured: !!stats.colorActive,
               viewSweep: `${stats.coverage || 0}%`,
               observedPlanes: stats.planes || 0,
-              meshKeyframes: stats.meshFrames || 0,
-              meshTriangles: stats.meshTriangles || 0,
+              fusionKeyframes: stats.fusionKeyframes || 0,
+              fusionOptimizations: stats.fusionKeyframeCompactions || 0,
+              fusedTriangles: stats.fusion?.triangles || 0,
+              fusionVoxelSize: stats.fusion?.voxelSize
+                ? `${Math.round(stats.fusion.voxelSize * 100)} cm`
+                : "Not yet reconstructed",
             }).map(([k, v]) => (
               <div key={k}>
                 <dt>{k}</dt>

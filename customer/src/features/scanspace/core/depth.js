@@ -54,6 +54,7 @@ export function unprojectDepth(
         x: ray.x,
         y: ray.y,
         z: ray.z,
+        depth: meters,
         color,
         gridX: x,
         gridY: y,

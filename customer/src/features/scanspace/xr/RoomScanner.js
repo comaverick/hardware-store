@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { VoxelCloud, unprojectDepth } from "../core/depth";
-import { buildDepthMeshFrame, mergeScanMesh } from "../core/scanMesh";
+import { createRgbdKeyframe } from "../core/fusion";
 import { createCameraColorReader } from "./cameraColor";
 
 export class RoomScanner {
@@ -28,16 +28,13 @@ export class RoomScanner {
       coverage: 0,
       directionCoverage: Array(24).fill(false),
       currentDirection: 0,
-      meshFrames: 0,
-      meshTriangles: 0,
-      meshCompactions: 0,
+      fusionKeyframes: 0,
+      fusionKeyframeCompactions: 0,
     };
     this.directions = new Set();
     this.observer = { x: 0, z: 0 };
     this.planes = new Map();
-    this.meshFrames = [];
-    this.meshVertexCount = 0;
-    this.meshTriangleCount = 0;
+    this.keyframes = [];
   }
   publish() {
     this.onUpdate({
@@ -224,7 +221,7 @@ export class RoomScanner {
               colorAt ||
               (!this.stats.colorActive && this.stats.depthFrames % 5 === 1)
             )
-              this.captureMeshFrame(framePoints, view, columns, rows);
+              this.captureKeyframe(framePoints, view, columns, rows, time);
             this.stats.cloudCellSize = this.cloud.size;
             this.stats.cloudCompactions = this.cloud.compactions;
             const m = view.transform.matrix;
@@ -286,7 +283,7 @@ export class RoomScanner {
     this.stats.pointCount = points.length;
     this.stats.stablePointCount = this.cloud.previewStableCount();
   }
-  captureMeshFrame(points, view, columns, rows) {
+  captureKeyframe(points, view, columns, rows, timestamp) {
     const position = view.transform.position;
     const orientation = view.transform.orientation;
     const pose = {
@@ -313,32 +310,24 @@ export class RoomScanner {
       const turned = 2 * Math.acos(dot);
       if (moved < 0.12 && turned < 0.14) return;
     }
-    const mesh = buildDepthMeshFrame(points, {
+    const keyframe = createRgbdKeyframe(points, {
       columns,
       rows,
+      projectionMatrix: view.projectionMatrix,
+      transformMatrix: view.transform.matrix,
       camera: pose.position,
+      timestamp,
     });
-    if (!mesh) return;
-    const limit = 70000;
-    if (this.meshVertexCount + mesh.vertexCount > limit) {
-      this.meshFrames = this.meshFrames.filter((_, index) => index % 2 === 0);
-      this.meshVertexCount = this.meshFrames.reduce(
-        (sum, frame) => sum + frame.vertexCount,
-        0,
-      );
-      this.meshTriangleCount = this.meshFrames.reduce(
-        (sum, frame) => sum + frame.triangleCount,
-        0,
-      );
-      this.stats.meshCompactions = (this.stats.meshCompactions || 0) + 1;
+    if (!keyframe) return;
+    // A bounded set is important on phones: the worker receives at most sixty
+    // compact grids, not a growing collection of full per-frame meshes.
+    if (this.keyframes.length >= 60) {
+      this.keyframes = this.keyframes.filter((_, index) => index % 2 === 0);
+      this.stats.fusionKeyframeCompactions++;
     }
-    if (this.meshVertexCount + mesh.vertexCount > limit) return;
-    this.meshFrames.push(mesh);
-    this.meshVertexCount += mesh.vertexCount;
-    this.meshTriangleCount += mesh.triangleCount;
+    this.keyframes.push(keyframe);
     this.lastMeshPose = pose;
-    this.stats.meshFrames = this.meshFrames.length;
-    this.stats.meshTriangles = this.meshTriangleCount;
+    this.stats.fusionKeyframes = this.keyframes.length;
   }
   togglePause() {
     if (this.originChanged) return;
@@ -352,10 +341,7 @@ export class RoomScanner {
       );
     return {
       points: this.cloud.values(true),
-      mesh: mergeScanMesh(this.meshFrames, {
-        floorY: this.floorY,
-        observer: this.observer,
-      }),
+      keyframes: this.keyframes,
       floorY: this.floorY,
       observer: this.observer,
       stats: { ...this.stats },
