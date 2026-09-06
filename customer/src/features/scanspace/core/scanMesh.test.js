@@ -122,6 +122,16 @@ test("rejects a drifted pose without losing the consistent wall", () => {
   expect(result.diagnostics.rejectedKeyframes).toBeGreaterThanOrEqual(1);
 });
 
+test("a bad first frame cannot force a valid overlapping sequence into fallback", () => {
+  const result = fuseRgbdKeyframes(
+    [planeKeyframe(8), planeKeyframe(0), planeKeyframe(0.08), planeKeyframe(-0.08)],
+    { floorY: 0 },
+  );
+  expect(result.mesh?.triangleCount).toBeGreaterThan(0);
+  expect(result.mesh.kind).toBe("projective-tsdf-surface-net");
+  expect(result.diagnostics.rejectedKeyframes).toBeGreaterThanOrEqual(1);
+});
+
 test("preserves a broad unmeasured opening in an otherwise stable wall", () => {
   const result = fuseRgbdKeyframes(
     [
@@ -268,4 +278,16 @@ test("uses one measured view instead of dots when captured poses cannot be align
   expect(result.mesh?.triangleCount).toBeGreaterThan(100);
   expect(result.mesh.kind).toBe("measured-depth-surface");
   expect(result.diagnostics.overlappingKeyframes).toBe(1);
+});
+
+test("unaligned fallback favors the wider measured view over a narrow close-up", () => {
+  const result = fuseRgbdKeyframes(
+    [
+      planeKeyframe(0, true, false, false, 0.7),
+      planeKeyframe(8, true, false, false, 2),
+    ],
+    { floorY: 0 },
+  );
+  expect(result.mesh?.kind).toBe("measured-depth-surface");
+  expect(result.mesh.bounds.max.x - result.mesh.bounds.min.x).toBeGreaterThan(3);
 });

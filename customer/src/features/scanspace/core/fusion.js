@@ -269,14 +269,13 @@ function collectBoundsSamples(frames, limit = 42000) {
 function validateFrameOverlap(frames) {
   if (frames.length < 2) return frames;
   const cellSize = 0.14;
-  const occupied = new Set();
   const cell = (x, y, z) => [
     Math.floor(x / cellSize),
     Math.floor(y / cellSize),
     Math.floor(z / cellSize),
   ];
   const key = (coordinates) => coordinates.join(",");
-  const hasNeighbor = (coordinates) => {
+  const hasNeighbor = (occupied, coordinates) => {
     for (let z = -1; z <= 1; z++)
       for (let y = -1; y <= 1; y++)
         for (let x = -1; x <= 1; x++)
@@ -287,40 +286,76 @@ function validateFrameOverlap(frames) {
           ]))) return true;
     return false;
   };
-  const addFrame = (frame) => {
-    for (let index = 0; index < frame.filteredDepth.length; index += 3) {
+  const spatialFrames = frames.map((frame) => {
+    const occupied = new Set();
+    const coordinates = [];
+    const stride = Math.max(1, Math.ceil(frame.filteredCount / 260));
+    let cursor = 0;
+    for (let index = 0; index < frame.filteredDepth.length; index++) {
       if (!frame.filteredDepth[index]) continue;
       const offset = index * 3;
-      occupied.add(key(cell(
+      const point = [
         frame.positions[offset],
         frame.positions[offset + 1],
         frame.positions[offset + 2],
-      )));
+      ];
+      if (!point.every(Number.isFinite) || cursor++ % stride) continue;
+      const next = cell(...point);
+      const nextKey = key(next);
+      if (!occupied.has(nextKey)) coordinates.push(next);
+      occupied.add(nextKey);
     }
-  };
-  const accepted = [frames[0]];
-  addFrame(frames[0]);
-  frames.slice(1).forEach((frame) => {
-    let checked = 0;
-    let overlap = 0;
-    for (let index = 0; index < frame.filteredDepth.length; index += 3) {
-      if (!frame.filteredDepth[index]) continue;
-      const offset = index * 3;
-      checked++;
-      if (hasNeighbor(cell(
-        frame.positions[offset],
-        frame.positions[offset + 1],
-        frame.positions[offset + 2],
-      ))) overlap++;
-    }
-    // Consecutive room scanning views normally share much more than 2%.
-    // Keeping the floor low still permits a slow turn onto a new wall.
-    if (checked && overlap / checked >= 0.02) {
-      accepted.push(frame);
-      addFrame(frame);
-    }
+    return { occupied, coordinates };
   });
-  return accepted;
+  const adjacency = Array.from({ length: frames.length }, () => []);
+  for (let left = 0; left < frames.length; left++)
+    for (let right = left + 1; right < frames.length; right++) {
+      const first = spatialFrames[left];
+      const second = spatialFrames[right];
+      const source = first.coordinates.length <= second.coordinates.length
+        ? first
+        : second;
+      const target = source === first ? second : first;
+      if (!source.coordinates.length || !target.coordinates.length) continue;
+      let overlap = 0;
+      source.coordinates.forEach((coordinates) => {
+        if (hasNeighbor(target.occupied, coordinates)) overlap++;
+      });
+      if (overlap / source.coordinates.length >= 0.025) {
+        adjacency[left].push(right);
+        adjacency[right].push(left);
+      }
+    }
+  const visited = new Uint8Array(frames.length);
+  const components = [];
+  for (let start = 0; start < frames.length; start++) {
+    if (visited[start]) continue;
+    const component = [];
+    const queue = [start];
+    visited[start] = 1;
+    for (let cursor = 0; cursor < queue.length; cursor++) {
+      const current = queue[cursor];
+      component.push(current);
+      adjacency[current].forEach((next) => {
+        if (visited[next]) return;
+        visited[next] = 1;
+        queue.push(next);
+      });
+    }
+    components.push(component);
+  }
+  // A weak or corrupt first frame must not poison the entire scan. Keep the
+  // largest mutually connected capture sequence, with valid sample count as a
+  // tie breaker, and restore chronological order for fusion.
+  const strongest = components.sort((left, right) => {
+    if (right.length !== left.length) return right.length - left.length;
+    const samples = (component) => component.reduce(
+      (sum, index) => sum + frames[index].filteredCount,
+      0,
+    );
+    return samples(right) - samples(left);
+  })[0] || [];
+  return strongest.sort((left, right) => left - right).map((index) => frames[index]);
 }
 
 function percentile(values, fraction) {
@@ -629,9 +664,9 @@ function extractSurfaceNet(volume, report) {
     for (let y = 0; y < cellHeight; y++)
       for (let x = 0; x < cellWidth; x++) {
         const corners = CUBE_CORNERS.map(([dx, dy, dz]) => volumeCorner(volume, x + dx, y + dy, z + dz));
-        // Six corners need independent multi-view confirmation. The other two
+        // Five corners need independent multi-view confirmation. The others
         // may be single-view samples, but no completely unknown corner is ever
-        // used. This retains open scan boundaries without deleting broad walls.
+        // used. This retains scan boundaries without fragmenting broad walls.
         if (corners.some((corner) => corner.weight < 1)) continue;
         const reliable = (corner) => {
           const closeRange = corner.meanDepth < 0.9;
@@ -653,7 +688,7 @@ function extractSurfaceNet(volume, report) {
         const confirmed = corners.filter(
           reliable,
         ).length;
-        if (confirmed < 6) continue;
+        if (confirmed < 5) continue;
         const negative = corners.some((corner) => corner.value < 0);
         const positive = corners.some((corner) => corner.value >= 0);
         if (!negative || !positive) continue;
@@ -1191,9 +1226,21 @@ function meshBounds(positions, floorY) {
 function measuredDepthFallback(frames, options, failureReason, details = {}) {
   if (frames.length < 2) return null;
   const frame = [...frames].sort((left, right) => {
-    const score = (value) =>
-      value.filteredCount *
-      (1 + (value.coloredCount || 0) / Math.max(1, value.validCount));
+    const score = (value) => {
+      const depths = [];
+      const stride = Math.max(1, Math.ceil(value.filteredCount / 320));
+      let cursor = 0;
+      value.filteredDepth.forEach((depth) => {
+        if (depth && cursor++ % stride === 0) depths.push(depth);
+      });
+      depths.sort((a, b) => a - b);
+      const medianDepth = depths[Math.floor(depths.length / 2)] || 1;
+      const colorCoverage =
+        (value.coloredCount || 0) / Math.max(1, value.validCount);
+      // At equal pixel coverage, a farther frame observes more physical wall
+      // area and is a better room fallback than a narrow close-up.
+      return value.filteredCount * medianDepth * medianDepth * (1 + colorCoverage);
+    };
     return score(right) - score(left);
   })[0];
   const vertexMap = new Int32Array(frame.columns * frame.rows).fill(-1);
