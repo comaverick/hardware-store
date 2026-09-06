@@ -221,7 +221,14 @@ export class RoomScanner {
               colorAt ||
               (!this.stats.colorActive && this.stats.depthFrames % 5 === 1)
             )
-              this.captureKeyframe(framePoints, view, columns, rows, time);
+              this.captureKeyframe(
+                framePoints,
+                view,
+                columns,
+                rows,
+                time,
+                colorAt,
+              );
             this.stats.cloudCellSize = this.cloud.size;
             this.stats.cloudCompactions = this.cloud.compactions;
             const m = view.transform.matrix;
@@ -283,7 +290,7 @@ export class RoomScanner {
     this.stats.pointCount = points.length;
     this.stats.stablePointCount = this.cloud.previewStableCount();
   }
-  captureKeyframe(points, view, columns, rows, timestamp) {
+  captureKeyframe(points, view, columns, rows, timestamp, colorAt) {
     const position = view.transform.position;
     const orientation = view.transform.orientation;
     const pose = {
@@ -317,6 +324,7 @@ export class RoomScanner {
       transformMatrix: view.transform.matrix,
       camera: pose.position,
       timestamp,
+      colorImage: colorAt?.snapshot?.(),
     });
     if (!keyframe) return;
     // A bounded set is important on phones: the worker receives at most sixty

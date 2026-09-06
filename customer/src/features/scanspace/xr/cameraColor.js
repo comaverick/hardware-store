@@ -84,13 +84,22 @@ export function createCameraColorReader(gl) {
       gl.drawArrays(gl.TRIANGLES, 0, 3);
       gl.readPixels(0, 0, size, size, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
       gl.bindVertexArray(null);
-      return (u, v) => {
+      const sample = (u, v) => {
         const i =
           (Math.min(size - 1, Math.floor((1 - v) * size)) * size +
             Math.min(size - 1, Math.floor(u * size))) *
           4;
         return [pixels[i], pixels[i + 1], pixels[i + 2]];
       };
+      // The XR camera texture is frame-scoped. A selected keyframe must own a
+      // copy so it can be projected onto the final mesh after the session ends.
+      sample.snapshot = () => ({
+        data: new Uint8Array(pixels),
+        width: size,
+        height: size,
+        channels: 4,
+      });
+      return sample;
     },
     dispose() {
       gl.deleteTexture(texture);

@@ -98,6 +98,7 @@ export default function ScannerPanel({
         frame.depths,
         frame.colors,
         frame.colorMask,
+        frame.colorImage,
         frame.projectionMatrix,
         frame.transformMatrix,
         frame.camera,
@@ -396,7 +397,7 @@ export default function ScannerPanel({
           <p className="ss-notice" role="status">
             {active
               ? fusion
-                ? `${fusion.stage === "fusing" ? "Fusing" : fusion.stage === "meshing" ? "Meshing" : "Preparing"} measured surfaces${Number.isFinite(fusion.progress) ? ` (${fusion.progress}%)` : ""}…`
+                ? `${fusion.stage === "fusing" ? "Fusing" : fusion.stage === "meshing" ? "Meshing" : fusion.stage === "texturing" ? "Texturing" : "Preparing"} measured surfaces${Number.isFinite(fusion.progress) ? ` (${fusion.progress}%)` : ""}…`
                 : "Reconstructing measured surfaces…"
               : "Starting camera…"}
           </p>

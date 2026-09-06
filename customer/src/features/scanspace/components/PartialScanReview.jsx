@@ -24,9 +24,12 @@ export default function PartialScanReview({ scan, onRescan, onDone }) {
         </span>
         <span>
           <strong>
-            {scan.mesh?.colorCoverage ?? scan.cloud?.colorCoverage ?? 0}%
+            {scan.mesh?.textureCoverage ??
+              scan.mesh?.colorCoverage ??
+              scan.cloud?.colorCoverage ??
+              0}%
           </strong>
-          captured color coverage
+          textured surface coverage
         </span>
       </div>
       <p className="ss-notice">

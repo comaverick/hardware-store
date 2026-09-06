@@ -7,7 +7,16 @@ self.onmessage = (event) => {
       self.postMessage({ type: "progress", stage, progress, diagnostics }),
     );
     const transfer = result.mesh
-      ? [result.mesh.positions.buffer, result.mesh.colors.buffer, result.mesh.indices.buffer]
+      ? [
+          result.mesh.positions,
+          result.mesh.normals,
+          result.mesh.colors,
+          result.mesh.uvs,
+          result.mesh.indices,
+          result.mesh.texture?.data,
+        ]
+          .filter(Boolean)
+          .map((value) => value.buffer)
       : [];
     self.postMessage({ type: "complete", result }, transfer);
   } catch (error) {
