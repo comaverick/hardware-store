@@ -224,6 +224,30 @@ test("rejects a ghost surface behind a wall when nearer depth occludes it", () =
   expect(farthestSurface).toBeGreaterThan(-2.8);
 });
 
+test("preserves a measured back surface through ordinary furniture-depth occlusion", () => {
+  const result = fuseRgbdKeyframes(
+    [
+      planeKeyframe(0),
+      planeKeyframe(0.05),
+      planeKeyframe(-0.05),
+      ...[0.08, -0.08, 0.11, -0.11, 0.14, -0.14, 0.17].map(
+        (cameraX) => planeKeyframe(cameraX, true, false, 1.45),
+      ),
+    ],
+    { floorY: 0 },
+  );
+  expect(result.mesh?.triangleCount).toBeGreaterThan(0);
+  let backVertices = 0;
+  for (let index = 0; index < result.mesh.positions.length; index += 3)
+    if (
+      result.mesh.positions[index] < -0.55 &&
+      result.mesh.positions[index + 1] > 0.55 &&
+      result.mesh.positions[index + 2] < -1.8
+    )
+      backVertices++;
+  expect(backVertices).toBeGreaterThan(0);
+});
+
 test("uses a continuous measured surface instead of dots when strict close-range fusion cannot mesh", () => {
   const result = fuseRgbdKeyframes(
     [0, 0.04, -0.04].map((cameraX) =>

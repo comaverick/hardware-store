@@ -160,6 +160,67 @@ function filterDepth(frame) {
         );
       }
   }
+  // Repair modest, fully enclosed dropout islands. A depth sensor often
+  // returns no value on a shiny patch even though the same wall is measured on
+  // every side. Components touching the image edge, large openings, or depth
+  // boundaries are deliberately left empty.
+  const visited = new Uint8Array(filtered.length);
+  const maximumHole = Math.max(
+    12,
+    Math.floor(frame.columns * frame.rows * 0.035),
+  );
+  for (let start = 0; start < filtered.length; start++) {
+    if (filtered[start] || visited[start]) continue;
+    const component = [];
+    const boundary = [];
+    const queue = [start];
+    visited[start] = 1;
+    let touchesEdge = false;
+    for (let cursor = 0; cursor < queue.length; cursor++) {
+      const index = queue[cursor];
+      component.push(index);
+      const x = index % frame.columns;
+      const y = Math.floor(index / frame.columns);
+      if (!x || !y || x === frame.columns - 1 || y === frame.rows - 1)
+        touchesEdge = true;
+      [
+        [x - 1, y],
+        [x + 1, y],
+        [x, y - 1],
+        [x, y + 1],
+      ].forEach(([nextX, nextY]) => {
+        if (
+          nextX < 0 ||
+          nextY < 0 ||
+          nextX >= frame.columns ||
+          nextY >= frame.rows
+        )
+          return;
+        const next = nextY * frame.columns + nextX;
+        if (filtered[next]) boundary.push(next);
+        else if (!visited[next]) {
+          visited[next] = 1;
+          queue.push(next);
+        }
+      });
+      if (component.length > maximumHole) touchesEdge = true;
+    }
+    if (touchesEdge || component.length > maximumHole || boundary.length < 8)
+      continue;
+    const depths = boundary
+      .map((index) => filtered[index])
+      .sort((left, right) => left - right);
+    const median = depths[Math.floor(depths.length / 2)];
+    if (depths[depths.length - 1] - depths[0] > Math.max(0.12, median * 0.06))
+      continue;
+    const repairedConfidence = Math.round(
+      Math.min(...boundary.map((index) => confidence[index])) * 0.52,
+    );
+    component.forEach((index) => {
+      filtered[index] = median;
+      confidence[index] = repairedConfidence;
+    });
+  }
   return { filtered, confidence };
 }
 
@@ -310,7 +371,7 @@ function makeVolume(bounds, options) {
     varianceSums: new Float32Array(count),
     depthSums: new Float32Array(count),
     freeSpaceVotes: new Uint8Array(count),
-    occlusionVotes: new Uint8Array(count),
+    farOcclusionVotes: new Uint8Array(count),
     colors: new Float32Array(count * 3),
     colorWeights: new Uint8Array(count),
   };
@@ -384,10 +445,9 @@ function integrateProjective(volume, frames, report) {
           if (!measuredDepth) continue;
           const signedDistance = measuredDepth - projected.depth;
           const index = volumeIndex(volume, x, y, z);
-          // A ray is also evidence about where a surface cannot be. Keep that
-          // evidence so a transient close-depth blob or a surface ghosted
-          // behind the real wall cannot survive merely because it was seen in
-          // two adjacent frames.
+          // A ray proves that the space in front of its measured surface is
+          // empty. Space behind that surface is merely occluded and must not be
+          // used to delete a legitimate back wall behind shelves or furniture.
           if (signedDistance > truncation) {
             volume.freeSpaceVotes[index] = Math.min(
               255,
@@ -396,10 +456,14 @@ function integrateProjective(volume, frames, report) {
             continue;
           }
           if (signedDistance < -truncation) {
-            volume.occlusionVotes[index] = Math.min(
-              255,
-              volume.occlusionVotes[index] + 1,
-            );
+            // Normal occlusion is not negative evidence. Only remember a very
+            // large conflict, which is characteristic of the detached
+            // behind-wall ghosts produced by a bad depth frame.
+            if (signedDistance < -Math.max(0.75, truncation * 3))
+              volume.farOcclusionVotes[index] = Math.min(
+                255,
+                volume.farOcclusionVotes[index] + 1,
+              );
             continue;
           }
           const previousViews = volume.weights[index];
@@ -542,7 +606,7 @@ function volumeCorner(volume, x, y, z) {
       ? volume.depthSums[index] / volume.weightSums[index]
       : Infinity,
     freeSpaceVotes: volume.freeSpaceVotes[index],
-    occlusionVotes: volume.occlusionVotes[index],
+    farOcclusionVotes: volume.farOcclusionVotes[index],
     color: volume.colorWeights[index]
       ? [volume.colors[colorOffset], volume.colors[colorOffset + 1], volume.colors[colorOffset + 2]]
       : FALLBACK_COLOR.map(linearByte),
@@ -577,13 +641,13 @@ function extractSurfaceNet(volume, report) {
             : Math.max(0.055, volume.voxelSize * 1.35);
           const contradictedByFreeSpace =
             corner.freeSpaceVotes >= Math.max(3, corner.weight * 1.25);
-          const contradictedByOcclusion =
-            corner.occlusionVotes >= Math.max(4, corner.weight * 1.75);
+          const contradictedByFarOcclusion =
+            corner.farOcclusionVotes >= Math.max(3, corner.weight * 1.1);
           return (
             corner.weight >= requiredViews &&
             corner.variance <= varianceLimit &&
             !contradictedByFreeSpace &&
-            !contradictedByOcclusion
+            !contradictedByFarOcclusion
           );
         };
         const confirmed = corners.filter(
@@ -730,8 +794,8 @@ function removeSmallComponents(mesh) {
       .filter(([root, component]) =>
         component.area >= minimumArea &&
         (root === dominantRoot ||
-          component.area >= dominant.area * 0.22 ||
-          boundsGap(component, dominant) <= 0.32),
+          component.area >= dominant.area * 0.12 ||
+          boundsGap(component, dominant) <= 0.55),
       )
       .map(([root]) => root),
   );
