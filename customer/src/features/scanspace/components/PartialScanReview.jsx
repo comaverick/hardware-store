@@ -29,9 +29,17 @@ export default function PartialScanReview({ scan, onRescan, onDone }) {
               scan.cloud?.colorCoverage ??
               0}%
           </strong>
-          textured surface coverage
+          {scan.mesh
+            ? "textured surface coverage"
+            : "captured point color coverage"}
         </span>
       </div>
+      {!scan.mesh && scan.fusionReason && (
+        <p className="ss-notice">
+          Surface reconstruction fallback: {scan.fusionReason} The measured
+          RGB-D points are shown instead.
+        </p>
+      )}
       <p className="ss-notice">
         The room editor and material estimates stay unavailable until a closed
         footprint is measured. Structural detection status: {scan.reason}

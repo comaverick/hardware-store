@@ -187,7 +187,12 @@ export default function ScannerPanel({
           finished.current = true;
           await scanner.current.stop();
           onPartial(
-            { ...result.partial, cloud: scanCloud, mesh: scanMesh },
+            {
+              ...result.partial,
+              cloud: scanCloud,
+              mesh: scanMesh,
+              fusionReason: scanMesh ? null : raw.stats.fusion?.reason,
+            },
             {
               stats: raw.stats,
               ceilingMeasured,
@@ -212,6 +217,7 @@ export default function ScannerPanel({
               reason: reconstructionError.message,
               cloud: scanCloud,
               mesh: scanMesh,
+              fusionReason: scanMesh ? null : raw.stats.fusion?.reason,
             },
             { stats: raw.stats, ceilingMeasured: false },
           );

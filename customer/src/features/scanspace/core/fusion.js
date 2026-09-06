@@ -154,13 +154,32 @@ function validateFrameOverlap(frames) {
   if (frames.length < 2) return frames;
   const cellSize = 0.14;
   const occupied = new Set();
-  const key = (x, y, z) =>
-    `${Math.floor(x / cellSize)},${Math.floor(y / cellSize)},${Math.floor(z / cellSize)}`;
+  const cell = (x, y, z) => [
+    Math.floor(x / cellSize),
+    Math.floor(y / cellSize),
+    Math.floor(z / cellSize),
+  ];
+  const key = (coordinates) => coordinates.join(",");
+  const hasNeighbor = (coordinates) => {
+    for (let z = -1; z <= 1; z++)
+      for (let y = -1; y <= 1; y++)
+        for (let x = -1; x <= 1; x++)
+          if (occupied.has(key([
+            coordinates[0] + x,
+            coordinates[1] + y,
+            coordinates[2] + z,
+          ]))) return true;
+    return false;
+  };
   const addFrame = (frame) => {
     for (let index = 0; index < frame.filteredDepth.length; index += 3) {
       if (!frame.filteredDepth[index]) continue;
       const offset = index * 3;
-      occupied.add(key(frame.positions[offset], frame.positions[offset + 1], frame.positions[offset + 2]));
+      occupied.add(key(cell(
+        frame.positions[offset],
+        frame.positions[offset + 1],
+        frame.positions[offset + 2],
+      )));
     }
   };
   const accepted = [frames[0]];
@@ -172,7 +191,11 @@ function validateFrameOverlap(frames) {
       if (!frame.filteredDepth[index]) continue;
       const offset = index * 3;
       checked++;
-      if (occupied.has(key(frame.positions[offset], frame.positions[offset + 1], frame.positions[offset + 2]))) overlap++;
+      if (hasNeighbor(cell(
+        frame.positions[offset],
+        frame.positions[offset + 1],
+        frame.positions[offset + 2],
+      ))) overlap++;
     }
     // Consecutive room scanning views normally share much more than 2%.
     // Keeping the floor low still permits a slow turn onto a new wall.
@@ -359,7 +382,11 @@ function extractSurfaceNet(volume, report) {
     for (let y = 0; y < cellHeight; y++)
       for (let x = 0; x < cellWidth; x++) {
         const corners = CUBE_CORNERS.map(([dx, dy, dz]) => volumeCorner(volume, x + dx, y + dy, z + dz));
-        if (corners.some((corner) => corner.weight < 2)) continue;
+        // Six corners need independent multi-view confirmation. The other two
+        // may be single-view samples, but no completely unknown corner is ever
+        // used. This retains open scan boundaries without deleting broad walls.
+        if (corners.some((corner) => corner.weight < 1)) continue;
+        if (corners.filter((corner) => corner.weight >= 2).length < 6) continue;
         const negative = corners.some((corner) => corner.value < 0);
         const positive = corners.some((corner) => corner.value >= 0);
         if (!negative || !positive) continue;
@@ -404,7 +431,7 @@ function extractSurfaceNet(volume, report) {
       for (let x = 0; x < width - 1; x++) {
         const first = volumeCorner(volume, x, y, z);
         const second = volumeCorner(volume, x + 1, y, z);
-        if (first.weight >= 2 && second.weight >= 2 && (first.value < 0) !== (second.value < 0))
+        if (first.weight >= 1 && second.weight >= 1 && (first.value < 0) !== (second.value < 0))
           addQuad(cell(x, y - 1, z - 1), cell(x, y, z - 1), cell(x, y, z), cell(x, y - 1, z), first.value < 0);
       }
   for (let z = 1; z < depth - 1; z++)
@@ -412,7 +439,7 @@ function extractSurfaceNet(volume, report) {
       for (let x = 1; x < width - 1; x++) {
         const first = volumeCorner(volume, x, y, z);
         const second = volumeCorner(volume, x, y + 1, z);
-        if (first.weight >= 2 && second.weight >= 2 && (first.value < 0) !== (second.value < 0))
+        if (first.weight >= 1 && second.weight >= 1 && (first.value < 0) !== (second.value < 0))
           addQuad(cell(x - 1, y, z - 1), cell(x - 1, y, z), cell(x, y, z), cell(x, y, z - 1), first.value < 0);
       }
   for (let z = 0; z < depth - 1; z++)
@@ -420,7 +447,7 @@ function extractSurfaceNet(volume, report) {
       for (let x = 1; x < width - 1; x++) {
         const first = volumeCorner(volume, x, y, z);
         const second = volumeCorner(volume, x, y, z + 1);
-        if (first.weight >= 2 && second.weight >= 2 && (first.value < 0) !== (second.value < 0))
+        if (first.weight >= 1 && second.weight >= 1 && (first.value < 0) !== (second.value < 0))
           addQuad(cell(x - 1, y - 1, z), cell(x, y - 1, z), cell(x, y, z), cell(x - 1, y, z), first.value < 0);
       }
   return { positions: new Float32Array(positions), colors: new Uint8Array(colors), indices: new Uint32Array(indices) };
@@ -449,17 +476,37 @@ function removeSmallComponents(mesh) {
     join(mesh.indices[index], mesh.indices[index + 1]);
     join(mesh.indices[index], mesh.indices[index + 2]);
   }
-  const sizes = new Map();
+  const areas = new Map();
+  const triangleArea = (index) => {
+    const a = mesh.indices[index] * 3;
+    const b = mesh.indices[index + 1] * 3;
+    const c = mesh.indices[index + 2] * 3;
+    const abX = mesh.positions[b] - mesh.positions[a];
+    const abY = mesh.positions[b + 1] - mesh.positions[a + 1];
+    const abZ = mesh.positions[b + 2] - mesh.positions[a + 2];
+    const acX = mesh.positions[c] - mesh.positions[a];
+    const acY = mesh.positions[c + 1] - mesh.positions[a + 1];
+    const acZ = mesh.positions[c + 2] - mesh.positions[a + 2];
+    return Math.hypot(
+      abY * acZ - abZ * acY,
+      abZ * acX - abX * acZ,
+      abX * acY - abY * acX,
+    ) * 0.5;
+  };
   for (let index = 0; index < mesh.indices.length; index += 3) {
     const root = find(mesh.indices[index]);
-    sizes.set(root, (sizes.get(root) || 0) + 1);
+    areas.set(root, (areas.get(root) || 0) + triangleArea(index));
   }
-  const minimum = Math.max(12, Math.floor((mesh.indices.length / 3) * 0.001));
+  const totalArea = [...areas.values()].reduce((sum, area) => sum + area, 0);
+  const minimumArea = Math.max(0.012, totalArea * 0.001);
   const kept = [];
   for (let index = 0; index < mesh.indices.length; index += 3)
-    if ((sizes.get(find(mesh.indices[index])) || 0) >= minimum)
+    if ((areas.get(find(mesh.indices[index])) || 0) >= minimumArea)
       kept.push(mesh.indices[index], mesh.indices[index + 1], mesh.indices[index + 2]);
-  return { ...mesh, indices: new Uint32Array(kept) };
+  const keptArea = [...areas.entries()]
+    .filter(([, area]) => area >= minimumArea)
+    .reduce((sum, [, area]) => sum + area, 0);
+  return { ...mesh, indices: new Uint32Array(kept), surfaceArea: keptArea };
 }
 
 function smoothPositions(mesh, passes = 2) {
@@ -663,8 +710,8 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   report?.("meshing", 68);
   let surface = extractSurfaceNet(volume, report);
   surface = removeSmallComponents(surface);
-  if (surface.indices.length < 180)
-    return { mesh: null, diagnostics: { reason: "Only small disconnected surface fragments were confirmed.", keyframes: usable.length, confirmedVoxels, triangles: surface.indices.length / 3 } };
+  if (!surface.indices.length || surface.surfaceArea < 0.04)
+    return { mesh: null, diagnostics: { reason: "Only tiny disconnected surface fragments were confirmed.", keyframes: usable.length, confirmedVoxels, surfaceArea: surface.surfaceArea, triangles: surface.indices.length / 3 } };
   surface = smoothPositions(surface, options.smoothingPasses ?? 2);
   report?.("texturing", 88);
   const textured = texturedMesh(surface, usable);
@@ -691,6 +738,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       dimensions: volume.dimensions,
       cells: volume.values.length,
       triangles: mesh.triangleCount,
+      surfaceArea: surface.surfaceArea,
       textureCoverage: mesh.textureCoverage,
     },
   };

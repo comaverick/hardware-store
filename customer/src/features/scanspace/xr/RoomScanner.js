@@ -217,10 +217,10 @@ export class RoomScanner {
               colorAt,
             );
             this.cloud.add(framePoints, this.stats.depthFrames);
-            if (
-              colorAt ||
-              (!this.stats.colorActive && this.stats.depthFrames % 5 === 1)
-            )
+            // Geometry capture must not depend on the slower RGB readback.
+            // Sample depth about every 800 ms and attach a camera image only
+            // when one is available for later texture projection.
+            if (colorAt || this.stats.depthFrames % 2 === 1)
               this.captureKeyframe(
                 framePoints,
                 view,
