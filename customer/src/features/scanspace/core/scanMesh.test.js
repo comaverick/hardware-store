@@ -24,10 +24,11 @@ const projection = new Float32Array([
   0, 0, -0.2, 0,
 ]);
 
-function planeKeyframe(cameraX = 0, withColor = true) {
+function planeKeyframe(cameraX = 0, withColor = true, centerMissing = false) {
   const points = [];
   for (let y = 0; y < 16; y++)
     for (let x = 0; x < 16; x++) {
+      if (centerMissing && x >= 6 && x <= 9 && y >= 6 && y <= 9) continue;
       const u = (x + 0.5) / 16;
       const v = (y + 0.5) / 16;
       points.push({
@@ -96,4 +97,44 @@ test("fuses repeated RGB-D views into one bounded surface", () => {
 test("does not fabricate a mesh from an unconfirmed single camera view", () => {
   const keyframe = planeKeyframe(0, false);
   expect(fuseRgbdKeyframes([keyframe], { floorY: 0 }).mesh).toBeNull();
+});
+
+test("rejects a drifted pose without losing the consistent wall", () => {
+  const result = fuseRgbdKeyframes(
+    [planeKeyframe(0), planeKeyframe(0.08), planeKeyframe(-0.08), planeKeyframe(8)],
+    { floorY: 0 },
+  );
+  expect(result.mesh?.triangleCount).toBeGreaterThan(0);
+  expect(result.diagnostics.rejectedKeyframes).toBeGreaterThanOrEqual(1);
+});
+
+test("preserves a broad unmeasured opening in an otherwise stable wall", () => {
+  const result = fuseRgbdKeyframes(
+    [
+      planeKeyframe(0, true, true),
+      planeKeyframe(0.08, true, true),
+      planeKeyframe(-0.08, true, true),
+    ],
+    { floorY: 0 },
+  );
+  expect(result.mesh?.triangleCount).toBeGreaterThan(0);
+  let centerTriangles = 0;
+  for (let index = 0; index < result.mesh.indices.length; index += 3) {
+    const vertices = [
+      result.mesh.indices[index],
+      result.mesh.indices[index + 1],
+      result.mesh.indices[index + 2],
+    ];
+    const centerX = vertices.reduce(
+      (sum, vertex) => sum + result.mesh.positions[vertex * 3] / 3,
+      0,
+    );
+    const centerY = vertices.reduce(
+      (sum, vertex) => sum + result.mesh.positions[vertex * 3 + 1] / 3,
+      0,
+    );
+    if (Math.abs(centerX) < 0.2 && Math.abs(centerY) < 0.2)
+      centerTriangles++;
+  }
+  expect(centerTriangles).toBe(0);
 });

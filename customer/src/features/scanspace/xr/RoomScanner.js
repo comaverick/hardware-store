@@ -222,18 +222,17 @@ export class RoomScanner {
               colorAt,
             );
             this.cloud.add(framePoints, this.stats.depthFrames);
-            // Geometry capture must not depend on the slower RGB readback.
-            // Sample depth about every 800 ms and attach a camera image only
-            // when one is available for later texture projection.
-            if (colorAt || this.stats.depthFrames % 2 === 1)
-              this.captureKeyframe(
-                framePoints,
-                view,
-                columns,
-                rows,
-                time,
-                colorAt,
-              );
+            // Pose gating inside captureKeyframe decides whether this depth
+            // view adds useful parallax. Checking every depth frame prevents a
+            // slow single-wall sweep from falling between a timer cadence.
+            this.captureKeyframe(
+              framePoints,
+              view,
+              columns,
+              rows,
+              time,
+              colorAt,
+            );
             this.stats.cloudCellSize = this.cloud.size;
             this.stats.cloudCompactions = this.cloud.compactions;
             const m = view.transform.matrix;

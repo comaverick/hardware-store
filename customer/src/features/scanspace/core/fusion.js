@@ -87,6 +87,7 @@ function selectEvenly(values, limit) {
 
 function filterDepth(frame) {
   const filtered = new Float32Array(frame.depths.length);
+  const confidence = new Uint8Array(frame.depths.length);
   for (let y = 0; y < frame.rows; y++)
     for (let x = 0; x < frame.columns; x++) {
       const index = y * frame.columns + x;
@@ -96,6 +97,7 @@ function filterDepth(frame) {
       let sum = center * 2;
       let weight = 2;
       let support = 0;
+      let differenceSum = 0;
       for (let offsetY = -1; offsetY <= 1; offsetY++)
         for (let offsetX = -1; offsetX <= 1; offsetX++) {
           if (!offsetX && !offsetY) continue;
@@ -108,11 +110,16 @@ function filterDepth(frame) {
           const contribution = Math.exp(-(difference * difference) / (2 * range * range));
           sum += next * contribution;
           weight += contribution;
+          differenceSum += difference;
           support++;
         }
-      if (support >= 3) filtered[index] = sum / weight;
+      if (support >= 3) {
+        filtered[index] = sum / weight;
+        const agreement = 1 - clamp(differenceSum / support / range, 0, 1);
+        confidence[index] = Math.round(255 * clamp((support / 8) * 0.7 + agreement * 0.3, 0.15, 1));
+      }
     }
-  return filtered;
+  return { filtered, confidence };
 }
 
 function prepareFrame(frame, frameId) {
@@ -120,13 +127,20 @@ function prepareFrame(frame, frameId) {
   const transform = frame.transformMatrix;
   if (projection?.length !== 16 || transform?.length !== 16) return null;
   if (![projection[0], projection[5], transform[15]].every(Number.isFinite)) return null;
-  const filteredDepth = filterDepth(frame);
+  const filtered = filterDepth(frame);
+  const filteredDepth = filtered.filtered;
   let valid = 0;
   filteredDepth.forEach((depth) => {
     if (depth > 0) valid++;
   });
   if (valid < Math.max(40, frame.validCount * 0.18)) return null;
-  return { ...frame, frameId, filteredDepth, filteredCount: valid };
+  return {
+    ...frame,
+    frameId,
+    filteredDepth,
+    depthConfidence: filtered.confidence,
+    filteredCount: valid,
+  };
 }
 
 function collectBoundsSamples(frames, limit = 42000) {
@@ -251,6 +265,8 @@ function makeVolume(bounds, options) {
     voxelSize,
     values: new Float32Array(count),
     weights: new Uint8Array(count),
+    weightSums: new Float32Array(count),
+    varianceSums: new Float32Array(count),
     colors: new Float32Array(count * 3),
     colorWeights: new Uint8Array(count),
   };
@@ -306,6 +322,7 @@ function sampleFrameColor(frame, u, v, depthIndex) {
 function integrateProjective(volume, frames, report) {
   const [width, height, depth] = volume.dimensions;
   const truncation = volume.voxelSize * 3.2;
+  volume.truncation = truncation;
   const total = frames.length * depth;
   let completed = 0;
   frames.forEach((frame) => {
@@ -324,10 +341,19 @@ function integrateProjective(volume, frames, report) {
           const signedDistance = measuredDepth - projected.depth;
           if (Math.abs(signedDistance) > truncation) continue;
           const index = volumeIndex(volume, x, y, z);
-          const previous = volume.weights[index];
+          const previousViews = volume.weights[index];
+          const previousWeight = volume.weightSums[index];
           const normalized = signedDistance / truncation;
-          volume.values[index] = (volume.values[index] * previous + normalized) / (previous + 1);
-          volume.weights[index] = Math.min(32, previous + 1);
+          const localConfidence = (frame.depthConfidence[depthIndex] || 0) / 255;
+          const distanceWeight = clamp(1.15 - projected.depth / 8, 0.25, 1);
+          const sampleWeight = clamp(localConfidence * distanceWeight, 0.08, 1);
+          const nextWeight = previousWeight + sampleWeight;
+          const delta = normalized - volume.values[index];
+          const nextMean = volume.values[index] + delta * sampleWeight / nextWeight;
+          volume.varianceSums[index] += sampleWeight * delta * (normalized - nextMean);
+          volume.values[index] = nextMean;
+          volume.weightSums[index] = nextWeight;
+          volume.weights[index] = Math.min(32, previousViews + 1);
           if (Math.abs(signedDistance) <= volume.voxelSize * 1.15) {
             const color = sampleFrameColor(frame, projected.u, projected.v, depthIndex);
             if (color) {
@@ -387,6 +413,7 @@ function regularizeVolume(volume) {
           // cannot bridge a doorway or a broad unscanned part of the room.
           volume.values[index] = valueSum / support;
           volume.weights[index] = 1;
+          volume.weightSums[index] = 0.35;
           if (colorCount) {
             const offset = index * 3;
             volume.colors[offset] = colorSum[0] / colorCount;
@@ -446,6 +473,9 @@ function volumeCorner(volume, x, y, z) {
     z: volume.origin.z + (z + 0.5) * volume.voxelSize,
     value: volume.values[index],
     weight: volume.weights[index],
+    variance: volume.weightSums[index] > 0
+      ? Math.sqrt(Math.max(0, volume.varianceSums[index] / volume.weightSums[index])) * volume.truncation
+      : Infinity,
     color: volume.colorWeights[index]
       ? [volume.colors[colorOffset], volume.colors[colorOffset + 1], volume.colors[colorOffset + 2]]
       : FALLBACK_COLOR.map(linearByte),
@@ -472,7 +502,11 @@ function extractSurfaceNet(volume, report) {
         // may be single-view samples, but no completely unknown corner is ever
         // used. This retains open scan boundaries without deleting broad walls.
         if (corners.some((corner) => corner.weight < 1)) continue;
-        if (corners.filter((corner) => corner.weight >= 2).length < 6) continue;
+        const varianceLimit = Math.max(0.055, volume.voxelSize * 1.35);
+        const confirmed = corners.filter(
+          (corner) => corner.weight >= 2 && corner.variance <= varianceLimit,
+        ).length;
+        if (confirmed < 6) continue;
         const negative = corners.some((corner) => corner.value < 0);
         const positive = corners.some((corner) => corner.value >= 0);
         if (!negative || !positive) continue;
@@ -595,6 +629,102 @@ function removeSmallComponents(mesh) {
   return { ...mesh, indices: new Uint32Array(kept), surfaceArea: keptArea };
 }
 
+function stabilizeDominantWalls(mesh, voxelSize) {
+  const groups = new Map();
+  let verticalArea = 0;
+  for (let index = 0; index < mesh.indices.length; index += 3) {
+    const offsets = [
+      mesh.indices[index] * 3,
+      mesh.indices[index + 1] * 3,
+      mesh.indices[index + 2] * 3,
+    ];
+    const ab = [
+      mesh.positions[offsets[1]] - mesh.positions[offsets[0]],
+      mesh.positions[offsets[1] + 1] - mesh.positions[offsets[0] + 1],
+      mesh.positions[offsets[1] + 2] - mesh.positions[offsets[0] + 2],
+    ];
+    const ac = [
+      mesh.positions[offsets[2]] - mesh.positions[offsets[0]],
+      mesh.positions[offsets[2] + 1] - mesh.positions[offsets[0] + 1],
+      mesh.positions[offsets[2] + 2] - mesh.positions[offsets[0] + 2],
+    ];
+    let nx = ab[1] * ac[2] - ab[2] * ac[1];
+    let ny = ab[2] * ac[0] - ab[0] * ac[2];
+    let nz = ab[0] * ac[1] - ab[1] * ac[0];
+    const twiceArea = Math.hypot(nx, ny, nz);
+    if (twiceArea < 0.00001) continue;
+    nx /= twiceArea;
+    ny /= twiceArea;
+    nz /= twiceArea;
+    if (Math.abs(ny) > 0.28) continue;
+    if (nx < 0 || (Math.abs(nx) < 0.0001 && nz < 0)) {
+      nx *= -1;
+      ny *= -1;
+      nz *= -1;
+    }
+    const center = {
+      x: offsets.reduce((sum, offset) => sum + mesh.positions[offset] / 3, 0),
+      y: offsets.reduce((sum, offset) => sum + mesh.positions[offset + 1] / 3, 0),
+      z: offsets.reduce((sum, offset) => sum + mesh.positions[offset + 2] / 3, 0),
+    };
+    const offset = nx * center.x + ny * center.y + nz * center.z;
+    const area = twiceArea * 0.5;
+    const angleBin = Math.round(Math.atan2(nz, nx) / (Math.PI / 36));
+    const offsetBin = Math.round(offset / 0.08);
+    const key = `${angleBin},${offsetBin}`;
+    const group = groups.get(key) || { area: 0, nx: 0, ny: 0, nz: 0, offset: 0 };
+    group.area += area;
+    group.nx += nx * area;
+    group.ny += ny * area;
+    group.nz += nz * area;
+    group.offset += offset * area;
+    groups.set(key, group);
+    verticalArea += area;
+  }
+  const planes = [...groups.values()]
+    .filter((group) => group.area >= Math.max(0.22, verticalArea * 0.1))
+    .sort((left, right) => right.area - left.area)
+    .slice(0, 3)
+    .map((group) => {
+      const length = Math.hypot(group.nx, group.ny, group.nz) || 1;
+      return {
+        nx: group.nx / length,
+        ny: group.ny / length,
+        nz: group.nz / length,
+        offset: group.offset / group.area,
+      };
+    });
+  if (!planes.length) return { ...mesh, stabilizedPlaneCount: 0 };
+  const positions = new Float32Array(mesh.positions);
+  const normals = computeNormals(mesh);
+  const distanceLimit = Math.max(0.035, voxelSize * 0.8);
+  for (let vertex = 0; vertex < positions.length / 3; vertex++) {
+    const normalOffset = vertex * 3;
+    if (Math.abs(normals[normalOffset + 1]) > 0.38) continue;
+    let best = null;
+    planes.forEach((plane) => {
+      const alignment = Math.abs(
+        normals[normalOffset] * plane.nx +
+        normals[normalOffset + 1] * plane.ny +
+        normals[normalOffset + 2] * plane.nz,
+      );
+      if (alignment < 0.82) return;
+      const distance =
+        positions[normalOffset] * plane.nx +
+        positions[normalOffset + 1] * plane.ny +
+        positions[normalOffset + 2] * plane.nz -
+        plane.offset;
+      if (Math.abs(distance) > distanceLimit) return;
+      if (!best || Math.abs(distance) < Math.abs(best.distance)) best = { plane, distance };
+    });
+    if (!best) continue;
+    positions[normalOffset] -= best.plane.nx * best.distance * 0.78;
+    positions[normalOffset + 1] -= best.plane.ny * best.distance * 0.78;
+    positions[normalOffset + 2] -= best.plane.nz * best.distance * 0.78;
+  }
+  return { ...mesh, positions, stabilizedPlaneCount: planes.length };
+}
+
 function smoothPositions(mesh, passes = 2) {
   const count = mesh.positions.length / 3;
   const neighbors = Array.from({ length: count }, () => new Set());
@@ -710,12 +840,12 @@ function texturedMesh(mesh, frames) {
   const atlas = buildAtlas(frames);
   const sharedNormals = computeNormals(mesh);
   if (!atlas) return { ...mesh, normals: sharedNormals, textureCoverage: 0 };
-  const positions = [];
-  const normals = [];
-  const colors = [];
-  const uvs = [];
-  const indices = [];
-  let texturedTriangles = 0;
+  atlas.frames.forEach((frame, textureId) => { frame.textureId = textureId; });
+  const records = [];
+  const vertexTriangles = Array.from(
+    { length: mesh.positions.length / 3 },
+    () => [],
+  );
   for (let index = 0; index < mesh.indices.length; index += 3) {
     const triangle = [mesh.indices[index], mesh.indices[index + 1], mesh.indices[index + 2]];
     const center = triangle.reduce((value, vertex) => ({
@@ -728,21 +858,16 @@ function texturedMesh(mesh, frames) {
       y: value.y + sharedNormals[vertex * 3 + 1] / 3,
       z: value.z + sharedNormals[vertex * 3 + 2] / 3,
     }), { x: 0, y: 0, z: 0 });
-    let best = null;
+    const candidates = [];
     atlas.frames.forEach((frame) => {
       const projected = projectWorld(frame, center.x, center.y, center.z);
       if (!projected || projected.u < 0.015 || projected.v < 0.015 || projected.u > 0.985 || projected.v > 0.985) return;
-      const projections = triangle.map((vertex) =>
-        projectWorld(
-          frame,
-          mesh.positions[vertex * 3],
-          mesh.positions[vertex * 3 + 1],
-          mesh.positions[vertex * 3 + 2],
-        ),
-      );
-      // A frame may texture a triangle only when the complete triangle is
-      // visible. Falling back to local fused color is better than stretching
-      // one camera pixel across an off-screen corner.
+      const projections = triangle.map((vertex) => projectWorld(
+        frame,
+        mesh.positions[vertex * 3],
+        mesh.positions[vertex * 3 + 1],
+        mesh.positions[vertex * 3 + 2],
+      ));
       if (projections.some((value) =>
         !value || value.u < 0.01 || value.v < 0.01 || value.u > 0.99 || value.v > 0.99)) return;
       const depthIndex = gridIndex(frame, projected.u, projected.v);
@@ -753,9 +878,49 @@ function texturedMesh(mesh, frames) {
       const dz = frame.transformMatrix[14] - center.z;
       const distance = Math.hypot(dx, dy, dz) || 1;
       const facing = Math.abs((normal.x * dx + normal.y * dy + normal.z * dz) / distance);
-      const score = facing * 2 + 1 / distance;
-      if (!best || score > best.score) best = { frame, projections, score };
+      candidates.push({ frame, projections, score: facing * 2 + 1 / distance });
     });
+    candidates.sort((left, right) => right.score - left.score);
+    const record = { triangle, candidates: candidates.slice(0, 3), selected: 0 };
+    const recordIndex = records.length;
+    records.push(record);
+    triangle.forEach((vertex) => vertexTriangles[vertex].push(recordIndex));
+  }
+  // Neighboring triangles prefer the same one of their valid top-three
+  // camera views. Two passes remove most per-triangle exposure seams without
+  // ever selecting a frame that failed the depth/visibility checks.
+  for (let pass = 0; pass < 2; pass++)
+    records.forEach((record, recordIndex) => {
+      if (record.candidates.length < 2) return;
+      const votes = new Map();
+      record.triangle.forEach((vertex) =>
+        vertexTriangles[vertex].forEach((neighborIndex) => {
+          if (neighborIndex === recordIndex) return;
+          const neighbor = records[neighborIndex];
+          const frame = neighbor.candidates[neighbor.selected]?.frame;
+          if (frame) votes.set(frame.textureId, (votes.get(frame.textureId) || 0) + 1);
+        }),
+      );
+      let selected = 0;
+      let selectedScore = -Infinity;
+      record.candidates.forEach((candidate, candidateIndex) => {
+        const score = candidate.score + (votes.get(candidate.frame.textureId) || 0) * 0.32;
+        if (score > selectedScore) {
+          selected = candidateIndex;
+          selectedScore = score;
+        }
+      });
+      record.selected = selected;
+    });
+  const positions = [];
+  const normals = [];
+  const colors = [];
+  const uvs = [];
+  const indices = [];
+  let texturedTriangles = 0;
+  records.forEach((record) => {
+    const triangle = record.triangle;
+    const best = record.candidates[record.selected] || null;
     if (best) texturedTriangles++;
     triangle.forEach((vertex, corner) => {
       const target = positions.length / 3;
@@ -782,7 +947,7 @@ function texturedMesh(mesh, frames) {
       }
       indices.push(target);
     });
-  }
+  });
   return {
     positions: new Float32Array(positions),
     normals: new Float32Array(normals),
@@ -834,6 +999,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   surface = removeSmallComponents(surface);
   if (!surface.indices.length || surface.surfaceArea < 0.04)
     return { mesh: null, diagnostics: { reason: "Only tiny disconnected surface fragments were confirmed.", keyframes: usable.length, confirmedVoxels, surfaceArea: surface.surfaceArea, triangles: surface.indices.length / 3 } };
+  surface = stabilizeDominantWalls(surface, volume.voxelSize);
   surface = smoothPositions(surface, options.smoothingPasses ?? 3);
   report?.("texturing", 88);
   const textured = texturedMesh(surface, usable);
@@ -861,6 +1027,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       cells: volume.values.length,
       triangles: mesh.triangleCount,
       surfaceArea: surface.surfaceArea,
+      stabilizedPlanes: surface.stabilizedPlaneCount || 0,
       textureCoverage: mesh.textureCoverage,
     },
   };

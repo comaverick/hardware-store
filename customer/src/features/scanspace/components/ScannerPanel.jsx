@@ -25,6 +25,18 @@ function CoverageCompass({ sectors = [], heading = 0 }) {
   );
 }
 
+function captureGuidance(stats) {
+  if (!stats.tracking)
+    return "Tracking is unstable. Point back at a confirmed area and hold still.";
+  if (!stats.depthCurrent)
+    return "Depth paused. Move back toward a textured, well-lit surface.";
+  if ((stats.fusionKeyframes || 0) < 2)
+    return "Move slowly sideways while keeping the same surface centered.";
+  if ((stats.fusionKeyframes || 0) < 6)
+    return "Good start. Continue one slow sideways pass for stronger overlap.";
+  return "Surface overlap is building. Cover dark or reflective areas from another angle.";
+}
+
 export default function ScannerPanel({
   capabilities,
   onComplete,
@@ -86,6 +98,36 @@ export default function ScannerPanel({
     finished.current = true;
     await scanner.current?.stop();
     onCancel();
+  }
+  function downloadDebugCapture() {
+    const source = scanner.current;
+    if (!source?.keyframes?.length) return;
+    const payload = {
+      version: 1,
+      createdAt: new Date().toISOString(),
+      floorY: source.floorY,
+      observer: source.observer,
+      stats: source.stats,
+      keyframes: source.keyframes.map((frame) => ({
+        columns: frame.columns,
+        rows: frame.rows,
+        depths: Array.from(frame.depths),
+        positions: Array.from(frame.positions),
+        colors: Array.from(frame.colors),
+        colorMask: Array.from(frame.colorMask),
+        projectionMatrix: Array.from(frame.projectionMatrix),
+        transformMatrix: Array.from(frame.transformMatrix),
+        timestamp: frame.timestamp,
+      })),
+    };
+    const url = URL.createObjectURL(
+      new Blob([JSON.stringify(payload)], { type: "application/json" }),
+    );
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `scanspace-debug-${Date.now()}.json`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
   async function buildFusedMesh(raw) {
     if (!raw.keyframes?.length) return { mesh: null, diagnostics: null };
@@ -342,9 +384,8 @@ export default function ScannerPanel({
                   : "Captured colors unavailable."}
               </p>
               <p className="ss-scan-hint">
-                Bright mint dots are measured, stable depth. Soft mint dots are
-                still being confirmed. Turn until the view sweep fills, then
-                walk one or two steps along each wall.
+                {captureGuidance(stats)} Bright mint dots are confirmed depth;
+                soft mint dots are still stabilizing.
               </p>
               {stats.cloudCompactions > 0 && (
                 <p className="ss-scan-hint">
@@ -450,6 +491,14 @@ export default function ScannerPanel({
           {stats.errors?.map((e, i) => (
             <p key={i}>{e}</p>
           ))}
+          {active &&
+            new URLSearchParams(window.location.search).has(
+              "scanspaceDebug",
+            ) && (
+              <button type="button" onClick={downloadDebugCapture}>
+                Export RGB-D debug capture
+              </button>
+            )}
         </details>
       </div>
     </div>
