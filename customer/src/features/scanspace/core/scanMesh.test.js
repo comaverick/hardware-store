@@ -29,6 +29,7 @@ function planeKeyframe(
   withColor = true,
   centerMissing = false,
   phantomPatch = false,
+  surfaceDepth = 2,
 ) {
   const points = [];
   for (let y = 0; y < 16; y++)
@@ -37,7 +38,9 @@ function planeKeyframe(
       const u = (x + 0.5) / 16;
       const v = (y + 0.5) / 16;
       const phantomDepth = typeof phantomPatch === "number" ? phantomPatch : 0.62;
-      const depth = phantomPatch && x < 5 && y < 5 ? phantomDepth : 2;
+      const depth = phantomPatch && x < 5 && y < 5
+        ? phantomDepth
+        : surfaceDepth;
       points.push({
         x: cameraX + (u * 2 - 1) * depth,
         y: (1 - v * 2) * depth,
@@ -184,4 +187,26 @@ test("rejects a ghost surface behind a wall when nearer depth occludes it", () =
   for (let index = 2; index < result.mesh.positions.length; index += 3)
     farthestSurface = Math.min(farthestSurface, result.mesh.positions[index]);
   expect(farthestSurface).toBeGreaterThan(-2.8);
+});
+
+test("uses a continuous measured surface instead of dots when strict close-range fusion cannot mesh", () => {
+  const result = fuseRgbdKeyframes(
+    [0, 0.04, -0.04].map((cameraX) =>
+      planeKeyframe(cameraX, true, false, false, 0.62),
+    ),
+    { floorY: 0 },
+  );
+  expect(result.mesh?.triangleCount).toBeGreaterThan(100);
+  expect(result.mesh.kind).toBe("measured-depth-surface");
+  expect(result.diagnostics.fallback).toBe("strongest-measured-view");
+});
+
+test("uses one measured view instead of dots when captured poses cannot be aligned", () => {
+  const result = fuseRgbdKeyframes(
+    [planeKeyframe(0), planeKeyframe(8)],
+    { floorY: 0 },
+  );
+  expect(result.mesh?.triangleCount).toBeGreaterThan(100);
+  expect(result.mesh.kind).toBe("measured-depth-surface");
+  expect(result.diagnostics.overlappingKeyframes).toBe(1);
 });

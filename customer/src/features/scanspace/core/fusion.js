@@ -1061,6 +1061,110 @@ function meshBounds(positions, floorY) {
   return bounds;
 }
 
+// When conservative multi-view fusion cannot close enough TSDF cells, retain a
+// continuous surface from the strongest measured RGB-D view. This is deliberately
+// a single-view fallback: combining unregistered frame meshes is what previously
+// produced layered shards. Depth discontinuities stay open, so this does not
+// bridge doors, furniture edges, or unscanned areas.
+function measuredDepthFallback(frames, options, failureReason, details = {}) {
+  if (frames.length < 2) return null;
+  const frame = [...frames].sort((left, right) => {
+    const score = (value) =>
+      value.filteredCount *
+      (1 + (value.coloredCount || 0) / Math.max(1, value.validCount));
+    return score(right) - score(left);
+  })[0];
+  const vertexMap = new Int32Array(frame.columns * frame.rows).fill(-1);
+  const positions = [];
+  const colors = [];
+  for (let index = 0; index < frame.filteredDepth.length; index++) {
+    if (!frame.filteredDepth[index]) continue;
+    const offset = index * 3;
+    const point = [
+      frame.positions[offset],
+      frame.positions[offset + 1],
+      frame.positions[offset + 2],
+    ];
+    if (!point.every(Number.isFinite)) continue;
+    vertexMap[index] = positions.length / 3;
+    positions.push(...point);
+    const color = sampleFrameColor(
+      frame,
+      ((index % frame.columns) + 0.5) / frame.columns,
+      (Math.floor(index / frame.columns) + 0.5) / frame.rows,
+      index,
+    );
+    colors.push(...(color ? color.map(linearByte) : FALLBACK_COLOR.map(linearByte)));
+  }
+  const indices = [];
+  const triangleIsContinuous = (gridIndices) => {
+    if (gridIndices.some((index) => vertexMap[index] < 0)) return false;
+    const depths = gridIndices.map((index) => frame.filteredDepth[index]);
+    const nearest = Math.min(...depths);
+    const depthRange = Math.max(...depths) - nearest;
+    if (depthRange > Math.max(0.1, nearest * 0.065)) return false;
+    const vertices = gridIndices.map((index) => vertexMap[index] * 3);
+    for (let edge = 0; edge < 3; edge++) {
+      const first = vertices[edge];
+      const second = vertices[(edge + 1) % 3];
+      const distance = Math.hypot(
+        positions[first] - positions[second],
+        positions[first + 1] - positions[second + 1],
+        positions[first + 2] - positions[second + 2],
+      );
+      if (distance > Math.max(0.18, nearest * 0.22)) return false;
+    }
+    return true;
+  };
+  const addTriangle = (a, b, c) => {
+    if (!triangleIsContinuous([a, b, c])) return;
+    indices.push(vertexMap[a], vertexMap[b], vertexMap[c]);
+  };
+  for (let y = 0; y < frame.rows - 1; y++)
+    for (let x = 0; x < frame.columns - 1; x++) {
+      const topLeft = y * frame.columns + x;
+      const topRight = topLeft + 1;
+      const bottomLeft = topLeft + frame.columns;
+      const bottomRight = bottomLeft + 1;
+      addTriangle(topLeft, bottomLeft, topRight);
+      addTriangle(topRight, bottomLeft, bottomRight);
+    }
+  let surface = removeSmallComponents({
+    positions: new Float32Array(positions),
+    colors: new Uint8Array(colors),
+    indices: new Uint32Array(indices),
+  });
+  if (surface.indices.length < 24 || surface.surfaceArea < 0.025) return null;
+  const textured = texturedMesh(surface, [frame]);
+  const floorY = Number.isFinite(options.floorY) ? options.floorY : 0;
+  const mesh = {
+    version: 3,
+    kind: "measured-depth-surface",
+    ...textured,
+    vertexCount: textured.positions.length / 3,
+    triangleCount: textured.indices.length / 3,
+    floorY,
+    bounds: meshBounds(textured.positions, floorY),
+    observer: {
+      x: options.observer?.x || 0,
+      y: 1.6,
+      z: options.observer?.z || 0,
+    },
+  };
+  return {
+    mesh,
+    diagnostics: {
+      ...details,
+      reason: `A continuous measured depth surface was used because ${failureReason}`,
+      fallback: "strongest-measured-view",
+      keyframes: frames.length,
+      triangles: mesh.triangleCount,
+      surfaceArea: surface.surfaceArea,
+      textureCoverage: mesh.textureCoverage,
+    },
+  };
+}
+
 export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   report?.("preparing", 3);
   const prepared = keyframes
@@ -1069,23 +1173,48 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     .filter(Boolean);
   const usable = selectEvenly(validateFrameOverlap(prepared), options.maxKeyframes || 40);
   if (usable.length < 2)
-    return { mesh: null, diagnostics: { reason: "At least two overlapping depth views are required.", keyframes: usable.length } };
+    return measuredDepthFallback(
+      prepared,
+      options,
+      "the captured views could not be aligned for multi-view fusion.",
+      { overlappingKeyframes: usable.length },
+    ) || { mesh: null, diagnostics: { reason: "At least two overlapping depth views are required.", keyframes: usable.length } };
   const samples = collectBoundsSamples(usable);
   if (samples.length < 400)
-    return { mesh: null, diagnostics: { reason: "Not enough filtered RGB-D samples for a surface.", keyframes: usable.length, samples: samples.length } };
+    return measuredDepthFallback(
+      usable,
+      options,
+      "there were not enough samples for multi-view fusion.",
+      { samples: samples.length },
+    ) || { mesh: null, diagnostics: { reason: "Not enough filtered RGB-D samples for a surface.", keyframes: usable.length, samples: samples.length } };
   const bounds = sampleBounds(samples);
   const volume = makeVolume(bounds, options);
   report?.("fusing", 16, { voxelSize: volume.voxelSize, dimensions: volume.dimensions });
   const confirmedVoxels = integrateProjective(volume, usable, report);
   if (confirmedVoxels < 120)
-    return { mesh: null, diagnostics: { reason: "The captured views do not overlap enough for a reliable surface.", keyframes: usable.length, confirmedVoxels, voxelSize: volume.voxelSize } };
+    return measuredDepthFallback(
+      usable,
+      options,
+      "the captured views did not overlap enough for full fusion.",
+      { confirmedVoxels, voxelSize: volume.voxelSize },
+    ) || { mesh: null, diagnostics: { reason: "The captured views do not overlap enough for a reliable surface.", keyframes: usable.length, confirmedVoxels, voxelSize: volume.voxelSize } };
   regularizeVolume(volume);
   propagateSurfaceColors(volume);
   report?.("meshing", 68);
   let surface = extractSurfaceNet(volume, report);
   surface = removeSmallComponents(surface);
   if (!surface.indices.length || surface.surfaceArea < 0.04)
-    return { mesh: null, diagnostics: { reason: "Only tiny disconnected surface fragments were confirmed.", keyframes: usable.length, confirmedVoxels, surfaceArea: surface.surfaceArea, triangles: surface.indices.length / 3 } };
+    return measuredDepthFallback(
+      usable,
+      options,
+      "multi-view fusion only produced disconnected fragments.",
+      {
+        confirmedVoxels,
+        voxelSize: volume.voxelSize,
+        fusedSurfaceArea: surface.surfaceArea,
+        fusedTriangles: surface.indices.length / 3,
+      },
+    ) || { mesh: null, diagnostics: { reason: "Only tiny disconnected surface fragments were confirmed.", keyframes: usable.length, confirmedVoxels, surfaceArea: surface.surfaceArea, triangles: surface.indices.length / 3 } };
   surface = stabilizeDominantWalls(surface, volume.voxelSize);
   surface = smoothPositions(surface, options.smoothingPasses ?? 3);
   report?.("texturing", 88);
