@@ -1,4 +1,8 @@
-import { createRgbdKeyframe, fuseRgbdKeyframes } from "./fusion";
+import {
+  createRgbdKeyframe,
+  fuseRgbdKeyframes,
+  meshFragmentationIsUnacceptable,
+} from "./fusion";
 import { Matrix4, PerspectiveCamera } from "three";
 import { unprojectDepth } from "./depth";
 
@@ -97,6 +101,21 @@ test("returns a safe no-mesh result when depth coverage is too small", () => {
   const result = fuseRgbdKeyframes([], { floorY: 0 });
   expect(result.mesh).toBeNull();
   expect(result.diagnostics.reason).toMatch(/required|Not enough/i);
+});
+
+test("rejects a mesh made from many similarly sized floating islands", () => {
+  expect(
+    meshFragmentationIsUnacceptable({
+      keptComponentCount: 12,
+      dominantAreaRatio: 0.24,
+    }),
+  ).toBe(true);
+  expect(
+    meshFragmentationIsUnacceptable({
+      keptComponentCount: 3,
+      dominantAreaRatio: 0.8,
+    }),
+  ).toBe(false);
 });
 
 test("fuses repeated RGB-D views into one bounded surface", () => {

@@ -31,7 +31,7 @@ export default function PartialScanReview({ scan, onRescan, onDone }) {
               0}%
           </strong>
           {scan.mesh
-            ? "of reconstructed geometry textured"
+            ? "surface texture coverage — not room coverage"
             : "captured point color coverage"}
         </span>
       </div>

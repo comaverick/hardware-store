@@ -24,6 +24,7 @@ export class RoomScanner {
       errors: [],
       planes: 0,
       format: "Unavailable",
+      depthType: "Unavailable",
       dimensions: "Unavailable",
       coverage: 0,
       directionCoverage: Array(24).fill(false),
@@ -61,6 +62,8 @@ export class RoomScanner {
         depthSensing: {
           usagePreference: ["cpu-optimized"],
           dataFormatPreference: ["float32", "luminance-alpha"],
+          depthTypeRequest: ["smooth", "raw"],
+          matchDepthView: true,
         },
         domOverlay: { root: this.overlay },
       });
@@ -185,6 +188,7 @@ export class RoomScanner {
             this.stats.depthFrames++;
             this.stats.depthActive = true;
             this.stats.format = this.session.depthDataFormat;
+            this.stats.depthType = this.session.depthType || "Unavailable";
             this.stats.dimensions = `${depth.width} × ${depth.height}`;
             const keyframePose = this.keyframePose(view);
             const keyframeEligible = this.shouldCaptureKeyframe(keyframePose);
@@ -246,6 +250,7 @@ export class RoomScanner {
                 time,
                 colorAt,
                 keyframePose,
+                depth,
               );
             this.stats.cloudCellSize = this.cloud.size;
             this.stats.cloudCompactions = this.cloud.compactions;
@@ -349,12 +354,15 @@ export class RoomScanner {
     timestamp,
     colorAt,
     pose = this.keyframePose(view),
+    depth = null,
   ) {
     const keyframe = createRgbdKeyframe(points, {
       columns,
       rows,
-      projectionMatrix: view.projectionMatrix,
-      transformMatrix: view.transform.matrix,
+      projectionMatrix: depth?.projectionMatrix || view.projectionMatrix,
+      transformMatrix: depth?.transform?.matrix || view.transform.matrix,
+      viewProjectionMatrix: view.projectionMatrix,
+      viewTransformMatrix: view.transform.matrix,
       camera: pose.position,
       timestamp,
       colorImage: colorAt?.snapshot?.(),

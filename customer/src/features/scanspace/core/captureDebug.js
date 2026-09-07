@@ -7,7 +7,7 @@ export function captureDebugEnabled() {
 
 export function snapshotDepthCapture(raw) {
   const header = {
-    version: 2,
+    version: 3,
     createdAt: new Date().toISOString(),
     floorY: raw.floorY,
     observer: raw.observer,
@@ -28,8 +28,15 @@ export function snapshotDepthCapture(raw) {
       positions: Array.from(frame.positions),
       colors: Array.from(frame.colors),
       colorMask: Array.from(frame.colorMask),
+      depthUvs: Array.from(frame.depthUvs || []),
       projectionMatrix: Array.from(frame.projectionMatrix),
       transformMatrix: Array.from(frame.transformMatrix),
+      viewProjectionMatrix: Array.from(
+        frame.viewProjectionMatrix || frame.projectionMatrix,
+      ),
+      viewTransformMatrix: Array.from(
+        frame.viewTransformMatrix || frame.transformMatrix,
+      ),
       camera: Array.from(frame.camera || []),
     }));
   });
@@ -65,8 +72,18 @@ export function restoreDepthCapture(payload) {
       positions: Float32Array.from(frame.positions, (v) => v ?? NaN),
       colors: Uint8Array.from(frame.colors || new Uint8Array(count * 3)),
       colorMask: Uint8Array.from(frame.colorMask || new Uint8Array(count)),
+      depthUvs:
+        frame.depthUvs?.length === count * 2
+          ? Float32Array.from(frame.depthUvs, (v) => v ?? NaN)
+          : null,
       projectionMatrix: Float32Array.from(frame.projectionMatrix),
       transformMatrix: Float32Array.from(frame.transformMatrix),
+      viewProjectionMatrix: Float32Array.from(
+        frame.viewProjectionMatrix || frame.projectionMatrix,
+      ),
+      viewTransformMatrix: Float32Array.from(
+        frame.viewTransformMatrix || frame.transformMatrix,
+      ),
       camera: Float32Array.from(frame.camera || frame.transformMatrix.slice(12, 15)),
       validCount: frame.validCount ?? frame.depths.filter((v) => v > 0).length,
       coloredCount: frame.coloredCount ?? (frame.colorMask || []).filter(Boolean).length,

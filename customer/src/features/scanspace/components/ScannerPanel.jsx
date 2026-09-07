@@ -3,6 +3,7 @@ import { RoomScanner } from "../xr/RoomScanner";
 import { surfaceTextures } from "../core/reconstruction";
 import { buildScanCloud } from "../core/scanCloud";
 import { captureDebugEnabled, snapshotDepthCapture, downloadDepthCapture } from "../core/captureDebug";
+import { scanReadiness } from "../core/readiness";
 
 function CoverageCompass({ sectors = [], heading = 0 }) {
   const views = sectors.length ? sectors : Array(24).fill(false);
@@ -33,10 +34,16 @@ function captureGuidance(stats) {
     return "Depth paused. Move back toward a textured, well-lit surface.";
   if (stats.nearDepthWarning)
     return "Something is reading very close. Step back, keep fingers clear, and rescan that area slowly.";
+  if (!Number.isFinite(stats.floorY))
+    return "Aim at the floor until floor detection says Ready.";
   if ((stats.fusionKeyframes || 0) < 2)
     return "Move slowly sideways while keeping the same surface centered.";
   if ((stats.fusionKeyframes || 0) < 6)
     return "Good start. Continue one slow sideways pass for stronger overlap.";
+  if ((stats.coverage || 0) < 50)
+    return "Turn through the unscanned directions and keep each wall in view.";
+  if ((stats.stablePointCount || 0) < 1200)
+    return "Keep scanning the walls from overlapping angles to fill the remaining gaps.";
   return "Surface overlap is building. Cover dark or reflective areas from another angle.";
 }
 
@@ -65,6 +72,7 @@ export default function ScannerPanel({
     [partial, setPartial] = useState(null),
     [fusion, setFusion] = useState(null),
     [error, setError] = useState("");
+  const readiness = scanReadiness(stats);
   useEffect(
     () => () => {
       worker.current?.terminate();
@@ -109,25 +117,30 @@ export default function ScannerPanel({
     if (!source?.keyframes?.length) return;
     downloadDepthCapture(debugCapture.current || snapshotDepthCapture(source), source.stats.fusion);
   }
-  async function buildFusedMesh(raw) {
+  async function buildFusedMesh(raw, preserveInput = false) {
     if (!raw.keyframes?.length) return { mesh: null, diagnostics: null };
     fusionWorker.current = new Worker(
       new URL("../core/fusion.worker.js", import.meta.url),
     );
-    const transfer = raw.keyframes.flatMap((frame) =>
-      [
-        frame.positions,
-        frame.depths,
-        frame.colors,
-        frame.colorMask,
-        frame.colorImage,
-        frame.projectionMatrix,
-        frame.transformMatrix,
-        frame.camera,
-      ]
-        .filter(Boolean)
-        .map((array) => array.buffer),
-    );
+    const transfer = preserveInput
+      ? []
+      : raw.keyframes.flatMap((frame) =>
+          [
+            frame.positions,
+            frame.depths,
+            frame.colors,
+            frame.colorMask,
+            frame.depthUvs,
+            frame.colorImage,
+            frame.projectionMatrix,
+            frame.transformMatrix,
+            frame.viewProjectionMatrix,
+            frame.viewTransformMatrix,
+            frame.camera,
+          ]
+            .filter(Boolean)
+            .map((array) => array.buffer),
+        );
     return new Promise((resolve, reject) => {
       fusionWorker.current.onmessage = (event) => {
         if (event.data.type === "progress") {
@@ -151,7 +164,7 @@ export default function ScannerPanel({
       );
     });
   }
-  async function finish(allowPartial = true) {
+  async function finish(allowPartial = false) {
     setBusy(true);
     setError("");
     setFusion({ stage: "preparing", progress: 0 });
@@ -170,7 +183,7 @@ export default function ScannerPanel({
       if (captureDebugEnabled())
         debugCapture.current = snapshotDepthCapture(raw);
       try {
-        const fused = await buildFusedMesh(raw);
+        const fused = await buildFusedMesh(raw, !allowPartial);
         scanMesh = fused.mesh;
         raw.stats.fusion = fused.diagnostics;
       } catch (fusionError) {
@@ -208,6 +221,14 @@ export default function ScannerPanel({
         });
         ({ room, floorY, ceilingMeasured } = result);
         if (!room && result.partial) {
+          if (!allowPartial) {
+            setPartial({
+              reason: result.partial.reason,
+              pointCount: result.partial.pointCount,
+              coverage: raw.stats.coverage || 0,
+            });
+            return;
+          }
           finished.current = true;
           await scanner.current.stop();
           onPartial(
@@ -382,6 +403,11 @@ export default function ScannerPanel({
                 {captureGuidance(stats)} Bright mint dots are confirmed depth;
                 soft mint dots are still stabilizing.
               </p>
+              {!readiness.ready && (
+                <p className="ss-scan-hint">
+                  Needed before a complete room scan: {readiness.missing.join(", ")}.
+                </p>
+              )}
               {stats.cloudCompactions > 0 && (
                 <p className="ss-scan-hint">
                   Capture density was optimized to retain room coverage.
@@ -400,15 +426,17 @@ export default function ScannerPanel({
                   </button>
                   <button
                     className="ss-primary"
-                    disabled={
-                      busy ||
-                      !stats.depthActive ||
-                      (stats.stablePointCount || 0) < 300
-                    }
+                    disabled={busy || !readiness.ready}
                     onClick={() => finish()}
                   >
-                    Finish scan
+                    Finish room scan
                   </button>
+                  {!readiness.ready &&
+                    (stats.stablePointCount || 0) >= 300 && (
+                      <button disabled={busy} onClick={() => finish(true)}>
+                        Review partial capture
+                      </button>
+                    )}
                 </div>
               ) : (
                 <section className="ss-partial-capture" role="status">
@@ -459,6 +487,7 @@ export default function ScannerPanel({
               grantedFeatures: stats.features?.join(", ") || "None",
               depthFrames: stats.depthFrames,
               depthFormat: stats.format || "Unavailable",
+              depthType: stats.depthType || "Unavailable",
               depthDimensions: stats.dimensions || "Unavailable",
               pointCount: stats.pointCount,
               stablePointCount: stats.stablePointCount || 0,

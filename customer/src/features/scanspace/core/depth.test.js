@@ -13,7 +13,7 @@ test("capabilities distinguish secure context, immersive AR, and absent depth ev
   expect(c.ar).toBe(true);
   expect(c.depthActive).toBeUndefined();
 });
-test("unprojects plane depth with camera pose and leaves depth transform to the XR accessor", () => {
+test("unprojects plane depth with the XR view when sensor geometry is absent", () => {
   const camera = new PerspectiveCamera(90, 1, 0.1, 100),
     view = {
       projectionMatrix: camera.projectionMatrix.elements,
@@ -26,6 +26,24 @@ test("unprojects plane depth with camera pose and leaves depth transform to the 
   expect(points[0].y).toBeCloseTo(3);
   expect(points[0].z).toBeCloseTo(1);
   expect(depth.getDepthInMeters).toHaveBeenCalledWith(0.25, 0.25);
+});
+test("prefers calibrated depth-sensor geometry when the runtime exposes it", () => {
+  const camera = new PerspectiveCamera(90, 1, 0.1, 100);
+  const identity = new Matrix4().elements;
+  const view = {
+    projectionMatrix: camera.projectionMatrix.elements,
+    transform: { matrix: new Matrix4().makeTranslation(1, 0, 0).elements },
+  };
+  const depth = {
+    getDepthInMeters: jest.fn(() => 2),
+    projectionMatrix: camera.projectionMatrix.elements,
+    transform: { matrix: new Matrix4().makeTranslation(5, 0, 0).elements },
+    normDepthBufferFromNormView: { matrix: identity },
+  };
+  const [point] = unprojectDepth(depth, view, 1, 1);
+  expect(point.x).toBeCloseTo(5);
+  expect(point.z).toBeCloseTo(-2);
+  expect(depth.getDepthInMeters).toHaveBeenCalledWith(0.5, 0.5);
 });
 test("invalid depths do not become geometry", () => {
   const camera = new PerspectiveCamera(),

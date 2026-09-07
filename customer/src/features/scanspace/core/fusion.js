@@ -28,6 +28,8 @@ export function createRgbdKeyframe(points, options = {}) {
   const depths = new Float32Array(length);
   const colors = new Uint8Array(length * 3);
   const colorMask = new Uint8Array(length);
+  const depthUvs = new Float32Array(length * 2);
+  depthUvs.fill(Number.NaN);
   let validCount = 0;
   let coloredCount = 0;
   points.forEach((point) => {
@@ -42,6 +44,12 @@ export function createRgbdKeyframe(points, options = {}) {
     positions[target + 1] = point.y;
     positions[target + 2] = point.z;
     depths[index] = Number.isFinite(point.depth) ? point.depth : 0;
+    depthUvs[index * 2] = Number.isFinite(point.depthU)
+      ? point.depthU
+      : (x + 0.5) / columns;
+    depthUvs[index * 2 + 1] = Number.isFinite(point.depthV)
+      ? point.depthV
+      : (y + 0.5) / rows;
     validCount++;
     if (Array.isArray(point.color) && point.color.slice(0, 3).every(Number.isFinite)) {
       colors[target] = clamp(Math.round(point.color[0]), 0, 255);
@@ -61,12 +69,22 @@ export function createRgbdKeyframe(points, options = {}) {
     depths,
     colors,
     colorMask,
+    depthUvs,
     colorImage: image?.data || null,
     colorWidth: image?.width || 0,
     colorHeight: image?.height || 0,
     colorChannels: image?.channels || 4,
     projectionMatrix: new Float32Array(options.projectionMatrix || []),
     transformMatrix: new Float32Array(options.transformMatrix || []),
+    // Depth geometry is used for fusion. The XR/color view is retained
+    // separately so camera pixels are projected with the camera that produced
+    // them when the phone exposes a non-coincident depth sensor.
+    viewProjectionMatrix: new Float32Array(
+      options.viewProjectionMatrix || options.projectionMatrix || [],
+    ),
+    viewTransformMatrix: new Float32Array(
+      options.viewTransformMatrix || options.transformMatrix || [],
+    ),
     camera: new Float32Array([
       options.camera?.x || 0,
       options.camera?.y || 0,
@@ -228,8 +246,16 @@ function filterDepth(frame) {
 function depthPosition(frame, index, depth) {
   const p = frame.projectionMatrix;
   const m = frame.transformMatrix;
-  const nx = ((index % frame.columns) + 0.5) / frame.columns * 2 - 1;
-  const ny = 1 - (Math.floor(index / frame.columns) + 0.5) / frame.rows * 2;
+  const storedU = frame.depthUvs?.[index * 2];
+  const storedV = frame.depthUvs?.[index * 2 + 1];
+  const u = Number.isFinite(storedU)
+    ? storedU
+    : ((index % frame.columns) + 0.5) / frame.columns;
+  const v = Number.isFinite(storedV)
+    ? storedV
+    : (Math.floor(index / frame.columns) + 0.5) / frame.rows;
+  const nx = u * 2 - 1;
+  const ny = 1 - v * 2;
   const z = -depth;
   // Solve the projection at the measured camera-space Z, including off-axis
   // projections. Positions and filtered depths must describe the same surface.
@@ -605,7 +631,20 @@ function integrateProjective(volume, frames, report) {
           volume.depthSums[index] += projected.depth * sampleWeight;
           volume.weights[index] = Math.min(32, previousViews + 1);
           if (Math.abs(signedDistance) <= volume.voxelSize * 1.15) {
-            const color = sampleFrameColor(frame, projected.u, projected.v, depthIndex);
+            const colorProjection = projectColorWorld(
+              frame,
+              worldX,
+              worldY,
+              worldZ,
+            );
+            const color = colorProjection
+              ? sampleFrameColor(
+                  frame,
+                  colorProjection.u,
+                  colorProjection.v,
+                  depthIndex,
+                )
+              : null;
             if (color) {
               const colorWeight = volume.colorWeights[index];
               const offset = index * 3;
@@ -908,6 +947,17 @@ function removeSmallComponents(mesh) {
     components.set(root, component);
   }
   const entries = [...components.entries()];
+  if (!entries.length)
+    return {
+      ...mesh,
+      indices: new Uint32Array(),
+      surfaceArea: 0,
+      componentCount: 0,
+      keptComponentCount: 0,
+      removedComponentCount: 0,
+      dominantArea: 0,
+      dominantAreaRatio: 0,
+    };
   const totalArea = entries.reduce((sum, [, component]) => sum + component.area, 0);
   const minimumArea = Math.max(0.012, totalArea * 0.001);
   const [dominantRoot, dominant] = entries.reduce(
@@ -925,7 +975,8 @@ function removeSmallComponents(mesh) {
         component.area >= minimumArea &&
         (root === dominantRoot ||
           component.area >= dominant.area * 0.12 ||
-          boundsGap(component, dominant) <= 0.55),
+          (component.area >= dominant.area * 0.025 &&
+            boundsGap(component, dominant) <= 0.22)),
       )
       .map(([root]) => root),
   );
@@ -936,13 +987,26 @@ function removeSmallComponents(mesh) {
   const keptArea = entries
     .filter(([root]) => keptRoots.has(root))
     .reduce((sum, [, component]) => sum + component.area, 0);
+  const dominantAreaRatio = keptArea
+    ? Math.min(1, dominant.area / keptArea)
+    : 0;
   return {
     ...mesh,
     indices: new Uint32Array(kept),
     surfaceArea: keptArea,
     componentCount: components.size,
+    keptComponentCount: keptRoots.size,
     removedComponentCount: components.size - keptRoots.size,
+    dominantArea: dominant.area,
+    dominantAreaRatio,
   };
+}
+
+export function meshFragmentationIsUnacceptable(surface) {
+  return (
+    (surface.keptComponentCount || 0) > 8 &&
+    (surface.dominantAreaRatio || 0) < 0.72
+  );
 }
 
 function stabilizeDominantWalls(mesh, voxelSize) {
@@ -1152,6 +1216,27 @@ function projectWorld(frame, x, y, z) {
   return projectView(frame, worldToView(frame, x, y, z));
 }
 
+function projectColorWorld(frame, x, y, z) {
+  if (
+    frame.viewProjectionMatrix?.length !== 16 ||
+    frame.viewTransformMatrix?.length !== 16
+  )
+    return projectWorld(frame, x, y, z);
+  return projectView(
+    {
+      projectionMatrix: frame.viewProjectionMatrix,
+    },
+    worldToView(
+      {
+        transformMatrix: frame.viewTransformMatrix,
+      },
+      x,
+      y,
+      z,
+    ),
+  );
+}
+
 function texturedMesh(mesh, frames) {
   const atlas = buildAtlas(frames);
   const sharedNormals = computeNormals(mesh);
@@ -1176,9 +1261,9 @@ function texturedMesh(mesh, frames) {
     }), { x: 0, y: 0, z: 0 });
     const candidates = [];
     atlas.frames.forEach((frame) => {
-      const projected = projectWorld(frame, center.x, center.y, center.z);
+      const projected = projectColorWorld(frame, center.x, center.y, center.z);
       if (!projected || projected.u < 0.015 || projected.v < 0.015 || projected.u > 0.985 || projected.v > 0.985) return;
-      const projections = triangle.map((vertex) => projectWorld(
+      const projections = triangle.map((vertex) => projectColorWorld(
         frame,
         mesh.positions[vertex * 3],
         mesh.positions[vertex * 3 + 1],
@@ -1481,7 +1566,11 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   stages.trianglesBeforeCleanup = surface.indices.length / 3;
   surface = removeSmallComponents(surface);
   stages.trianglesAfterCleanup = surface.indices.length / 3;
-  if (!surface.indices.length || surface.surfaceArea < 0.04)
+  stages.componentCount = surface.componentCount;
+  stages.keptComponentCount = surface.keptComponentCount;
+  stages.dominantAreaRatio = surface.dominantAreaRatio;
+  const highlyFragmented = meshFragmentationIsUnacceptable(surface);
+  if (!surface.indices.length || surface.surfaceArea < 0.04 || highlyFragmented)
     return measuredDepthFallback(
       usable,
       options,
@@ -1492,8 +1581,9 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
         voxelSize: volume.voxelSize,
         fusedSurfaceArea: surface.surfaceArea,
         fusedTriangles: surface.indices.length / 3,
+        fragmented: highlyFragmented,
       },
-    ) || failure("Only tiny disconnected surface fragments were confirmed.", { keyframes: usable.length, confirmedVoxels, surfaceArea: surface.surfaceArea, triangles: surface.indices.length / 3 });
+    ) || failure("Only tiny disconnected surface fragments were confirmed.", { keyframes: usable.length, confirmedVoxels, surfaceArea: surface.surfaceArea, triangles: surface.indices.length / 3, fragmented: highlyFragmented });
   surface = stabilizeDominantWalls(surface, volume.voxelSize);
   surface = smoothPositions(surface, options.smoothingPasses ?? 3);
   report?.("texturing", 88);
@@ -1525,6 +1615,8 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       surfaceArea: surface.surfaceArea,
       stabilizedPlanes: surface.stabilizedPlaneCount || 0,
       components: surface.componentCount || 1,
+      keptComponents: surface.keptComponentCount || 1,
+      dominantAreaRatio: surface.dominantAreaRatio ?? 1,
       removedComponents: surface.removedComponentCount || 0,
       textureCoverage: mesh.textureCoverage,
     },

@@ -25,6 +25,12 @@ test("debug snapshot survives live buffers changing and restores missing positio
   expect(restored.keyframes[0].positions[2]).toBe(-2);
   expect(Number.isNaN(restored.keyframes[0].positions[26])).toBe(true);
   expect(restored.keyframes[0].colorImage).toBeNull();
+  expect(restored.keyframes[0].viewProjectionMatrix).toEqual(
+    restored.keyframes[0].projectionMatrix,
+  );
+  expect(restored.keyframes[0].viewTransformMatrix).toEqual(
+    restored.keyframes[0].transformMatrix,
+  );
   expect(restored.options.floorY).toBe(0);
 });
 
