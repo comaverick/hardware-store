@@ -22,10 +22,12 @@ It does not modify the capture or project. Pass `-` to read JSON from stdin.
 Version 1 depth exports are also accepted.
 
 Check `inputDepthSamples`, `filteredDepthSamples`, `alignment.pairs`,
-`alignment.rejectedFrameIds`, `cellRejections`, and the triangle counts before
-and after cleanup. Pair errors are in meters. Frame selection checks projected
-depth agreement; it does not optimize camera poses (`poseCorrectionApplied`
-is false). `algorithmVersion: 4` identifies the occlusion fix.
+`alignment.rejectedFrameIds`, `alignment.poseCorrections`, `cellRejections`,
+`wallStructure`, and the triangle counts before and after cleanup. Pair and
+pose-refinement errors are in meters. Pose refinement is deliberately limited
+to small gravity-aligned yaw/translation corrections; incompatible frames are
+still rejected. `algorithmVersion: 5` identifies pose refinement and warped-wall
+quality checks.
 
 Replay uses the actual production fusion module. Geometry can be compared;
 texture coverage cannot be reproduced without the omitted camera photos.

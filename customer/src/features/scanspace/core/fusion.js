@@ -311,6 +311,14 @@ function prepareFrame(frame, frameId) {
   return {
     ...frame,
     frameId,
+    transformMatrix: new Float32Array(frame.transformMatrix),
+    viewTransformMatrix:
+      frame.viewTransformMatrix?.length === 16
+        ? new Float32Array(frame.viewTransformMatrix)
+        : new Float32Array(frame.transformMatrix),
+    camera: new Float32Array(
+      frame.camera || frame.transformMatrix.slice(12, 15),
+    ),
     positions,
     filteredDepth,
     measuredMask: filtered.measuredMask,
@@ -479,6 +487,214 @@ function validateFrameOverlap(frames, diagnostics = {}) {
     .filter((_, index) => !strongest.includes(index)).map((frame) => frame.frameId);
   diagnostics.poseCorrectionApplied = false;
   return strongest.sort((left, right) => left - right).map((index) => frames[index]);
+}
+
+function median(values) {
+  if (!values.length) return null;
+  const sorted = [...values].sort((left, right) => left - right);
+  return sorted[Math.floor(sorted.length / 2)];
+}
+
+function alignmentPairs(source, target, limit = 260) {
+  const pairs = [];
+  const stride = Math.max(1, Math.ceil(source.filteredCount / limit));
+  let cursor = 0;
+  for (let index = 0; index < source.filteredDepth.length; index++) {
+    if (!source.measuredMask[index] || cursor++ % stride) continue;
+    const offset = index * 3;
+    const from = [
+      source.positions[offset],
+      source.positions[offset + 1],
+      source.positions[offset + 2],
+    ];
+    if (!from.every(Number.isFinite)) continue;
+    const projected = projectWorld(target, from[0], from[1], from[2]);
+    if (!projected) continue;
+    const centerIndex = gridIndex(target, projected.u, projected.v);
+    const centerX = centerIndex % target.columns;
+    const centerY = Math.floor(centerIndex / target.columns);
+    let best = null;
+    for (let dy = -1; dy <= 1; dy++)
+      for (let dx = -1; dx <= 1; dx++) {
+        const x = centerX + dx;
+        const y = centerY + dy;
+        if (x < 0 || y < 0 || x >= target.columns || y >= target.rows)
+          continue;
+        const next = y * target.columns + x;
+        if (!target.measuredMask[next]) continue;
+        const measured = target.filteredDepth[next];
+        const depthError = Math.abs(measured - projected.depth);
+        if (depthError > Math.max(0.14, measured * 0.055)) continue;
+        const targetOffset = next * 3;
+        const to = [
+          target.positions[targetOffset],
+          target.positions[targetOffset + 1],
+          target.positions[targetOffset + 2],
+        ];
+        if (!to.every(Number.isFinite)) continue;
+        const distance = Math.hypot(
+          to[0] - from[0],
+          to[1] - from[1],
+          to[2] - from[2],
+        );
+        if (!best || distance < best.distance)
+          best = { from, to, distance };
+      }
+    if (best) pairs.push(best);
+  }
+  if (pairs.length < 24) return [];
+  const distanceMedian = median(pairs.map((pair) => pair.distance));
+  const maximum = Math.max(0.035, distanceMedian * 2.5);
+  return pairs.filter((pair) => pair.distance <= maximum);
+}
+
+function estimateYawCorrection(pairs) {
+  if (pairs.length < 24) return null;
+  const sourceCenter = [0, 0, 0];
+  const targetCenter = [0, 0, 0];
+  pairs.forEach(({ from, to }) => {
+    for (let axis = 0; axis < 3; axis++) {
+      sourceCenter[axis] += from[axis] / pairs.length;
+      targetCenter[axis] += to[axis] / pairs.length;
+    }
+  });
+  let dot = 0;
+  let cross = 0;
+  let spread = 0;
+  pairs.forEach(({ from, to }) => {
+    const sx = from[0] - sourceCenter[0];
+    const sz = from[2] - sourceCenter[2];
+    const tx = to[0] - targetCenter[0];
+    const tz = to[2] - targetCenter[2];
+    dot += sx * tx + sz * tz;
+    cross += sz * tx - sx * tz;
+    spread += sx * sx + sz * sz;
+  });
+  if (spread / pairs.length < 0.015) return null;
+  const yaw = Math.atan2(cross, dot);
+  const cosine = Math.cos(yaw);
+  const sine = Math.sin(yaw);
+  const translation = [
+    targetCenter[0] -
+      (cosine * sourceCenter[0] + sine * sourceCenter[2]),
+    targetCenter[1] - sourceCenter[1],
+    targetCenter[2] -
+      (-sine * sourceCenter[0] + cosine * sourceCenter[2]),
+  ];
+  const before = median(pairs.map((pair) => pair.distance));
+  const after = median(
+    pairs.map(({ from, to }) =>
+      Math.hypot(
+        cosine * from[0] + sine * from[2] + translation[0] - to[0],
+        from[1] + translation[1] - to[1],
+        -sine * from[0] + cosine * from[2] + translation[2] - to[2],
+      ),
+    ),
+  );
+  return { yaw, translation, before, after, pairs: pairs.length };
+}
+
+function transformPoint(x, y, z, correction) {
+  const cosine = Math.cos(correction.yaw);
+  const sine = Math.sin(correction.yaw);
+  return [
+    cosine * x + sine * z + correction.translation[0],
+    y + correction.translation[1],
+    -sine * x + cosine * z + correction.translation[2],
+  ];
+}
+
+function correctMatrix(matrix, correction) {
+  const result = new Float32Array(matrix);
+  for (let column = 0; column < 3; column++) {
+    const offset = column * 4;
+    const corrected = transformPoint(
+      matrix[offset],
+      matrix[offset + 1],
+      matrix[offset + 2],
+      { ...correction, translation: [0, 0, 0] },
+    );
+    result[offset] = corrected[0];
+    result[offset + 1] = corrected[1];
+    result[offset + 2] = corrected[2];
+  }
+  const position = transformPoint(
+    matrix[12],
+    matrix[13],
+    matrix[14],
+    correction,
+  );
+  result[12] = position[0];
+  result[13] = position[1];
+  result[14] = position[2];
+  return result;
+}
+
+function applyPoseCorrection(frame, correction) {
+  for (let index = 0; index < frame.positions.length; index += 3) {
+    if (!Number.isFinite(frame.positions[index])) continue;
+    const point = transformPoint(
+      frame.positions[index],
+      frame.positions[index + 1],
+      frame.positions[index + 2],
+      correction,
+    );
+    frame.positions.set(point, index);
+  }
+  frame.transformMatrix = correctMatrix(frame.transformMatrix, correction);
+  frame.viewTransformMatrix = correctMatrix(
+    frame.viewTransformMatrix,
+    correction,
+  );
+  if (frame.camera?.length >= 3) {
+    const camera = transformPoint(
+      frame.camera[0],
+      frame.camera[1],
+      frame.camera[2],
+      correction,
+    );
+    frame.camera.set(camera);
+  }
+}
+
+function refineFramePoses(frames, diagnostics) {
+  diagnostics.poseCorrections = [];
+  diagnostics.poseCorrectionApplied = false;
+  if (frames.length < 3) return frames;
+  for (let index = 1; index < frames.length; index++) {
+    const source = frames[index];
+    let best = null;
+    for (let anchorIndex = 0; anchorIndex < index; anchorIndex++) {
+      const pairs = alignmentPairs(source, frames[anchorIndex]);
+      if (pairs.length < 24) continue;
+      const estimate = estimateYawCorrection(pairs);
+      if (!estimate) continue;
+      const score = pairs.length / Math.max(0.015, estimate.before);
+      if (!best || score > best.score)
+        best = { ...estimate, anchorIndex, score };
+    }
+    if (!best) continue;
+    const translationMeters = Math.hypot(...best.translation);
+    const accepted =
+      Math.abs(best.yaw) <= 0.065 &&
+      translationMeters <= 0.1 &&
+      best.before >= 0.018 &&
+      best.after <= Math.min(0.055, best.before * 0.78);
+    diagnostics.poseCorrections.push({
+      frameId: source.frameId,
+      anchorFrameId: frames[best.anchorIndex].frameId,
+      pairs: best.pairs,
+      yawRadians: best.yaw,
+      translationMeters,
+      beforeErrorMeters: best.before,
+      afterErrorMeters: best.after,
+      accepted,
+    });
+    if (!accepted) continue;
+    applyPoseCorrection(source, best);
+    diagnostics.poseCorrectionApplied = true;
+  }
+  return frames;
 }
 
 function percentile(values, fraction) {
@@ -1009,6 +1225,87 @@ export function meshFragmentationIsUnacceptable(surface) {
   );
 }
 
+export function meshWallStructureDiagnostics(mesh) {
+  const triangles = [];
+  let totalArea = 0;
+  let verticalArea = 0;
+  for (let index = 0; index < mesh.indices.length; index += 3) {
+    const offsets = [0, 1, 2].map(
+      (corner) => mesh.indices[index + corner] * 3,
+    );
+    const ab = [0, 1, 2].map(
+      (axis) =>
+        mesh.positions[offsets[1] + axis] -
+        mesh.positions[offsets[0] + axis],
+    );
+    const ac = [0, 1, 2].map(
+      (axis) =>
+        mesh.positions[offsets[2] + axis] -
+        mesh.positions[offsets[0] + axis],
+    );
+    const normal = [
+      ab[1] * ac[2] - ab[2] * ac[1],
+      ab[2] * ac[0] - ab[0] * ac[2],
+      ab[0] * ac[1] - ab[1] * ac[0],
+    ];
+    const twiceArea = Math.hypot(...normal);
+    if (twiceArea < 0.00001) continue;
+    const triangleArea = twiceArea * 0.5;
+    totalArea += triangleArea;
+    const nx = normal[0] / twiceArea;
+    const ny = normal[1] / twiceArea;
+    const nz = normal[2] / twiceArea;
+    if (Math.abs(ny) > 0.45) continue;
+    const horizontalLength = Math.hypot(nx, nz);
+    if (horizontalLength < 0.75) continue;
+    verticalArea += triangleArea;
+    triangles.push({
+      nx: nx / horizontalLength,
+      nz: nz / horizontalLength,
+      area: triangleArea,
+    });
+  }
+  let bestAlignedArea = 0;
+  let bestYawRadians = 0;
+  const alignmentLimit = Math.cos((18 * Math.PI) / 180);
+  for (let degree = 0; degree < 90; degree++) {
+    const yaw = (degree * Math.PI) / 180;
+    const ux = Math.cos(yaw);
+    const uz = Math.sin(yaw);
+    const vx = -uz;
+    const vz = ux;
+    let alignedArea = 0;
+    triangles.forEach((triangle) => {
+      const alignment = Math.max(
+        Math.abs(triangle.nx * ux + triangle.nz * uz),
+        Math.abs(triangle.nx * vx + triangle.nz * vz),
+      );
+      if (alignment >= alignmentLimit) alignedArea += triangle.area;
+    });
+    if (alignedArea > bestAlignedArea) {
+      bestAlignedArea = alignedArea;
+      bestYawRadians = yaw;
+    }
+  }
+  return {
+    totalArea,
+    verticalArea,
+    verticalShare: totalArea ? verticalArea / totalArea : 0,
+    manhattanAlignedRatio: verticalArea
+      ? bestAlignedArea / verticalArea
+      : 1,
+    bestYawRadians,
+  };
+}
+
+export function meshWallStructureIsUnacceptable(diagnostics) {
+  return (
+    diagnostics.verticalArea >= 0.4 &&
+    diagnostics.verticalShare >= 0.22 &&
+    diagnostics.manhattanAlignedRatio < 0.52
+  );
+}
+
 function stabilizeDominantWalls(mesh, voxelSize) {
   const groups = new Map();
   let verticalArea = 0;
@@ -1521,9 +1818,13 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     .map((frame, frameId) => prepareFrame(frame, frameId))
     .filter(Boolean);
   const alignment = {};
-  const usable = selectEvenly(validateFrameOverlap(prepared, alignment), options.maxKeyframes || 40);
+  const overlapping = validateFrameOverlap(prepared, alignment);
+  const usable = selectEvenly(
+    refineFramePoses(overlapping, alignment),
+    options.maxKeyframes || 40,
+  );
   const stages = {
-    algorithmVersion: 4,
+    algorithmVersion: 5,
     inputKeyframes: keyframes.length,
     preparedKeyframes: prepared.length,
     inputDepthSamples: keyframes.reduce((sum, frame) => sum + (frame?.validCount || 0), 0),
@@ -1570,11 +1871,24 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   stages.keptComponentCount = surface.keptComponentCount;
   stages.dominantAreaRatio = surface.dominantAreaRatio;
   const highlyFragmented = meshFragmentationIsUnacceptable(surface);
-  if (!surface.indices.length || surface.surfaceArea < 0.04 || highlyFragmented)
+  const wallStructure = meshWallStructureDiagnostics(surface);
+  stages.wallStructure = wallStructure;
+  const globallyWarped = meshWallStructureIsUnacceptable(wallStructure);
+  const surfaceFailureReason = highlyFragmented
+    ? "multi-view fusion only produced disconnected fragments."
+    : globallyWarped
+      ? "the fused wall directions were globally warped by tracking drift."
+      : "multi-view fusion did not produce enough reliable surface area.";
+  if (
+    !surface.indices.length ||
+    surface.surfaceArea < 0.04 ||
+    highlyFragmented ||
+    globallyWarped
+  )
     return measuredDepthFallback(
       usable,
       options,
-      "multi-view fusion only produced disconnected fragments.",
+      surfaceFailureReason,
       {
         ...stages,
         confirmedVoxels,
@@ -1582,8 +1896,9 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
         fusedSurfaceArea: surface.surfaceArea,
         fusedTriangles: surface.indices.length / 3,
         fragmented: highlyFragmented,
+        globallyWarped,
       },
-    ) || failure("Only tiny disconnected surface fragments were confirmed.", { keyframes: usable.length, confirmedVoxels, surfaceArea: surface.surfaceArea, triangles: surface.indices.length / 3, fragmented: highlyFragmented });
+    ) || failure("The fused surface did not pass structural quality checks.", { keyframes: usable.length, confirmedVoxels, surfaceArea: surface.surfaceArea, triangles: surface.indices.length / 3, fragmented: highlyFragmented, globallyWarped });
   surface = stabilizeDominantWalls(surface, volume.voxelSize);
   surface = smoothPositions(surface, options.smoothingPasses ?? 3);
   report?.("texturing", 88);
@@ -1617,6 +1932,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       components: surface.componentCount || 1,
       keptComponents: surface.keptComponentCount || 1,
       dominantAreaRatio: surface.dominantAreaRatio ?? 1,
+      wallStructure,
       removedComponents: surface.removedComponentCount || 0,
       textureCoverage: mesh.textureCoverage,
     },

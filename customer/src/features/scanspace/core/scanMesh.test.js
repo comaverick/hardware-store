@@ -2,6 +2,8 @@ import {
   createRgbdKeyframe,
   fuseRgbdKeyframes,
   meshFragmentationIsUnacceptable,
+  meshWallStructureDiagnostics,
+  meshWallStructureIsUnacceptable,
 } from "./fusion";
 import { Matrix4, PerspectiveCamera } from "three";
 import { unprojectDepth } from "./depth";
@@ -116,6 +118,41 @@ test("rejects a mesh made from many similarly sized floating islands", () => {
       dominantAreaRatio: 0.8,
     }),
   ).toBe(false);
+});
+
+test("distinguishes planar room walls from a curled shell", () => {
+  const plane = {
+    positions: new Float32Array([
+      -1, 0, -2, 1, 0, -2, 1, 2, -2, -1, 2, -2,
+    ]),
+    indices: new Uint32Array([0, 1, 2, 0, 2, 3]),
+  };
+  expect(
+    meshWallStructureIsUnacceptable(meshWallStructureDiagnostics(plane)),
+  ).toBe(false);
+
+  const positions = [];
+  const indices = [];
+  const segments = 36;
+  for (let segment = 0; segment < segments; segment++) {
+    const angle = (segment / segments) * Math.PI * 2;
+    positions.push(Math.cos(angle), 0, Math.sin(angle));
+    positions.push(Math.cos(angle), 2, Math.sin(angle));
+  }
+  for (let segment = 0; segment < segments; segment++) {
+    const next = (segment + 1) % segments;
+    const bottom = segment * 2;
+    const top = bottom + 1;
+    const nextBottom = next * 2;
+    const nextTop = nextBottom + 1;
+    indices.push(bottom, nextBottom, top, top, nextBottom, nextTop);
+  }
+  const shell = meshWallStructureDiagnostics({
+    positions: new Float32Array(positions),
+    indices: new Uint32Array(indices),
+  });
+  expect(shell.manhattanAlignedRatio).toBeLessThan(0.52);
+  expect(meshWallStructureIsUnacceptable(shell)).toBe(true);
 });
 
 test("fuses repeated RGB-D views into one bounded surface", () => {
@@ -303,6 +340,30 @@ test("rejects a 14cm pose error that passes the spatial-neighbor overlap check",
   expect(result.diagnostics.alignment.pairs.some((pair) =>
     (pair.firstFrame === 1 || pair.secondFrame === 1) && !pair.accepted)).toBe(true);
   expect(result.mesh.bounds.max.z).toBeLessThan(-1.95);
+});
+
+test("refines a small accepted yaw/translation drift before fusion", () => {
+  const drifted = planeKeyframe(0.04);
+  const angle = 0.025;
+  drifted.transformMatrix[0] = Math.cos(angle);
+  drifted.transformMatrix[2] = -Math.sin(angle);
+  drifted.transformMatrix[8] = Math.sin(angle);
+  drifted.transformMatrix[10] = Math.cos(angle);
+  drifted.transformMatrix[12] += 0.025;
+  drifted.transformMatrix[14] += 0.025;
+  const result = fuseRgbdKeyframes([
+    planeKeyframe(0),
+    planeKeyframe(0.08),
+    drifted,
+    planeKeyframe(-0.08),
+  ]);
+  expect(result.mesh?.kind).toBe("projective-tsdf-surface-net");
+  expect(result.diagnostics.alignment.poseCorrectionApplied).toBe(true);
+  expect(
+    result.diagnostics.alignment.poseCorrections.some(
+      (correction) => correction.accepted,
+    ),
+  ).toBe(true);
 });
 
 test("preserves a measured back surface through ordinary furniture-depth occlusion", () => {
