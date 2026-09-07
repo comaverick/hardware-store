@@ -1,4 +1,5 @@
 import PartialScanScene from "./PartialScanScene";
+import { downloadDepthCapture } from "../core/captureDebug";
 
 export default function PartialScanReview({ scan, onRescan, onDone }) {
   return (
@@ -46,6 +47,12 @@ export default function PartialScanReview({ scan, onRescan, onDone }) {
         footprint is measured. Structural detection status: {scan.reason}
       </p>
       <div className="ss-actions">
+        {scan.debugCapture && (
+          <button type="button" onClick={() =>
+            downloadDepthCapture(scan.debugCapture, scan.fusionDiagnostics)}>
+            Download scan diagnostics
+          </button>
+        )}
         <button type="button" onClick={onDone}>
           Back to ScanSpace
         </button>

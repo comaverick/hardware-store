@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { RoomScanner } from "../xr/RoomScanner";
 import { surfaceTextures } from "../core/reconstruction";
 import { buildScanCloud } from "../core/scanCloud";
+import { captureDebugEnabled, snapshotDepthCapture, downloadDepthCapture } from "../core/captureDebug";
 
 function CoverageCompass({ sectors = [], heading = 0 }) {
   const views = sectors.length ? sectors : Array(24).fill(false);
@@ -50,6 +51,7 @@ export default function ScannerPanel({
     scanner = useRef(),
     worker = useRef(),
     fusionWorker = useRef(),
+    debugCapture = useRef(null),
     finished = useRef(false),
     [active, setActive] = useState(false),
     [busy, setBusy] = useState(false),
@@ -72,6 +74,7 @@ export default function ScannerPanel({
     [],
   );
   async function start() {
+    debugCapture.current = null;
     setError("");
     setPartial(null);
     setBusy(true);
@@ -104,32 +107,7 @@ export default function ScannerPanel({
   function downloadDebugCapture() {
     const source = scanner.current;
     if (!source?.keyframes?.length) return;
-    const payload = {
-      version: 1,
-      createdAt: new Date().toISOString(),
-      floorY: source.floorY,
-      observer: source.observer,
-      stats: source.stats,
-      keyframes: source.keyframes.map((frame) => ({
-        columns: frame.columns,
-        rows: frame.rows,
-        depths: Array.from(frame.depths),
-        positions: Array.from(frame.positions),
-        colors: Array.from(frame.colors),
-        colorMask: Array.from(frame.colorMask),
-        projectionMatrix: Array.from(frame.projectionMatrix),
-        transformMatrix: Array.from(frame.transformMatrix),
-        timestamp: frame.timestamp,
-      })),
-    };
-    const url = URL.createObjectURL(
-      new Blob([JSON.stringify(payload)], { type: "application/json" }),
-    );
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `scanspace-debug-${Date.now()}.json`;
-    link.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    downloadDepthCapture(debugCapture.current || snapshotDepthCapture(source), source.stats.fusion);
   }
   async function buildFusedMesh(raw) {
     if (!raw.keyframes?.length) return { mesh: null, diagnostics: null };
@@ -189,6 +167,8 @@ export default function ScannerPanel({
         floorY = raw.floorY,
         ceilingMeasured = false;
       scanner.current.paused = true;
+      if (captureDebugEnabled())
+        debugCapture.current = snapshotDepthCapture(raw);
       try {
         const fused = await buildFusedMesh(raw);
         scanMesh = fused.mesh;
@@ -240,6 +220,8 @@ export default function ScannerPanel({
                   ? raw.stats.fusion?.reason
                   : null,
               fusionMode: raw.stats.fusion?.fallback || "multi-view",
+              debugCapture: debugCapture.current,
+              fusionDiagnostics: raw.stats.fusion,
             },
             {
               stats: raw.stats,
@@ -270,6 +252,8 @@ export default function ScannerPanel({
                   ? raw.stats.fusion?.reason
                   : null,
               fusionMode: raw.stats.fusion?.fallback || "multi-view",
+              debugCapture: debugCapture.current,
+              fusionDiagnostics: raw.stats.fusion,
             },
             { stats: raw.stats, ceilingMeasured: false },
           );
@@ -294,6 +278,7 @@ export default function ScannerPanel({
         inferredWallCount: room.scanMetadata.inferredWallCount,
         scanCloud,
         scanMesh,
+        debugCapture: debugCapture.current,
       });
     } catch (e) {
       setError(e.message);

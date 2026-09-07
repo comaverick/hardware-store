@@ -125,6 +125,7 @@ function filterDepth(frame) {
         confidence[index] = Math.round(255 * clamp((support / 8) * 0.7 + agreement * 0.3, 0.15, 1));
       }
     }
+  const measuredMask = Uint8Array.from(filtered, (depth) => depth > 0 ? 1 : 0);
   // Close only tiny one-pixel holes whose surrounding measurements agree.
   // Repeating this twice softens isolated sensor dropouts but cannot fill a
   // broad unscanned or reflective region.
@@ -221,25 +222,73 @@ function filterDepth(frame) {
       confidence[index] = repairedConfidence;
     });
   }
-  return { filtered, confidence };
+  return { filtered, confidence, measuredMask };
+}
+
+function depthPosition(frame, index, depth) {
+  const p = frame.projectionMatrix;
+  const m = frame.transformMatrix;
+  const nx = ((index % frame.columns) + 0.5) / frame.columns * 2 - 1;
+  const ny = 1 - (Math.floor(index / frame.columns) + 0.5) / frame.rows * 2;
+  const z = -depth;
+  // Solve the projection at the measured camera-space Z, including off-axis
+  // projections. Positions and filtered depths must describe the same surface.
+  const a = p[0] - nx * p[3], b = p[4] - nx * p[7];
+  const c = -(p[8] - nx * p[11]) * z - (p[12] - nx * p[15]);
+  const d = p[1] - ny * p[3], e = p[5] - ny * p[7];
+  const f = -(p[9] - ny * p[11]) * z - (p[13] - ny * p[15]);
+  const determinant = a * e - b * d;
+  if (Math.abs(determinant) < 1e-8) return null;
+  const x = (c * e - b * f) / determinant;
+  const y = (a * f - c * d) / determinant;
+  return [
+    m[0] * x + m[4] * y + m[8] * z + m[12],
+    m[1] * x + m[5] * y + m[9] * z + m[13],
+    m[2] * x + m[6] * y + m[10] * z + m[14],
+  ];
 }
 
 function prepareFrame(frame, frameId) {
   const projection = frame.projectionMatrix;
   const transform = frame.transformMatrix;
   if (projection?.length !== 16 || transform?.length !== 16) return null;
-  if (![projection[0], projection[5], transform[15]].every(Number.isFinite)) return null;
+  if (![...projection, ...transform].every(Number.isFinite)) return null;
   const filtered = filterDepth(frame);
   const filteredDepth = filtered.filtered;
+  const positions = new Float32Array(frame.positions.length).fill(NaN);
+  const freeSpaceMask = new Uint8Array(filteredDepth.length);
   let valid = 0;
-  filteredDepth.forEach((depth) => {
-    if (depth > 0) valid++;
+  filteredDepth.forEach((depth, index) => {
+    if (!depth) return;
+    const point = depthPosition(frame, index, depth);
+    if (!point?.every(Number.isFinite)) {
+      filteredDepth[index] = 0;
+      return;
+    }
+    positions.set(point, index * 3);
+    valid++;
+    // An interpolated pixel or a silhouette must never erase real geometry.
+    if (!filtered.measuredMask[index] || filtered.confidence[index] < 140) return;
+    const x = index % frame.columns, y = Math.floor(index / frame.columns);
+    if (!x || !y || x === frame.columns - 1 || y === frame.rows - 1) return;
+    let agrees = true;
+    for (let dy = -1; dy <= 1; dy++)
+      for (let dx = -1; dx <= 1; dx++) {
+        const neighbor = (y + dy) * frame.columns + x + dx;
+        if (!filtered.measuredMask[neighbor] ||
+            Math.abs(filteredDepth[neighbor] - depth) > Math.max(0.06, depth * 0.03))
+          agrees = false;
+      }
+    if (agrees) freeSpaceMask[index] = 1;
   });
   if (valid < Math.max(40, frame.validCount * 0.18)) return null;
   return {
     ...frame,
     frameId,
+    positions,
     filteredDepth,
+    measuredMask: filtered.measuredMask,
+    freeSpaceMask,
     depthConfidence: filtered.confidence,
     filteredCount: valid,
   };
@@ -266,7 +315,33 @@ function collectBoundsSamples(frames, limit = 42000) {
   return samples;
 }
 
-function validateFrameOverlap(frames) {
+function compareFrameDepths(first, second) {
+  const errors = [];
+  let agreeing = 0;
+  const stride = Math.max(1, Math.ceil(first.filteredDepth.length / 180));
+  for (let index = 0; index < first.filteredDepth.length; index += stride) {
+    if (!first.measuredMask[index]) continue;
+    const offset = index * 3;
+    const projected = projectWorld(second,
+      first.positions[offset], first.positions[offset + 1], first.positions[offset + 2]);
+    if (!projected) continue;
+    const target = gridIndex(second, projected.u, projected.v);
+    if (!second.measuredMask[target]) continue;
+    const measured = second.filteredDepth[target];
+    const error = Math.abs(measured - projected.depth);
+    errors.push(error);
+    if (error <= Math.max(0.06, measured * 0.025)) agreeing++;
+  }
+  errors.sort((a, b) => a - b);
+  return {
+    compared: errors.length,
+    agreeing,
+    medianErrorMeters: errors.length ? errors[Math.floor(errors.length / 2)] : null,
+  };
+}
+
+function validateFrameOverlap(frames, diagnostics = {}) {
+  diagnostics.pairs = [];
   if (frames.length < 2) return frames;
   const cellSize = 0.14;
   const cell = (x, y, z) => [
@@ -322,6 +397,24 @@ function validateFrameOverlap(frames) {
         if (hasNeighbor(target.occupied, coordinates)) overlap++;
       });
       if (overlap / source.coordinates.length >= 0.025) {
+        // Spatial proximity alone admits slightly shifted duplicate walls.
+        // Require a shared surface to agree in projected depth as well. Hidden
+        // parts may disagree; they are not treated as evidence of free space.
+        const forward = compareFrameDepths(frames[left], frames[right]);
+        const backward = compareFrameDepths(frames[right], frames[left]);
+        const compared = forward.compared + backward.compared;
+        const agreeing = forward.agreeing + backward.agreeing;
+        const accepted = agreeing >= 12 && agreeing / Math.max(1, compared) >= 0.2;
+        diagnostics.pairs.push({
+          firstFrame: frames[left].frameId,
+          secondFrame: frames[right].frameId,
+          compared,
+          agreeing,
+          forwardMedianErrorMeters: forward.medianErrorMeters,
+          backwardMedianErrorMeters: backward.medianErrorMeters,
+          accepted,
+        });
+        if (!accepted) continue;
         adjacency[left].push(right);
         adjacency[right].push(left);
       }
@@ -355,6 +448,10 @@ function validateFrameOverlap(frames) {
     );
     return samples(right) - samples(left);
   })[0] || [];
+  diagnostics.selectedFrameIds = strongest.map((index) => frames[index].frameId);
+  diagnostics.rejectedFrameIds = frames
+    .filter((_, index) => !strongest.includes(index)).map((frame) => frame.frameId);
+  diagnostics.poseCorrectionApplied = false;
   return strongest.sort((left, right) => left - right).map((index) => frames[index]);
 }
 
@@ -406,7 +503,6 @@ function makeVolume(bounds, options) {
     varianceSums: new Float32Array(count),
     depthSums: new Float32Array(count),
     freeSpaceVotes: new Uint8Array(count),
-    farOcclusionVotes: new Uint8Array(count),
     colors: new Float32Array(count * 3),
     colorWeights: new Uint8Array(count),
   };
@@ -484,23 +580,16 @@ function integrateProjective(volume, frames, report) {
           // empty. Space behind that surface is merely occluded and must not be
           // used to delete a legitimate back wall behind shelves or furniture.
           if (signedDistance > truncation) {
-            volume.freeSpaceVotes[index] = Math.min(
-              255,
-              volume.freeSpaceVotes[index] + 1,
-            );
-            continue;
-          }
-          if (signedDistance < -truncation) {
-            // Normal occlusion is not negative evidence. Only remember a very
-            // large conflict, which is characteristic of the detached
-            // behind-wall ghosts produced by a bad depth frame.
-            if (signedDistance < -Math.max(0.75, truncation * 3))
-              volume.farOcclusionVotes[index] = Math.min(
+            if (frame.freeSpaceMask[depthIndex])
+              volume.freeSpaceVotes[index] = Math.min(
                 255,
-                volume.farOcclusionVotes[index] + 1,
+                volume.freeSpaceVotes[index] + 1,
               );
             continue;
           }
+          // Hidden space is unknown regardless of its distance behind the
+          // visible surface. It cannot invalidate an earlier wall observation.
+          if (signedDistance < -truncation) continue;
           const previousViews = volume.weights[index];
           const previousWeight = volume.weightSums[index];
           const normalized = signedDistance / truncation;
@@ -641,7 +730,6 @@ function volumeCorner(volume, x, y, z) {
       ? volume.depthSums[index] / volume.weightSums[index]
       : Infinity,
     freeSpaceVotes: volume.freeSpaceVotes[index],
-    farOcclusionVotes: volume.farOcclusionVotes[index],
     color: volume.colorWeights[index]
       ? [volume.colors[colorOffset], volume.colors[colorOffset + 1], volume.colors[colorOffset + 2]]
       : FALLBACK_COLOR.map(linearByte),
@@ -660,14 +748,18 @@ function extractSurfaceNet(volume, report) {
   const cellVertices = new Int32Array(cellWidth * cellHeight * cellDepth).fill(-1);
   const positions = [];
   const colors = [];
+  const rejectionCounts = { insufficientSupport: 0, unstable: 0, freeSpace: 0 };
   for (let z = 0; z < cellDepth; z++)
     for (let y = 0; y < cellHeight; y++)
       for (let x = 0; x < cellWidth; x++) {
         const corners = CUBE_CORNERS.map(([dx, dy, dz]) => volumeCorner(volume, x + dx, y + dy, z + dz));
-        // Five corners need independent multi-view confirmation. The others
-        // may be single-view samples, but no completely unknown corner is ever
-        // used. This retains scan boundaries without fragmenting broad walls.
-        if (corners.some((corner) => corner.weight < 1)) continue;
+        // An unknown corner is not evidence of empty space. Allow a supported
+        // boundary cell, but intersect only edges with measured endpoints.
+        const known = corners.filter((corner) => corner.weight >= 1);
+        if (known.length < 5) {
+          rejectionCounts.insufficientSupport++;
+          continue;
+        }
         const reliable = (corner) => {
           const closeRange = corner.meanDepth < 0.9;
           const requiredViews = closeRange ? 4 : 2;
@@ -676,26 +768,29 @@ function extractSurfaceNet(volume, report) {
             : Math.max(0.055, volume.voxelSize * 1.35);
           const contradictedByFreeSpace =
             corner.freeSpaceVotes >= Math.max(3, corner.weight * 1.25);
-          const contradictedByFarOcclusion =
-            corner.farOcclusionVotes >= Math.max(3, corner.weight * 1.1);
           return (
             corner.weight >= requiredViews &&
             corner.variance <= varianceLimit &&
-            !contradictedByFreeSpace &&
-            !contradictedByFarOcclusion
+            !contradictedByFreeSpace
           );
         };
         const confirmed = corners.filter(
           reliable,
         ).length;
-        if (confirmed < 5) continue;
-        const negative = corners.some((corner) => corner.value < 0);
-        const positive = corners.some((corner) => corner.value >= 0);
+        if (confirmed < 5) {
+          const contradicted = known.some((corner) =>
+            corner.freeSpaceVotes >= Math.max(3, corner.weight * 1.25));
+          rejectionCounts[contradicted ? "freeSpace" : "unstable"]++;
+          continue;
+        }
+        const negative = known.some((corner) => corner.value < 0);
+        const positive = known.some((corner) => corner.value >= 0);
         if (!negative || !positive) continue;
         const intersections = [];
         CUBE_EDGES.forEach(([firstIndex, secondIndex]) => {
           const first = corners[firstIndex];
           const second = corners[secondIndex];
+          if (first.weight < 1 || second.weight < 1) return;
           if ((first.value < 0) === (second.value < 0)) return;
           const amount = clamp(first.value / (first.value - second.value), 0, 1);
           intersections.push({
@@ -752,7 +847,7 @@ function extractSurfaceNet(volume, report) {
         if (first.weight >= 1 && second.weight >= 1 && (first.value < 0) !== (second.value < 0))
           addQuad(cell(x - 1, y - 1, z), cell(x, y - 1, z), cell(x, y, z), cell(x - 1, y, z), first.value < 0);
       }
-  return { positions: new Float32Array(positions), colors: new Uint8Array(colors), indices: new Uint32Array(indices) };
+  return { positions: new Float32Array(positions), colors: new Uint8Array(colors), indices: new Uint32Array(indices), rejectionCounts };
 }
 
 function removeSmallComponents(mesh) {
@@ -1340,22 +1435,33 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     .filter((frame) => frame?.tracking !== false)
     .map((frame, frameId) => prepareFrame(frame, frameId))
     .filter(Boolean);
-  const usable = selectEvenly(validateFrameOverlap(prepared), options.maxKeyframes || 40);
+  const alignment = {};
+  const usable = selectEvenly(validateFrameOverlap(prepared, alignment), options.maxKeyframes || 40);
+  const stages = {
+    algorithmVersion: 4,
+    inputKeyframes: keyframes.length,
+    preparedKeyframes: prepared.length,
+    inputDepthSamples: keyframes.reduce((sum, frame) => sum + (frame?.validCount || 0), 0),
+    filteredDepthSamples: prepared.reduce((sum, frame) => sum + frame.filteredCount, 0),
+    alignment,
+    fusedFrameIds: usable.map((frame) => frame.frameId),
+  };
+  const failure = (reason, details = {}) => ({ mesh: null, diagnostics: { ...stages, ...details, reason } });
   if (usable.length < 2)
     return measuredDepthFallback(
       prepared,
       options,
       "the captured views could not be aligned for multi-view fusion.",
-      { overlappingKeyframes: usable.length },
-    ) || { mesh: null, diagnostics: { reason: "At least two overlapping depth views are required.", keyframes: usable.length } };
+      { ...stages, overlappingKeyframes: usable.length },
+    ) || failure("At least two overlapping depth views are required.", { keyframes: usable.length });
   const samples = collectBoundsSamples(usable);
   if (samples.length < 400)
     return measuredDepthFallback(
       usable,
       options,
       "there were not enough samples for multi-view fusion.",
-      { samples: samples.length },
-    ) || { mesh: null, diagnostics: { reason: "Not enough filtered RGB-D samples for a surface.", keyframes: usable.length, samples: samples.length } };
+      { ...stages, samples: samples.length },
+    ) || failure("Not enough filtered RGB-D samples for a surface.", { keyframes: usable.length, samples: samples.length });
   const bounds = sampleBounds(samples);
   const volume = makeVolume(bounds, options);
   report?.("fusing", 16, { voxelSize: volume.voxelSize, dimensions: volume.dimensions });
@@ -1365,25 +1471,29 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       usable,
       options,
       "the captured views did not overlap enough for full fusion.",
-      { confirmedVoxels, voxelSize: volume.voxelSize },
-    ) || { mesh: null, diagnostics: { reason: "The captured views do not overlap enough for a reliable surface.", keyframes: usable.length, confirmedVoxels, voxelSize: volume.voxelSize } };
+      { ...stages, confirmedVoxels, voxelSize: volume.voxelSize },
+    ) || failure("The captured views do not overlap enough for a reliable surface.", { keyframes: usable.length, confirmedVoxels, voxelSize: volume.voxelSize });
   regularizeVolume(volume);
   propagateSurfaceColors(volume);
   report?.("meshing", 68);
   let surface = extractSurfaceNet(volume, report);
+  stages.cellRejections = surface.rejectionCounts;
+  stages.trianglesBeforeCleanup = surface.indices.length / 3;
   surface = removeSmallComponents(surface);
+  stages.trianglesAfterCleanup = surface.indices.length / 3;
   if (!surface.indices.length || surface.surfaceArea < 0.04)
     return measuredDepthFallback(
       usable,
       options,
       "multi-view fusion only produced disconnected fragments.",
       {
+        ...stages,
         confirmedVoxels,
         voxelSize: volume.voxelSize,
         fusedSurfaceArea: surface.surfaceArea,
         fusedTriangles: surface.indices.length / 3,
       },
-    ) || { mesh: null, diagnostics: { reason: "Only tiny disconnected surface fragments were confirmed.", keyframes: usable.length, confirmedVoxels, surfaceArea: surface.surfaceArea, triangles: surface.indices.length / 3 } };
+    ) || failure("Only tiny disconnected surface fragments were confirmed.", { keyframes: usable.length, confirmedVoxels, surfaceArea: surface.surfaceArea, triangles: surface.indices.length / 3 });
   surface = stabilizeDominantWalls(surface, volume.voxelSize);
   surface = smoothPositions(surface, options.smoothingPasses ?? 3);
   report?.("texturing", 88);
@@ -1402,6 +1512,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   return {
     mesh,
     diagnostics: {
+      ...stages,
       reason: "Projective RGB-D fusion completed.",
       keyframes: usable.length,
       rejectedKeyframes: prepared.length - usable.length,

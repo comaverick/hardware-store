@@ -1,4 +1,6 @@
 import { createRgbdKeyframe, fuseRgbdKeyframes } from "./fusion";
+import { Matrix4, PerspectiveCamera } from "three";
+import { unprojectDepth } from "./depth";
 
 function grid(depthAt = () => 0) {
   const points = [];
@@ -98,7 +100,7 @@ test("returns a safe no-mesh result when depth coverage is too small", () => {
 });
 
 test("fuses repeated RGB-D views into one bounded surface", () => {
-  const keyframes = [0, 0.08, -0.08].map(planeKeyframe);
+  const keyframes = [0, 0.08, -0.08].map((x) => planeKeyframe(x));
   const result = fuseRgbdKeyframes(keyframes, { floorY: 0 });
   expect(result.mesh?.triangleCount).toBeGreaterThan(0);
   expect(result.mesh.kind).toBe("projective-tsdf-surface-net");
@@ -106,6 +108,29 @@ test("fuses repeated RGB-D views into one bounded surface", () => {
   expect(result.mesh.uvs).toHaveLength(result.mesh.vertexCount * 2);
   expect(result.mesh.texture.data.length).toBeGreaterThan(0);
   expect(result.mesh.normals).toHaveLength(result.mesh.positions.length);
+});
+
+test("filtered positions preserve a rotated wall captured with an off-axis projection", () => {
+  const camera = new PerspectiveCamera(80, 1, 0.1, 20);
+  const projectionMatrix = [...camera.projectionMatrix.elements];
+  projectionMatrix[8] = 0.15;
+  projectionMatrix[9] = -0.08;
+  const angle = 0.3;
+  const frames = [0, 0.08, -0.08].map((x) => {
+    const transform = new Matrix4().makeRotationY(angle);
+    transform.setPosition(x * Math.cos(angle), 0, -x * Math.sin(angle));
+    const view = { projectionMatrix, transform: { matrix: transform.elements } };
+    return createRgbdKeyframe(unprojectDepth(
+      { getDepthInMeters: () => 2 }, view, 16, 16,
+    ), { columns: 16, rows: 16, projectionMatrix, transformMatrix: transform.elements });
+  });
+  const result = fuseRgbdKeyframes(frames);
+  expect(result.mesh?.kind).toBe("projective-tsdf-surface-net");
+  for (let i = 0; i < result.mesh.positions.length; i += 3) {
+    const normalDistance = Math.sin(angle) * result.mesh.positions[i] +
+      Math.cos(angle) * result.mesh.positions[i + 2];
+    expect(Math.abs(normalDistance + 2)).toBeLessThan(0.06);
+  }
 });
 
 test("does not fabricate a mesh from an unconfirmed single camera view", () => {
@@ -214,24 +239,51 @@ test("rejects a repeatedly reported near-field phantom contradicted by clear vie
   expect(closestSurface).toBeLessThan(-1.2);
 });
 
-test("rejects a ghost surface behind a wall when nearer depth occludes it", () => {
-  const keyframes = [
-    planeKeyframe(0),
-    planeKeyframe(0.04, true, false, 3.4),
-    planeKeyframe(-0.04, true, false, 3.4),
-    planeKeyframe(0.08, true, false, 3.4),
-    planeKeyframe(-0.08, true, false, 3.4),
-    planeKeyframe(0.12),
-    planeKeyframe(-0.12),
-    planeKeyframe(0.16),
-    planeKeyframe(-0.16),
-  ];
-  const result = fuseRgbdKeyframes(keyframes, { floorY: 0 });
-  expect(result.mesh?.triangleCount).toBeGreaterThan(0);
-  let farthestSurface = Infinity;
-  for (let index = 2; index < result.mesh.positions.length; index += 3)
-    farthestSurface = Math.min(farthestSurface, result.mesh.positions[index]);
-  expect(farthestSurface).toBeGreaterThan(-2.8);
+function measuredBackArea(mesh) {
+  let area = 0;
+  for (let i = 0; i < mesh.indices.length; i += 3) {
+    const points = [0, 1, 2].map((corner) => {
+      const offset = mesh.indices[i + corner] * 3;
+      return Array.from(mesh.positions.slice(offset, offset + 3));
+    });
+    const center = [0, 1, 2].map((axis) =>
+      (points[0][axis] + points[1][axis] + points[2][axis]) / 3);
+    if (center[0] <= -1.6 || center[0] >= -1.05 ||
+        center[1] <= 1.05 || center[1] >= 1.6 ||
+        Math.abs(center[2] + 2) >= 0.05) continue;
+    const a = points[1].map((v, axis) => v - points[0][axis]);
+    const b = points[2].map((v, axis) => v - points[0][axis]);
+    area += Math.hypot(a[1] * b[2] - a[2] * b[1],
+      a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]) / 2;
+  }
+  return area;
+}
+
+test.each([1, 0.6])("preserves at least 85%% of a wall later occluded at %sm", (depth) => {
+  // This exact visible wall region used to go from 0.302m² to zero solely
+  // because ten later views saw an object in front of it.
+  const frames = [0, 0.05, -0.05].map((x) => planeKeyframe(x));
+  const baseline = fuseRgbdKeyframes(frames).mesh;
+  const result = fuseRgbdKeyframes([
+    ...frames,
+    ...[0.08, -0.08, 0.11, -0.11, 0.14, -0.14, 0.17, -0.17, 0.2, -0.2]
+      .map((x) => planeKeyframe(x, true, false, depth)),
+  ]);
+  expect(result.mesh?.kind).toBe("projective-tsdf-surface-net");
+  expect(measuredBackArea(result.mesh)).toBeGreaterThan(measuredBackArea(baseline) * 0.85);
+});
+
+test("rejects a 14cm pose error that passes the spatial-neighbor overlap check", () => {
+  const shifted = planeKeyframe(0.04);
+  shifted.transformMatrix[14] = 0.14;
+  const result = fuseRgbdKeyframes([
+    planeKeyframe(0), shifted, planeKeyframe(0.08), planeKeyframe(-0.08),
+  ]);
+  expect(result.mesh?.kind).toBe("projective-tsdf-surface-net");
+  expect(result.diagnostics.alignment.rejectedFrameIds).toContain(1);
+  expect(result.diagnostics.alignment.pairs.some((pair) =>
+    (pair.firstFrame === 1 || pair.secondFrame === 1) && !pair.accepted)).toBe(true);
+  expect(result.mesh.bounds.max.z).toBeLessThan(-1.95);
 });
 
 test("preserves a measured back surface through ordinary furniture-depth occlusion", () => {
@@ -268,6 +320,17 @@ test("uses a continuous measured surface instead of dots when strict close-range
   expect(result.mesh?.triangleCount).toBeGreaterThan(100);
   expect(result.mesh.kind).toBe("measured-depth-surface");
   expect(result.diagnostics.fallback).toBe("strongest-measured-view");
+});
+
+test("a repaired depth dropout has a matching 3D vertex in the measured-view fallback", () => {
+  const result = fuseRgbdKeyframes(
+    [0, 0.04, -0.04].map((x) => planeKeyframe(x, true, "single", false, 0.62)),
+  );
+  expect(result.mesh?.kind).toBe("measured-depth-surface");
+  // Every candidate frame originally lacked this pixel. Repaired depth must
+  // produce a position as well; retaining the raw NaN left a hole in fallback.
+  expect(result.mesh.triangleCount).toBe(450);
+  expect(Array.from(result.mesh.positions).every(Number.isFinite)).toBe(true);
 });
 
 test("uses one measured view instead of dots when captured poses cannot be aligned", () => {

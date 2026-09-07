@@ -8,6 +8,7 @@ import {
   UploadSimple,
 } from "@phosphor-icons/react";
 import { detectCapabilities } from "./core/depth";
+import { downloadDepthCapture } from "./core/captureDebug";
 import { useScanSpace, sampleRoom } from "./store";
 import { loadDraft, captureStore } from "./services";
 import RoomReview from "./components/RoomReview";
@@ -282,6 +283,12 @@ export default function ScanSpace() {
           {capture.stats && (
             <div className="ss-scan-summary">
               <strong>Scan review</strong>
+              {capture.debugCapture && (
+                <button type="button" onClick={() =>
+                  downloadDepthCapture(capture.debugCapture, capture.stats.fusion)}>
+                  Download scan diagnostics
+                </button>
+              )}
               <p>
                 {capture.stats.depthFrames} depth frames ·{" "}
                 {capture.stats.pointCount.toLocaleString()} points ·{" "}
