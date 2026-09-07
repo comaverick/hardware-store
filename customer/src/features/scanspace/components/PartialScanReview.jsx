@@ -21,7 +21,11 @@ export default function PartialScanReview({ scan, onRescan, onDone }) {
               ? scan.mesh.triangleCount.toLocaleString()
               : scan.cloud?.count?.toLocaleString() || 0}
           </strong>
-          {scan.mesh ? "reconstructed triangles" : "rendered depth points"}
+          {scan.mesh?.kind === "measured-depth-surface"
+            ? "single-view measured triangles"
+            : scan.mesh
+              ? "reconstructed triangles"
+              : "rendered depth points"}
         </span>
         <span>
           <strong>

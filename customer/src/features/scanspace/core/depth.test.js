@@ -1,5 +1,10 @@
 import { PerspectiveCamera, Matrix4 } from "three";
-import { detectCapabilities, unprojectDepth, VoxelCloud } from "./depth";
+import {
+  detectCapabilities,
+  unprojectDepth,
+  viewSampleGrid,
+  VoxelCloud,
+} from "./depth";
 import { reconstructRoom } from "./reconstruction";
 import { area } from "./domain";
 
@@ -27,7 +32,7 @@ test("unprojects plane depth with the XR view when sensor geometry is absent", (
   expect(points[0].z).toBeCloseTo(1);
   expect(depth.getDepthInMeters).toHaveBeenCalledWith(0.25, 0.25);
 });
-test("prefers calibrated depth-sensor geometry when the runtime exposes it", () => {
+test("does not apply native depth-buffer geometry a second time", () => {
   const camera = new PerspectiveCamera(90, 1, 0.1, 100);
   const identity = new Matrix4().elements;
   const view = {
@@ -41,7 +46,7 @@ test("prefers calibrated depth-sensor geometry when the runtime exposes it", () 
     normDepthBufferFromNormView: { matrix: identity },
   };
   const [point] = unprojectDepth(depth, view, 1, 1);
-  expect(point.x).toBeCloseTo(5);
+  expect(point.x).toBeCloseTo(1);
   expect(point.z).toBeCloseTo(-2);
   expect(depth.getDepthInMeters).toHaveBeenCalledWith(0.5, 0.5);
 });
@@ -55,6 +60,14 @@ test("invalid depths do not become geometry", () => {
     expect(
       unprojectDepth({ getDepthInMeters: () => meters }, view, 2, 2),
     ).toHaveLength(0);
+});
+test("sample grid follows the XR view aspect rather than native depth storage", () => {
+  const landscape = new PerspectiveCamera(70, 16 / 9, 0.1, 20);
+  const portrait = new PerspectiveCamera(70, 9 / 16, 0.1, 20);
+  expect(viewSampleGrid({ projectionMatrix: landscape.projectionMatrix.elements }))
+    .toEqual({ columns: 60, rows: 34 });
+  expect(viewSampleGrid({ projectionMatrix: portrait.projectionMatrix.elements }))
+    .toEqual({ columns: 34, rows: 60 });
 });
 test("room-depth capture keeps valid surfaces beyond the near-field guard", () => {
   const camera = new PerspectiveCamera(),

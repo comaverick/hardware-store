@@ -28,8 +28,6 @@ export function createRgbdKeyframe(points, options = {}) {
   const depths = new Float32Array(length);
   const colors = new Uint8Array(length * 3);
   const colorMask = new Uint8Array(length);
-  const depthUvs = new Float32Array(length * 2);
-  depthUvs.fill(Number.NaN);
   let validCount = 0;
   let coloredCount = 0;
   points.forEach((point) => {
@@ -44,12 +42,6 @@ export function createRgbdKeyframe(points, options = {}) {
     positions[target + 1] = point.y;
     positions[target + 2] = point.z;
     depths[index] = Number.isFinite(point.depth) ? point.depth : 0;
-    depthUvs[index * 2] = Number.isFinite(point.depthU)
-      ? point.depthU
-      : (x + 0.5) / columns;
-    depthUvs[index * 2 + 1] = Number.isFinite(point.depthV)
-      ? point.depthV
-      : (y + 0.5) / rows;
     validCount++;
     if (Array.isArray(point.color) && point.color.slice(0, 3).every(Number.isFinite)) {
       colors[target] = clamp(Math.round(point.color[0]), 0, 255);
@@ -62,14 +54,14 @@ export function createRgbdKeyframe(points, options = {}) {
   if (validCount < 6) return null;
   const image = options.colorImage;
   return {
-    version: 2,
+    version: 3,
+    geometryMode: options.geometryMode || "view-aligned-v1",
     columns,
     rows,
     positions,
     depths,
     colors,
     colorMask,
-    depthUvs,
     colorImage: image?.data || null,
     colorWidth: image?.width || 0,
     colorHeight: image?.height || 0,
@@ -84,6 +76,13 @@ export function createRgbdKeyframe(points, options = {}) {
     ),
     viewTransformMatrix: new Float32Array(
       options.viewTransformMatrix || options.transformMatrix || [],
+    ),
+    nativeDepthWidth: Number(options.nativeDepthWidth) || 0,
+    nativeDepthHeight: Number(options.nativeDepthHeight) || 0,
+    nativeDepthUvTransform: new Float32Array(
+      options.nativeDepthUvTransform?.length === 16
+        ? options.nativeDepthUvTransform
+        : [],
     ),
     camera: new Float32Array([
       options.camera?.x || 0,
@@ -243,17 +242,14 @@ function filterDepth(frame) {
   return { filtered, confidence, measuredMask };
 }
 
-function depthPosition(frame, index, depth) {
+export function depthPosition(frame, index, depth) {
   const p = frame.projectionMatrix;
   const m = frame.transformMatrix;
-  const storedU = frame.depthUvs?.[index * 2];
-  const storedV = frame.depthUvs?.[index * 2 + 1];
-  const u = Number.isFinite(storedU)
-    ? storedU
-    : ((index % frame.columns) + 0.5) / frame.columns;
-  const v = Number.isFinite(storedV)
-    ? storedV
-    : (Math.floor(index / frame.columns) + 0.5) / frame.rows;
+  // Keyframe storage is a normalized XR-view grid. Its cell centre is the
+  // single source of truth for depth sampling, unprojection, filtering,
+  // overlap checks, visibility checks, and hole repair.
+  const u = ((index % frame.columns) + 0.5) / frame.columns;
+  const v = (Math.floor(index / frame.columns) + 0.5) / frame.rows;
   const nx = u * 2 - 1;
   const ny = 1 - v * 2;
   const z = -depth;
@@ -349,6 +345,86 @@ function collectBoundsSamples(frames, limit = 42000) {
   return samples;
 }
 
+function buildAcceptedObservations(frames, limit = 20000) {
+  const total = frames.reduce(
+    (sum, frame) =>
+      sum +
+      frame.measuredMask.reduce((count, measured) => count + measured, 0),
+    0,
+  );
+  const stride = Math.max(1, Math.ceil(total / limit));
+  const positions = [];
+  const colors = [];
+  const colorMask = [];
+  let cursor = 0;
+  frames.forEach((frame) => {
+    for (let index = 0; index < frame.measuredMask.length; index++) {
+      if (!frame.measuredMask[index] || cursor++ % stride) continue;
+      const offset = index * 3;
+      const point = [
+        frame.positions[offset],
+        frame.positions[offset + 1],
+        frame.positions[offset + 2],
+      ];
+      if (!point.every(Number.isFinite)) continue;
+      positions.push(...point);
+      if (frame.colorMask?.[index]) {
+        colors.push(
+          frame.colors[offset],
+          frame.colors[offset + 1],
+          frame.colors[offset + 2],
+        );
+        colorMask.push(1);
+      } else {
+        colors.push(0, 0, 0);
+        colorMask.push(0);
+      }
+    }
+  });
+  return {
+    version: 1,
+    coordinateMode: "view-aligned-v1",
+    count: positions.length / 3,
+    sourceMeasuredCount: total,
+    positions: new Float32Array(positions),
+    colors: new Uint8Array(colors),
+    colorMask: new Uint8Array(colorMask),
+  };
+}
+
+function frameRoundTripDiagnostics(frame, limit = 160) {
+  const stride = Math.max(1, Math.ceil(frame.filteredCount / limit));
+  let cursor = 0;
+  let checked = 0;
+  let indexMismatches = 0;
+  let maxDepthErrorMeters = 0;
+  for (let index = 0; index < frame.filteredDepth.length; index++) {
+    if (!frame.filteredDepth[index] || cursor++ % stride) continue;
+    const offset = index * 3;
+    const projected = projectWorld(
+      frame,
+      frame.positions[offset],
+      frame.positions[offset + 1],
+      frame.positions[offset + 2],
+    );
+    checked++;
+    if (!projected || gridIndex(frame, projected.u, projected.v) !== index) {
+      indexMismatches++;
+      continue;
+    }
+    maxDepthErrorMeters = Math.max(
+      maxDepthErrorMeters,
+      Math.abs(projected.depth - frame.filteredDepth[index]),
+    );
+  }
+  return {
+    frameId: frame.frameId,
+    checked,
+    indexMismatches,
+    maxDepthErrorMeters,
+  };
+}
+
 function compareFrameDepths(first, second) {
   const errors = [];
   let agreeing = 0;
@@ -376,6 +452,7 @@ function compareFrameDepths(first, second) {
 
 function validateFrameOverlap(frames, diagnostics = {}) {
   diagnostics.pairs = [];
+  diagnostics.poseCorrectionApplied = false;
   if (frames.length < 2) return frames;
   const cellSize = 0.14;
   const cell = (x, y, z) => [
@@ -485,216 +562,7 @@ function validateFrameOverlap(frames, diagnostics = {}) {
   diagnostics.selectedFrameIds = strongest.map((index) => frames[index].frameId);
   diagnostics.rejectedFrameIds = frames
     .filter((_, index) => !strongest.includes(index)).map((frame) => frame.frameId);
-  diagnostics.poseCorrectionApplied = false;
   return strongest.sort((left, right) => left - right).map((index) => frames[index]);
-}
-
-function median(values) {
-  if (!values.length) return null;
-  const sorted = [...values].sort((left, right) => left - right);
-  return sorted[Math.floor(sorted.length / 2)];
-}
-
-function alignmentPairs(source, target, limit = 260) {
-  const pairs = [];
-  const stride = Math.max(1, Math.ceil(source.filteredCount / limit));
-  let cursor = 0;
-  for (let index = 0; index < source.filteredDepth.length; index++) {
-    if (!source.measuredMask[index] || cursor++ % stride) continue;
-    const offset = index * 3;
-    const from = [
-      source.positions[offset],
-      source.positions[offset + 1],
-      source.positions[offset + 2],
-    ];
-    if (!from.every(Number.isFinite)) continue;
-    const projected = projectWorld(target, from[0], from[1], from[2]);
-    if (!projected) continue;
-    const centerIndex = gridIndex(target, projected.u, projected.v);
-    const centerX = centerIndex % target.columns;
-    const centerY = Math.floor(centerIndex / target.columns);
-    let best = null;
-    for (let dy = -1; dy <= 1; dy++)
-      for (let dx = -1; dx <= 1; dx++) {
-        const x = centerX + dx;
-        const y = centerY + dy;
-        if (x < 0 || y < 0 || x >= target.columns || y >= target.rows)
-          continue;
-        const next = y * target.columns + x;
-        if (!target.measuredMask[next]) continue;
-        const measured = target.filteredDepth[next];
-        const depthError = Math.abs(measured - projected.depth);
-        if (depthError > Math.max(0.14, measured * 0.055)) continue;
-        const targetOffset = next * 3;
-        const to = [
-          target.positions[targetOffset],
-          target.positions[targetOffset + 1],
-          target.positions[targetOffset + 2],
-        ];
-        if (!to.every(Number.isFinite)) continue;
-        const distance = Math.hypot(
-          to[0] - from[0],
-          to[1] - from[1],
-          to[2] - from[2],
-        );
-        if (!best || distance < best.distance)
-          best = { from, to, distance };
-      }
-    if (best) pairs.push(best);
-  }
-  if (pairs.length < 24) return [];
-  const distanceMedian = median(pairs.map((pair) => pair.distance));
-  const maximum = Math.max(0.035, distanceMedian * 2.5);
-  return pairs.filter((pair) => pair.distance <= maximum);
-}
-
-function estimateYawCorrection(pairs) {
-  if (pairs.length < 24) return null;
-  const sourceCenter = [0, 0, 0];
-  const targetCenter = [0, 0, 0];
-  pairs.forEach(({ from, to }) => {
-    for (let axis = 0; axis < 3; axis++) {
-      sourceCenter[axis] += from[axis] / pairs.length;
-      targetCenter[axis] += to[axis] / pairs.length;
-    }
-  });
-  let dot = 0;
-  let cross = 0;
-  let spread = 0;
-  pairs.forEach(({ from, to }) => {
-    const sx = from[0] - sourceCenter[0];
-    const sz = from[2] - sourceCenter[2];
-    const tx = to[0] - targetCenter[0];
-    const tz = to[2] - targetCenter[2];
-    dot += sx * tx + sz * tz;
-    cross += sz * tx - sx * tz;
-    spread += sx * sx + sz * sz;
-  });
-  if (spread / pairs.length < 0.015) return null;
-  const yaw = Math.atan2(cross, dot);
-  const cosine = Math.cos(yaw);
-  const sine = Math.sin(yaw);
-  const translation = [
-    targetCenter[0] -
-      (cosine * sourceCenter[0] + sine * sourceCenter[2]),
-    targetCenter[1] - sourceCenter[1],
-    targetCenter[2] -
-      (-sine * sourceCenter[0] + cosine * sourceCenter[2]),
-  ];
-  const before = median(pairs.map((pair) => pair.distance));
-  const after = median(
-    pairs.map(({ from, to }) =>
-      Math.hypot(
-        cosine * from[0] + sine * from[2] + translation[0] - to[0],
-        from[1] + translation[1] - to[1],
-        -sine * from[0] + cosine * from[2] + translation[2] - to[2],
-      ),
-    ),
-  );
-  return { yaw, translation, before, after, pairs: pairs.length };
-}
-
-function transformPoint(x, y, z, correction) {
-  const cosine = Math.cos(correction.yaw);
-  const sine = Math.sin(correction.yaw);
-  return [
-    cosine * x + sine * z + correction.translation[0],
-    y + correction.translation[1],
-    -sine * x + cosine * z + correction.translation[2],
-  ];
-}
-
-function correctMatrix(matrix, correction) {
-  const result = new Float32Array(matrix);
-  for (let column = 0; column < 3; column++) {
-    const offset = column * 4;
-    const corrected = transformPoint(
-      matrix[offset],
-      matrix[offset + 1],
-      matrix[offset + 2],
-      { ...correction, translation: [0, 0, 0] },
-    );
-    result[offset] = corrected[0];
-    result[offset + 1] = corrected[1];
-    result[offset + 2] = corrected[2];
-  }
-  const position = transformPoint(
-    matrix[12],
-    matrix[13],
-    matrix[14],
-    correction,
-  );
-  result[12] = position[0];
-  result[13] = position[1];
-  result[14] = position[2];
-  return result;
-}
-
-function applyPoseCorrection(frame, correction) {
-  for (let index = 0; index < frame.positions.length; index += 3) {
-    if (!Number.isFinite(frame.positions[index])) continue;
-    const point = transformPoint(
-      frame.positions[index],
-      frame.positions[index + 1],
-      frame.positions[index + 2],
-      correction,
-    );
-    frame.positions.set(point, index);
-  }
-  frame.transformMatrix = correctMatrix(frame.transformMatrix, correction);
-  frame.viewTransformMatrix = correctMatrix(
-    frame.viewTransformMatrix,
-    correction,
-  );
-  if (frame.camera?.length >= 3) {
-    const camera = transformPoint(
-      frame.camera[0],
-      frame.camera[1],
-      frame.camera[2],
-      correction,
-    );
-    frame.camera.set(camera);
-  }
-}
-
-function refineFramePoses(frames, diagnostics) {
-  diagnostics.poseCorrections = [];
-  diagnostics.poseCorrectionApplied = false;
-  if (frames.length < 3) return frames;
-  for (let index = 1; index < frames.length; index++) {
-    const source = frames[index];
-    let best = null;
-    for (let anchorIndex = 0; anchorIndex < index; anchorIndex++) {
-      const pairs = alignmentPairs(source, frames[anchorIndex]);
-      if (pairs.length < 24) continue;
-      const estimate = estimateYawCorrection(pairs);
-      if (!estimate) continue;
-      const score = pairs.length / Math.max(0.015, estimate.before);
-      if (!best || score > best.score)
-        best = { ...estimate, anchorIndex, score };
-    }
-    if (!best) continue;
-    const translationMeters = Math.hypot(...best.translation);
-    const accepted =
-      Math.abs(best.yaw) <= 0.065 &&
-      translationMeters <= 0.1 &&
-      best.before >= 0.018 &&
-      best.after <= Math.min(0.055, best.before * 0.78);
-    diagnostics.poseCorrections.push({
-      frameId: source.frameId,
-      anchorFrameId: frames[best.anchorIndex].frameId,
-      pairs: best.pairs,
-      yawRadians: best.yaw,
-      translationMeters,
-      beforeErrorMeters: best.before,
-      afterErrorMeters: best.after,
-      accepted,
-    });
-    if (!accepted) continue;
-    applyPoseCorrection(source, best);
-    diagnostics.poseCorrectionApplied = true;
-  }
-  return frames;
 }
 
 function percentile(values, fraction) {
@@ -779,7 +647,7 @@ function projectView(frame, point) {
   return { u, v, depth: -point.z };
 }
 
-function gridIndex(frame, u, v) {
+export function gridIndex(frame, u, v) {
   const x = clamp(Math.floor(u * frame.columns), 0, frame.columns - 1);
   const y = clamp(Math.floor(v * frame.rows), 0, frame.rows - 1);
   return y * frame.columns + x;
@@ -1298,7 +1166,7 @@ export function meshWallStructureDiagnostics(mesh) {
   };
 }
 
-export function meshWallStructureIsUnacceptable(diagnostics) {
+export function meshOutsideRectangularRoomModel(diagnostics) {
   return (
     diagnostics.verticalArea >= 0.4 &&
     diagnostics.verticalShare >= 0.22 &&
@@ -1465,8 +1333,11 @@ function imageLuminance(frame) {
 function buildAtlas(frames) {
   const images = frames.filter((frame) => frame.colorImage?.length && frame.colorWidth && frame.colorHeight);
   if (!images.length) return null;
-  const tileWidth = images[0].colorWidth;
-  const tileHeight = images[0].colorHeight;
+  // Normalize differently sized/oriented keyframe copies into equal atlas
+  // tiles. UVs remain normalized per frame, so this resampling preserves
+  // correspondence while keeping atlas addressing uniform.
+  const tileWidth = Math.max(...images.map((frame) => frame.colorWidth));
+  const tileHeight = Math.max(...images.map((frame) => frame.colorHeight));
   const padding = 4;
   const strideX = tileWidth + padding * 2;
   const strideY = tileHeight + padding * 2;
@@ -1484,9 +1355,18 @@ function buildAtlas(frames) {
     // camera keyframe into the neighboring atlas tile.
     for (let y = -padding; y < tileHeight + padding; y++)
       for (let x = -padding; x < tileWidth + padding; x++) {
-        const sourceX = clamp(x, 0, tileWidth - 1);
-        const sourceY = clamp(y, 0, tileHeight - 1);
-        const source = (sourceY * tileWidth + sourceX) * frame.colorChannels;
+        const tileSourceX = clamp(x, 0, tileWidth - 1);
+        const tileSourceY = clamp(y, 0, tileHeight - 1);
+        const sourceX = Math.round(
+          (tileSourceX / Math.max(1, tileWidth - 1)) *
+            (frame.colorWidth - 1),
+        );
+        const sourceY = Math.round(
+          (tileSourceY / Math.max(1, tileHeight - 1)) *
+            (frame.colorHeight - 1),
+        );
+        const source =
+          (sourceY * frame.colorWidth + sourceX) * frame.colorChannels;
         const target = ((tileY * strideY + y + padding) * width + tileX * strideX + x + padding) * 4;
         data[target] = clamp(Math.round(frame.colorImage[source] * scale), 0, 255);
         data[target + 1] = clamp(Math.round(frame.colorImage[source + 1] * scale), 0, 255);
@@ -1509,7 +1389,7 @@ function buildAtlas(frames) {
   };
 }
 
-function projectWorld(frame, x, y, z) {
+export function projectWorld(frame, x, y, z) {
   return projectView(frame, worldToView(frame, x, y, z));
 }
 
@@ -1558,17 +1438,46 @@ function texturedMesh(mesh, frames) {
     }), { x: 0, y: 0, z: 0 });
     const candidates = [];
     atlas.frames.forEach((frame) => {
-      const projected = projectColorWorld(frame, center.x, center.y, center.z);
-      if (!projected || projected.u < 0.015 || projected.v < 0.015 || projected.u > 0.985 || projected.v > 0.985) return;
-      const projections = triangle.map((vertex) => projectColorWorld(
+      const colorProjection = projectColorWorld(
+        frame,
+        center.x,
+        center.y,
+        center.z,
+      );
+      const depthProjection = projectWorld(
+        frame,
+        center.x,
+        center.y,
+        center.z,
+      );
+      if (
+        !colorProjection ||
+        !depthProjection ||
+        colorProjection.u < 0.015 ||
+        colorProjection.v < 0.015 ||
+        colorProjection.u > 0.985 ||
+        colorProjection.v > 0.985 ||
+        depthProjection.u < 0.015 ||
+        depthProjection.v < 0.015 ||
+        depthProjection.u > 0.985 ||
+        depthProjection.v > 0.985
+      )
+        return;
+      const colorProjections = triangle.map((vertex) => projectColorWorld(
         frame,
         mesh.positions[vertex * 3],
         mesh.positions[vertex * 3 + 1],
         mesh.positions[vertex * 3 + 2],
       ));
-      if (projections.some((value) =>
+      if (colorProjections.some((value) =>
         !value || value.u < 0.01 || value.v < 0.01 || value.u > 0.99 || value.v > 0.99)) return;
-      const depthIndex = gridIndex(frame, projected.u, projected.v);
+      // Visibility belongs to the depth camera/grid. Color UVs are only used
+      // after the surface has passed that independent occlusion check.
+      const depthIndex = gridIndex(
+        frame,
+        depthProjection.u,
+        depthProjection.v,
+      );
       const centerX = depthIndex % frame.columns;
       const centerY = Math.floor(depthIndex / frame.columns);
       let closestAgreement = Infinity;
@@ -1583,7 +1492,7 @@ function texturedMesh(mesh, frames) {
           if (x < 0 || y < 0 || x >= frame.columns || y >= frame.rows) continue;
           const measured = frame.filteredDepth[y * frame.columns + x];
           if (!measured) continue;
-          const difference = Math.abs(measured - projected.depth);
+          const difference = Math.abs(measured - depthProjection.depth);
           if (difference < closestAgreement) {
             closestAgreement = difference;
             closestDepth = measured;
@@ -1599,7 +1508,11 @@ function texturedMesh(mesh, frames) {
       const dz = frame.transformMatrix[14] - center.z;
       const distance = Math.hypot(dx, dy, dz) || 1;
       const facing = Math.abs((normal.x * dx + normal.y * dy + normal.z * dz) / distance);
-      candidates.push({ frame, projections, score: facing * 2 + 1 / distance });
+      candidates.push({
+        frame,
+        projections: colorProjections,
+        score: facing * 2 + 1 / distance,
+      });
     });
     candidates.sort((left, right) => right.score - left.score);
     const record = { triangle, candidates: candidates.slice(0, 3), selected: 0 };
@@ -1799,6 +1712,7 @@ function measuredDepthFallback(frames, options, failureReason, details = {}) {
   };
   return {
     mesh,
+    observations: buildAcceptedObservations([frame]),
     diagnostics: {
       ...details,
       reason: `A continuous measured depth surface was used because ${failureReason}`,
@@ -1813,26 +1727,45 @@ function measuredDepthFallback(frames, options, failureReason, details = {}) {
 
 export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   report?.("preparing", 3);
+  const ambiguousLegacyKeyframes = keyframes.filter(
+    (frame) => frame?.legacyGeometryAmbiguous,
+  ).length;
   const prepared = keyframes
-    .filter((frame) => frame?.tracking !== false)
-    .map((frame, frameId) => prepareFrame(frame, frameId))
+    .map((frame, frameId) => ({ frame, frameId }))
+    .filter(
+      ({ frame }) =>
+        frame?.tracking !== false && !frame?.legacyGeometryAmbiguous,
+    )
+    .map(({ frame, frameId }) => prepareFrame(frame, frameId))
     .filter(Boolean);
   const alignment = {};
   const overlapping = validateFrameOverlap(prepared, alignment);
+  alignment.poseRefinement = "disabled-until-independently-validated";
   const usable = selectEvenly(
-    refineFramePoses(overlapping, alignment),
+    overlapping,
     options.maxKeyframes || 40,
   );
   const stages = {
-    algorithmVersion: 5,
+    algorithmVersion: 6,
+    coordinateMode: "view-aligned-v1",
     inputKeyframes: keyframes.length,
+    ambiguousLegacyKeyframes,
     preparedKeyframes: prepared.length,
     inputDepthSamples: keyframes.reduce((sum, frame) => sum + (frame?.validCount || 0), 0),
     filteredDepthSamples: prepared.reduce((sum, frame) => sum + frame.filteredCount, 0),
+    roundTrip: prepared.map((frame) => frameRoundTripDiagnostics(frame)),
     alignment,
     fusedFrameIds: usable.map((frame) => frame.frameId),
   };
-  const failure = (reason, details = {}) => ({ mesh: null, diagnostics: { ...stages, ...details, reason } });
+  const failure = (reason, details = {}) => ({
+    mesh: null,
+    observations: buildAcceptedObservations(usable.length ? usable : prepared),
+    diagnostics: { ...stages, ...details, reason },
+  });
+  if (ambiguousLegacyKeyframes && !prepared.length)
+    return failure(
+      "This older diagnostic capture used ambiguous depth-buffer coordinates. Record a fresh scan with the repaired view-aligned geometry format.",
+    );
   if (usable.length < 2)
     return measuredDepthFallback(
       prepared,
@@ -1873,17 +1806,15 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   const highlyFragmented = meshFragmentationIsUnacceptable(surface);
   const wallStructure = meshWallStructureDiagnostics(surface);
   stages.wallStructure = wallStructure;
-  const globallyWarped = meshWallStructureIsUnacceptable(wallStructure);
+  stages.rectangularRoomModelCompatible =
+    !meshOutsideRectangularRoomModel(wallStructure);
   const surfaceFailureReason = highlyFragmented
     ? "multi-view fusion only produced disconnected fragments."
-    : globallyWarped
-      ? "the fused wall directions were globally warped by tracking drift."
-      : "multi-view fusion did not produce enough reliable surface area.";
+    : "multi-view fusion did not produce enough reliable surface area.";
   if (
     !surface.indices.length ||
     surface.surfaceArea < 0.04 ||
-    highlyFragmented ||
-    globallyWarped
+    highlyFragmented
   )
     return measuredDepthFallback(
       usable,
@@ -1896,10 +1827,13 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
         fusedSurfaceArea: surface.surfaceArea,
         fusedTriangles: surface.indices.length / 3,
         fragmented: highlyFragmented,
-        globallyWarped,
+        rectangularRoomModelCompatible:
+          stages.rectangularRoomModelCompatible,
       },
-    ) || failure("The fused surface did not pass structural quality checks.", { keyframes: usable.length, confirmedVoxels, surfaceArea: surface.surfaceArea, triangles: surface.indices.length / 3, fragmented: highlyFragmented, globallyWarped });
-  surface = stabilizeDominantWalls(surface, volume.voxelSize);
+    ) || failure("The fused surface did not pass measured-surface quality checks.", { keyframes: usable.length, confirmedVoxels, surfaceArea: surface.surfaceArea, triangles: surface.indices.length / 3, fragmented: highlyFragmented, rectangularRoomModelCompatible: stages.rectangularRoomModelCompatible });
+  surface = stages.rectangularRoomModelCompatible
+    ? stabilizeDominantWalls(surface, volume.voxelSize)
+    : { ...surface, stabilizedPlaneCount: 0 };
   surface = smoothPositions(surface, options.smoothingPasses ?? 3);
   report?.("texturing", 88);
   const textured = texturedMesh(surface, usable);
@@ -1916,6 +1850,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   };
   return {
     mesh,
+    observations: buildAcceptedObservations(usable),
     diagnostics: {
       ...stages,
       reason: "Projective RGB-D fusion completed.",

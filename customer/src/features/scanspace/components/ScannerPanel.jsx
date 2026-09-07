@@ -5,6 +5,21 @@ import { buildScanCloud } from "../core/scanCloud";
 import { captureDebugEnabled, snapshotDepthCapture, downloadDepthCapture } from "../core/captureDebug";
 import { scanReadiness } from "../core/readiness";
 
+function observationPoints(observations) {
+  if (!observations?.count || !observations.positions?.length) return null;
+  return Array.from({ length: observations.count }, (_, index) => {
+    const offset = index * 3;
+    const point = {
+      x: observations.positions[offset],
+      y: observations.positions[offset + 1],
+      z: observations.positions[offset + 2],
+    };
+    if (observations.colorMask?.[index])
+      point.color = Array.from(observations.colors.slice(offset, offset + 3));
+    return point;
+  });
+}
+
 function CoverageCompass({ sectors = [], heading = 0 }) {
   const views = sectors.length ? sectors : Array(24).fill(false);
   const step = 360 / views.length;
@@ -130,12 +145,12 @@ export default function ScannerPanel({
             frame.depths,
             frame.colors,
             frame.colorMask,
-            frame.depthUvs,
             frame.colorImage,
             frame.projectionMatrix,
             frame.transformMatrix,
             frame.viewProjectionMatrix,
             frame.viewTransformMatrix,
+            frame.nativeDepthUvTransform,
             frame.camera,
           ]
             .filter(Boolean)
@@ -170,11 +185,8 @@ export default function ScannerPanel({
     setFusion({ stage: "preparing", progress: 0 });
     try {
       const raw = scanner.current.result();
-      const scanCloud = buildScanCloud(raw.points, {
-        floorY: raw.floorY,
-        observer: raw.observer,
-        voxelSize: raw.stats.cloudCellSize,
-      });
+      let acceptedPoints = raw.points;
+      let scanCloud = null;
       let scanMesh = null;
       let room,
         floorY = raw.floorY,
@@ -185,6 +197,7 @@ export default function ScannerPanel({
       try {
         const fused = await buildFusedMesh(raw, !allowPartial);
         scanMesh = fused.mesh;
+        acceptedPoints = observationPoints(fused.observations) || raw.points;
         raw.stats.fusion = fused.diagnostics;
       } catch (fusionError) {
         // The cloud is the truthful fallback. Do not revive the old per-frame
@@ -194,8 +207,13 @@ export default function ScannerPanel({
         fusionWorker.current?.terminate();
         fusionWorker.current = null;
       }
-      const stride = Math.max(1, Math.ceil(raw.points.length / 16000));
-      const points = raw.points.filter((_, i) => i % stride === 0);
+      scanCloud = buildScanCloud(acceptedPoints, {
+        floorY: raw.floorY,
+        observer: raw.observer,
+        voxelSize: raw.stats.cloudCellSize,
+      });
+      const stride = Math.max(1, Math.ceil(acceptedPoints.length / 16000));
+      const points = acceptedPoints.filter((_, i) => i % stride === 0);
       worker.current = new Worker(
         new URL("../core/reconstruction.worker.js", import.meta.url),
       );
@@ -264,7 +282,7 @@ export default function ScannerPanel({
               walls: [],
               floorObserved: Number.isFinite(raw.floorY),
               ceilingObserved: false,
-              pointCount: raw.points.length,
+              pointCount: acceptedPoints.length,
               reason: reconstructionError.message,
               cloud: scanCloud,
               mesh: scanMesh,
@@ -282,13 +300,13 @@ export default function ScannerPanel({
         }
         setPartial({
           reason: reconstructionError.message,
-          pointCount: raw.points.length,
+          pointCount: acceptedPoints.length,
           coverage: raw.stats.coverage || 0,
         });
         return;
       }
       room.scanMetadata.deviceInfo = capabilities.browser;
-      const textures = surfaceTextures(room, raw.points, floorY || 0);
+      const textures = surfaceTextures(room, acceptedPoints, floorY || 0);
       finished.current = true;
       await scanner.current.stop();
       onComplete(room, {
@@ -488,6 +506,7 @@ export default function ScannerPanel({
               depthFrames: stats.depthFrames,
               depthFormat: stats.format || "Unavailable",
               depthType: stats.depthType || "Unavailable",
+              depthUsage: stats.depthUsage || "Unavailable",
               depthDimensions: stats.dimensions || "Unavailable",
               pointCount: stats.pointCount,
               stablePointCount: stats.stablePointCount || 0,

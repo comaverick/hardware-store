@@ -7,7 +7,20 @@ export function captureDebugEnabled() {
 
 export function snapshotDepthCapture(raw) {
   const header = {
-    version: 3,
+    version: 4,
+    geometrySchemaVersion: 1,
+    coordinateMode: "view-aligned-v1",
+    buildId:
+      process.env.REACT_APP_VERCEL_GIT_COMMIT_SHA ||
+      process.env.REACT_APP_GIT_SHA ||
+      "local-or-unknown",
+    browser:
+      typeof navigator === "undefined" ? "unknown" : navigator.userAgent,
+    orientation:
+      typeof window === "undefined"
+        ? "unknown"
+        : window.screen.orientation?.type ||
+          `${window.screen.width || 0}x${window.screen.height || 0}`,
     createdAt: new Date().toISOString(),
     floorY: raw.floorY,
     observer: raw.observer,
@@ -24,11 +37,16 @@ export function snapshotDepthCapture(raw) {
       coloredCount: frame.coloredCount,
       tracking: frame.tracking,
       timestamp: frame.timestamp,
+      geometryMode: frame.geometryMode,
+      nativeDepthWidth: frame.nativeDepthWidth,
+      nativeDepthHeight: frame.nativeDepthHeight,
+      nativeDepthUvTransform: Array.from(
+        frame.nativeDepthUvTransform || [],
+      ),
       depths: Array.from(frame.depths),
       positions: Array.from(frame.positions),
       colors: Array.from(frame.colors),
       colorMask: Array.from(frame.colorMask),
-      depthUvs: Array.from(frame.depthUvs || []),
       projectionMatrix: Array.from(frame.projectionMatrix),
       transformMatrix: Array.from(frame.transformMatrix),
       viewProjectionMatrix: Array.from(
@@ -68,14 +86,23 @@ export function restoreDepthCapture(payload) {
       throw new Error("Invalid keyframe dimensions or camera matrices.");
     return {
       ...frame,
+      geometryMode:
+        frame.geometryMode ||
+        (frame.depthUvs?.length === count * 2
+          ? "legacy-depth-uv-ambiguous"
+          : "view-aligned-legacy"),
+      legacyGeometryAmbiguous:
+        !frame.geometryMode && frame.depthUvs?.length === count * 2,
+      nativeDepthWidth: Number(frame.nativeDepthWidth) || 0,
+      nativeDepthHeight: Number(frame.nativeDepthHeight) || 0,
+      nativeDepthUvTransform:
+        frame.nativeDepthUvTransform?.length === 16
+          ? Float32Array.from(frame.nativeDepthUvTransform)
+          : new Float32Array(),
       depths: Float32Array.from(frame.depths, (v) => v ?? 0),
       positions: Float32Array.from(frame.positions, (v) => v ?? NaN),
       colors: Uint8Array.from(frame.colors || new Uint8Array(count * 3)),
       colorMask: Uint8Array.from(frame.colorMask || new Uint8Array(count)),
-      depthUvs:
-        frame.depthUvs?.length === count * 2
-          ? Float32Array.from(frame.depthUvs, (v) => v ?? NaN)
-          : null,
       projectionMatrix: Float32Array.from(frame.projectionMatrix),
       transformMatrix: Float32Array.from(frame.transformMatrix),
       viewProjectionMatrix: Float32Array.from(
@@ -91,5 +118,18 @@ export function restoreDepthCapture(payload) {
       tracking: frame.tracking !== false,
     };
   });
-  return { keyframes, options: { floorY: capture.floorY, observer: capture.observer } };
+  return {
+    keyframes,
+    options: { floorY: capture.floorY, observer: capture.observer },
+    metadata: {
+      captureVersion: capture.version || 1,
+      geometrySchemaVersion: capture.geometrySchemaVersion || null,
+      coordinateMode: capture.coordinateMode || "legacy-unspecified",
+      buildId: capture.buildId || "unknown",
+      browser: capture.browser || "unknown",
+      ambiguousLegacyGeometry: keyframes.some(
+        (frame) => frame.legacyGeometryAmbiguous,
+      ),
+    },
+  };
 }

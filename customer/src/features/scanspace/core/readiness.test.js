@@ -21,8 +21,8 @@ test("does not call a sparse depth capture a complete room scan", () => {
   expect(result.missing).toEqual(
     expect.arrayContaining([
       "a detected floor",
-      "six overlapping views",
-      "half of the view sweep",
+      "six captured depth views",
+      "half of the camera heading sweep",
       "1,200 stable points",
     ]),
   );

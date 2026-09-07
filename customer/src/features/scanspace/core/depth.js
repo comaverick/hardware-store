@@ -32,8 +32,34 @@ export async function detectCapabilities(
   return result;
 }
 
-// Depth is distance along the camera Z axis, not radial distance along a normalized ray.
-// getDepthInMeters applies normDepthBufferFromNormView, including rotation/cropping.
+export function viewSampleGrid(view, withColor = false) {
+  const matrix = view?.projectionMatrix;
+  const projectedAspect =
+    matrix?.length === 16 && Math.abs(matrix[0]) > 0.00001
+      ? Math.abs(matrix[5] / matrix[0])
+      : 4 / 3;
+  const aspect = Math.max(
+    0.4,
+    Math.min(2.5, Number.isFinite(projectedAspect) ? projectedAspect : 4 / 3),
+  );
+  const longSide = withColor ? 72 : 60;
+  if (aspect >= 1)
+    return {
+      columns: longSide,
+      rows: Math.max(28, Math.round(longSide / aspect)),
+    };
+  return {
+    columns: Math.max(28, Math.round(longSide * aspect)),
+    rows: longSide,
+  };
+}
+
+// Depth is distance along the XR view's camera Z axis, not radial distance
+// along a normalized ray. getDepthInMeters accepts normalized XR-view
+// coordinates and applies normDepthBufferFromNormView internally. The returned
+// value must therefore be unprojected with the same XR view coordinates and
+// matrices; applying the native depth-buffer transform to the ray a second
+// time rotates/crops the geometry away from the grid cell that owns it.
 export function unprojectDepth(
   depth,
   view,
@@ -41,26 +67,8 @@ export function unprojectDepth(
   rows = 42,
   colorAt = null,
 ) {
-  // Newer WebXR runtimes expose the depth sensor's own view geometry. It can
-  // differ slightly from the color/XR view on phones with a separate depth
-  // sensor. Reconstructing those samples with the color-camera pose produces
-  // a shifted surface in every keyframe, which later appears as layered shards.
-  const depthProjection =
-    depth.projectionMatrix?.length === 16
-      ? depth.projectionMatrix
-      : view.projectionMatrix;
-  const depthTransform =
-    depth.transform?.matrix?.length === 16
-      ? depth.transform.matrix
-      : view.transform.matrix;
-  const inverse = new Matrix4().fromArray(depthProjection).invert();
-  const pose = new Matrix4().fromArray(depthTransform);
-  const depthUvTransform =
-    depth.projectionMatrix?.length === 16 &&
-    depth.transform?.matrix?.length === 16 &&
-    depth.normDepthBufferFromNormView?.matrix?.length === 16
-      ? depth.normDepthBufferFromNormView.matrix
-      : null;
+  const inverse = new Matrix4().fromArray(view.projectionMatrix).invert();
+  const pose = new Matrix4().fromArray(view.transform.matrix);
   const points = [],
     ray = new Vector3();
   for (let y = 0; y < rows; y++)
@@ -74,28 +82,8 @@ export function unprojectDepth(
         meters > 8
       )
         continue;
-      let rayU = u;
-      let rayV = v;
-      if (depthUvTransform) {
-        const uvW =
-          depthUvTransform[3] * u +
-          depthUvTransform[7] * v +
-          depthUvTransform[15];
-        if (Math.abs(uvW) > 0.00001) {
-          rayU =
-            (depthUvTransform[0] * u +
-              depthUvTransform[4] * v +
-              depthUvTransform[12]) /
-            uvW;
-          rayV =
-            (depthUvTransform[1] * u +
-              depthUvTransform[5] * v +
-              depthUvTransform[13]) /
-            uvW;
-        }
-      }
       ray
-        .set(rayU * 2 - 1, 1 - rayV * 2, 0.5)
+        .set(u * 2 - 1, 1 - v * 2, 0.5)
         .applyMatrix4(inverse);
       if (ray.z >= -0.00001) continue;
       ray.multiplyScalar(meters / -ray.z).applyMatrix4(pose);
@@ -106,8 +94,6 @@ export function unprojectDepth(
         y: ray.y,
         z: ray.z,
         depth: meters,
-        depthU: rayU,
-        depthV: rayV,
         color,
         gridX: x,
         gridY: y,

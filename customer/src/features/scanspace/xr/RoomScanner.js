@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { VoxelCloud, unprojectDepth } from "../core/depth";
+import { VoxelCloud, unprojectDepth, viewSampleGrid } from "../core/depth";
 import { createRgbdKeyframe } from "../core/fusion";
 import { createCameraColorReader } from "./cameraColor";
 
@@ -189,6 +189,7 @@ export class RoomScanner {
             this.stats.depthActive = true;
             this.stats.format = this.session.depthDataFormat;
             this.stats.depthType = this.session.depthType || "Unavailable";
+            this.stats.depthUsage = this.session.depthUsage;
             this.stats.dimensions = `${depth.width} × ${depth.height}`;
             const keyframePose = this.keyframePose(view);
             const keyframeEligible = this.shouldCaptureKeyframe(keyframePose);
@@ -215,13 +216,9 @@ export class RoomScanner {
                 this.renderer.resetState();
               }
             }
-            // Preserve more of the device depth image while keeping a bounded
-            // grid for mid-range phones. Rows follow the real depth aspect.
-            const columns = Math.min(depth.width, colorAt ? 72 : 60);
-            const rows = Math.min(
-              depth.height,
-              Math.max(36, Math.round((columns * depth.height) / depth.width)),
-            );
+            // Preserve a bounded grid for mid-range phones while matching the
+            // XR view aspect. Native depth storage may be rotated or cropped.
+            const { columns, rows } = viewSampleGrid(view, !!colorAt);
             const framePoints = unprojectDepth(
               depth,
               view,
@@ -359,10 +356,16 @@ export class RoomScanner {
     const keyframe = createRgbdKeyframe(points, {
       columns,
       rows,
-      projectionMatrix: depth?.projectionMatrix || view.projectionMatrix,
-      transformMatrix: depth?.transform?.matrix || view.transform.matrix,
+      // getDepthInMeters is sampled in normalized XR-view coordinates, so the
+      // grid and its reconstructed rays must use this same view geometry.
+      projectionMatrix: view.projectionMatrix,
+      transformMatrix: view.transform.matrix,
       viewProjectionMatrix: view.projectionMatrix,
       viewTransformMatrix: view.transform.matrix,
+      geometryMode: "view-aligned-v1",
+      nativeDepthWidth: depth?.width || 0,
+      nativeDepthHeight: depth?.height || 0,
+      nativeDepthUvTransform: depth?.normDepthBufferFromNormView?.matrix,
       camera: pose.position,
       timestamp,
       colorImage: colorAt?.snapshot?.(),

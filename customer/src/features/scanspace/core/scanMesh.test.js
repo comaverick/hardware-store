@@ -1,9 +1,12 @@
 import {
   createRgbdKeyframe,
+  depthPosition,
   fuseRgbdKeyframes,
+  gridIndex,
   meshFragmentationIsUnacceptable,
+  meshOutsideRectangularRoomModel,
   meshWallStructureDiagnostics,
-  meshWallStructureIsUnacceptable,
+  projectWorld,
 } from "./fusion";
 import { Matrix4, PerspectiveCamera } from "three";
 import { unprojectDepth } from "./depth";
@@ -128,7 +131,7 @@ test("distinguishes planar room walls from a curled shell", () => {
     indices: new Uint32Array([0, 1, 2, 0, 2, 3]),
   };
   expect(
-    meshWallStructureIsUnacceptable(meshWallStructureDiagnostics(plane)),
+    meshOutsideRectangularRoomModel(meshWallStructureDiagnostics(plane)),
   ).toBe(false);
 
   const positions = [];
@@ -152,7 +155,53 @@ test("distinguishes planar room walls from a curled shell", () => {
     indices: new Uint32Array(indices),
   });
   expect(shell.manhattanAlignedRatio).toBeLessThan(0.52);
-  expect(meshWallStructureIsUnacceptable(shell)).toBe(true);
+  expect(meshOutsideRectangularRoomModel(shell)).toBe(true);
+});
+
+test.each([
+  ["identity", [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]],
+  ["90 degrees", [0, -1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1]],
+  ["180 degrees", [-1, 0, 0, 0, 0, -1, 0, 0, 0, 0, 1, 0, 1, 1, 0, 1]],
+  ["270 degrees", [0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 1]],
+  ["crop and scale", [0.7, 0, 0, 0, 0, 0.55, 0, 0, 0, 0, 1, 0, 0.12, 0.2, 0, 1]],
+])("view-grid points round trip with a native %s depth mapping", (_, nativeMatrix) => {
+  const camera = new PerspectiveCamera(73, 12 / 7, 0.1, 20);
+  const projectionMatrix = [...camera.projectionMatrix.elements];
+  projectionMatrix[8] = 0.11;
+  projectionMatrix[9] = -0.07;
+  const transform = new Matrix4().makeRotationY(0.31);
+  transform.setPosition(1.3, 0.4, -0.8);
+  const view = {
+    projectionMatrix,
+    transform: { matrix: transform.elements },
+  };
+  const points = unprojectDepth(
+    {
+      getDepthInMeters: () => 2.4,
+      projectionMatrix,
+      transform: { matrix: new Matrix4().makeTranslation(20, 0, 0).elements },
+      normDepthBufferFromNormView: { matrix: nativeMatrix },
+    },
+    view,
+    12,
+    7,
+  );
+  const frame = createRgbdKeyframe(points, {
+    columns: 12,
+    rows: 7,
+    projectionMatrix,
+    transformMatrix: transform.elements,
+    nativeDepthUvTransform: nativeMatrix,
+  });
+  points.forEach((point) => {
+    const index = point.gridY * frame.columns + point.gridX;
+    const reconstructed = depthPosition(frame, index, frame.depths[index]);
+    const projected = projectWorld(frame, ...reconstructed);
+    expect(gridIndex(frame, projected.u, projected.v)).toBe(index);
+    expect(reconstructed[0]).toBeCloseTo(point.x, 5);
+    expect(reconstructed[1]).toBeCloseTo(point.y, 5);
+    expect(reconstructed[2]).toBeCloseTo(point.z, 5);
+  });
 });
 
 test("fuses repeated RGB-D views into one bounded surface", () => {
@@ -164,6 +213,11 @@ test("fuses repeated RGB-D views into one bounded surface", () => {
   expect(result.mesh.uvs).toHaveLength(result.mesh.vertexCount * 2);
   expect(result.mesh.texture.data.length).toBeGreaterThan(0);
   expect(result.mesh.normals).toHaveLength(result.mesh.positions.length);
+  expect(
+    result.diagnostics.roundTrip.every(
+      (frame) => frame.checked > 100 && frame.indexMismatches === 0,
+    ),
+  ).toBe(true);
 });
 
 test("filtered positions preserve a rotated wall captured with an off-axis projection", () => {
@@ -201,6 +255,35 @@ test("rejects a drifted pose without losing the consistent wall", () => {
   );
   expect(result.mesh?.triangleCount).toBeGreaterThan(0);
   expect(result.diagnostics.rejectedKeyframes).toBeGreaterThanOrEqual(1);
+  expect(result.observations.count).toBeGreaterThan(0);
+  expect(Math.max(...result.observations.positions)).toBeLessThan(3);
+});
+
+test("uses depth geometry for visibility and camera geometry for color UVs", () => {
+  const frames = [0, 0.08, -0.08].map((x) => {
+    const frame = planeKeyframe(x);
+    frame.viewTransformMatrix = new Float32Array(frame.transformMatrix);
+    frame.viewTransformMatrix[14] += 0.3;
+    return frame;
+  });
+  const result = fuseRgbdKeyframes(frames);
+  expect(result.mesh?.kind).toBe("projective-tsdf-surface-net");
+  expect(result.mesh.textureCoverage).toBeGreaterThan(90);
+});
+
+test("resamples different camera image sizes into valid atlas tiles", () => {
+  const frames = [0, 0.08, -0.08].map((x, index) => {
+    const frame = planeKeyframe(x);
+    if (index === 1) {
+      frame.colorWidth = 4;
+      frame.colorHeight = 6;
+      frame.colorImage = new Uint8Array(4 * 6 * 4).fill(140);
+    }
+    return frame;
+  });
+  const result = fuseRgbdKeyframes(frames);
+  expect(result.mesh?.texture.data.length).toBeGreaterThan(0);
+  expect(Math.min(...result.mesh.texture.data)).toBeGreaterThan(0);
 });
 
 test("a bad first frame cannot force a valid overlapping sequence into fallback", () => {
@@ -342,7 +425,7 @@ test("rejects a 14cm pose error that passes the spatial-neighbor overlap check",
   expect(result.mesh.bounds.max.z).toBeLessThan(-1.95);
 });
 
-test("refines a small accepted yaw/translation drift before fusion", () => {
+test("does not mutate accepted poses without explicit validated refinement", () => {
   const drifted = planeKeyframe(0.04);
   const angle = 0.025;
   drifted.transformMatrix[0] = Math.cos(angle);
@@ -351,6 +434,7 @@ test("refines a small accepted yaw/translation drift before fusion", () => {
   drifted.transformMatrix[10] = Math.cos(angle);
   drifted.transformMatrix[12] += 0.025;
   drifted.transformMatrix[14] += 0.025;
+  const originalPose = new Float32Array(drifted.transformMatrix);
   const result = fuseRgbdKeyframes([
     planeKeyframe(0),
     planeKeyframe(0.08),
@@ -358,12 +442,11 @@ test("refines a small accepted yaw/translation drift before fusion", () => {
     planeKeyframe(-0.08),
   ]);
   expect(result.mesh?.kind).toBe("projective-tsdf-surface-net");
-  expect(result.diagnostics.alignment.poseCorrectionApplied).toBe(true);
-  expect(
-    result.diagnostics.alignment.poseCorrections.some(
-      (correction) => correction.accepted,
-    ),
-  ).toBe(true);
+  expect(result.diagnostics.alignment.poseCorrectionApplied).toBe(false);
+  expect(result.diagnostics.alignment.poseRefinement).toBe(
+    "disabled-until-independently-validated",
+  );
+  expect(drifted.transformMatrix).toEqual(originalPose);
 });
 
 test("preserves a measured back surface through ordinary furniture-depth occlusion", () => {

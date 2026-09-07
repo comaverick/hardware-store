@@ -19,6 +19,9 @@ test("debug snapshot survives live buffers changing and restores missing positio
   frame.depths.fill(0);
   frame.positions.fill(0);
   const parsed = JSON.parse(await readBlob(blob));
+  expect(parsed.version).toBe(4);
+  expect(parsed.geometrySchemaVersion).toBe(1);
+  expect(parsed.coordinateMode).toBe("view-aligned-v1");
   const restored = restoreDepthCapture({ capture: parsed, diagnostics: {} });
   expect(restored.keyframes[0].depths[0]).toBe(2);
   expect(restored.keyframes[0].validCount).toBe(8);
@@ -32,6 +35,28 @@ test("debug snapshot survives live buffers changing and restores missing positio
     restored.keyframes[0].transformMatrix,
   );
   expect(restored.options.floorY).toBe(0);
+  expect(restored.keyframes[0].legacyGeometryAmbiguous).toBe(false);
+});
+
+test("flags legacy transformed-UV captures instead of silently reinterpreting them", () => {
+  const count = 4;
+  const identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+  const restored = restoreDepthCapture({
+    version: 3,
+    keyframes: [{
+      columns: 2,
+      rows: 2,
+      depths: Array(count).fill(2),
+      positions: Array(count * 3).fill(0),
+      depthUvs: Array(count * 2).fill(0.5),
+      projectionMatrix: identity,
+      transformMatrix: identity,
+    }],
+  });
+  expect(restored.keyframes[0].geometryMode).toBe(
+    "legacy-depth-uv-ambiguous",
+  );
+  expect(restored.keyframes[0].legacyGeometryAmbiguous).toBe(true);
 });
 
 test("rejects malformed replay dimensions before reconstruction allocates geometry", () => {

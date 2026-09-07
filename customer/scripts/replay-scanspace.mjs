@@ -21,13 +21,16 @@ try {
   const input = restoreDepthCapture(JSON.parse(serialized));
   const result = fuseRgbdKeyframes(input.keyframes, input.options);
   process.stdout.write(JSON.stringify({
+    capture: input.metadata,
     diagnostics: result.diagnostics,
     mesh: result.mesh ? {
       kind: result.mesh.kind,
       triangles: result.mesh.triangleCount,
       bounds: result.mesh.bounds,
     } : null,
-    note: "Depth replay excludes camera photos; texture coverage is not comparable.",
+    note: input.metadata.ambiguousLegacyGeometry
+      ? "This legacy capture contains ambiguous transformed depth UVs. Record a fresh version 4 capture for repaired-coordinate replay."
+      : "Depth replay excludes camera photos; texture coverage is not comparable.",
   }, null, 2) + "\n");
 } catch (error) {
   process.stderr.write(error.message + "\n");

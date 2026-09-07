@@ -6,10 +6,11 @@ After finishing, use **Download scan diagnostics** on the partial or full room
 review. The existing capture-screen download remains available.
 
 The export is captured before reconstruction transfers the typed arrays to the
-worker. It contains depth grids, projection/pose matrices, point colors, original
-sample counts, and the reconstruction diagnostics. Camera photos are omitted to
-bound memory. The snapshot is kept only for this scan review; leaving the review
-clears it.
+worker. Version 4 contains view-aligned depth grids, projection/pose matrices,
+native depth-buffer dimensions and UV mapping (for diagnosis only), point
+colors, browser/build metadata, original sample counts, and reconstruction
+diagnostics. Camera photos are omitted to bound memory. The snapshot is kept
+only for this scan review; leaving the review clears it.
 
 From the customer directory:
 
@@ -21,13 +22,18 @@ The command reads the capture and prints diagnostics and mesh bounds to stdout.
 It does not modify the capture or project. Pass `-` to read JSON from stdin.
 Version 1 depth exports are also accepted.
 
-Check `inputDepthSamples`, `filteredDepthSamples`, `alignment.pairs`,
-`alignment.rejectedFrameIds`, `alignment.poseCorrections`, `cellRejections`,
-`wallStructure`, and the triangle counts before and after cleanup. Pair and
-pose-refinement errors are in meters. Pose refinement is deliberately limited
-to small gravity-aligned yaw/translation corrections; incompatible frames are
-still rejected. `algorithmVersion: 5` identifies pose refinement and warped-wall
-quality checks.
+Check `coordinateMode`, `inputDepthSamples`, `filteredDepthSamples`,
+`roundTrip`, `alignment.pairs`, `alignment.rejectedFrameIds`, `cellRejections`,
+`wallStructure`, `rectangularRoomModelCompatible`, and the triangle counts
+before and after cleanup. Pair errors are in metres. Automatic pose mutation is
+disabled; incompatible frames are still rejected. `algorithmVersion: 6`
+identifies the canonical view-grid geometry and separate depth/color visibility
+paths.
+
+Version 3 captures that contain transformed `depthUvs` are marked ambiguous and
+are not silently reinterpreted by the new algorithm. Replay reports that a fresh
+version 4 capture is required. Older captures without those transformed UVs can
+still be inspected using their legacy view-aligned geometry.
 
 Replay uses the actual production fusion module. Geometry can be compared;
 texture coverage cannot be reproduced without the omitted camera photos.
