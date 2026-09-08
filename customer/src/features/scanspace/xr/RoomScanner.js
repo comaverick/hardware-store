@@ -222,7 +222,7 @@ export class RoomScanner {
             this.stats.dimensions = `${depth.width} × ${depth.height}`;
             const keyframePose = this.keyframePose(view);
             const motion = this.measureFrameMotion(keyframePose, time);
-            const keyframeEligible = this.shouldCaptureKeyframe(keyframePose, time);
+            const keyframeEligible = this.shouldCaptureKeyframe(keyframePose);
             let colorAt = null;
             if (
               keyframeEligible &&
@@ -395,7 +395,7 @@ export class RoomScanner {
       angularSpeed: (2 * Math.acos(dot)) / seconds,
     };
   }
-  hasNewViewpoint(pose) {
+  shouldCaptureKeyframe(pose) {
     if (this.lastMeshPose) {
       const moved = Math.hypot(
         pose.position.x - this.lastMeshPose.position.x,
@@ -414,14 +414,6 @@ export class RoomScanner {
       if (moved < 0.08 && turned < 0.1) return false;
     }
     return true;
-  }
-  shouldCaptureKeyframe(pose, timestamp) {
-    if (this.hasNewViewpoint(pose)) return true;
-    // Retain one timed repeat while the user steadies the phone. Previously
-    // these samples appeared in the preview but were all missing from fusion.
-    // Cap at one repeat per viewpoint so a stationary pose cannot dominate it.
-    return !this.lastMeshWasConfirmation && Number.isFinite(timestamp) &&
-      timestamp - this.lastMeshAt >= 1200;
   }
   captureKeyframe(
     points,
@@ -483,8 +475,6 @@ export class RoomScanner {
       this.cloud = new VoxelCloud();
       this.keyframes.forEach((frame, index) => this.addSavedPreview(frame, index));
     } else this.addSavedPreview(keyframe, this.keyframes.length - 1);
-    this.lastMeshWasConfirmation = !this.hasNewViewpoint(pose);
-    this.lastMeshAt = timestamp;
     this.lastMeshPose = pose;
     this.stats.fusionKeyframes = this.keyframes.length;
   }

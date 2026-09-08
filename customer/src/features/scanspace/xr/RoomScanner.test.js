@@ -34,11 +34,11 @@ test("stationary unsaved frames cannot turn the preview green", () => {
   expect(scanner.stats.errors).toEqual([]);
   expect(scanner.keyframes).toHaveLength(2);
   expect(scanner.cloud.previewStableCount()).toBeGreaterThan(0);
-  // One deliberate pause saves a confirmation frame, but additional transient
-  // frames from the same pose cannot flood fusion with redundant observations.
+  // Waiting at the same pose must never make one depth observation look like
+  // independent multi-view support or flood fusion with redundant samples.
   scanner.frame(3500, frame);
-  expect(scanner.keyframes).toHaveLength(3);
+  expect(scanner.keyframes).toHaveLength(2);
   scanner.frame(5000, frame);
-  expect(scanner.keyframes).toHaveLength(3);
+  expect(scanner.keyframes).toHaveLength(2);
   expect(scanner.stats.errors).toEqual([]);
 });

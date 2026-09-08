@@ -30,9 +30,9 @@ uses continuous inverse-depth sampling on supported surfaces. `frameSamples`
 reports input, retained measured, and repaired sample counts for every prepared
 frame. This distinguishes sensor gaps from filter and frame-selection losses.
 
-Capture retains one confirmation frame after a 1.2-second pause at a viewpoint.
-Further repeats require camera movement, limiting stationary duplicate views.
-The live preview now draws filtered measurements only from retained keyframes.
+Capture requires a genuinely new camera viewpoint for every retained keyframe.
+Waiting at one pose cannot add duplicate support to a warped depth observation.
+The live preview draws filtered measurements only from retained keyframes.
 Repeated transient frames cannot mark an area as saved. The overlap fraction
 includes missing pixels in its denominator and is not a guarantee of final mesh
 coverage. Spatial voxel compaction does not create repeat-observation evidence.
