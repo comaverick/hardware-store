@@ -128,8 +128,7 @@ export class VoxelCloud {
       const current = compacted.get(key);
       if (!current) compacted.set(key, { ...point });
       else {
-        const hits = Math.min(current.hits + point.hits, 255);
-        const weight = point.hits / hits;
+        const weight = point.hits / (current.hits + point.hits);
         ["x", "y", "z"].forEach((name) => {
           current[name] += (point[name] - current[name]) * weight;
         });
@@ -139,7 +138,9 @@ export class VoxelCloud {
                 (value, index) => value + (point.color[index] - value) * weight,
               )
             : point.color;
-        current.hits = hits;
+        // Spatial merging is not another observation. Summing hits made two
+        // neighboring samples from a single frame appear repeat-confirmed.
+        current.hits = Math.max(current.hits, point.hits);
         current.frameId = Math.max(current.frameId, point.frameId);
       }
     }
@@ -183,13 +184,13 @@ export class VoxelCloud {
   previewStableCount() {
     return this.repeatedCells;
   }
-  confirmedRatio(points) {
+  confirmedRatio(points, totalSamples = points?.length || 0) {
     if (!points?.length) return 0;
     const confirmed = points.reduce((count, point) => {
       const stored = this.cells.get(this.key(point));
       return count + (stored?.hits >= 2 ? 1 : 0);
     }, 0);
-    return confirmed / points.length;
+    return confirmed / Math.max(1, totalSamples, points.length);
   }
   values(filtered = false) {
     const all = [...this.cells.values()];

@@ -1,9 +1,8 @@
 # Replaying a ScanSpace depth failure
 
-Open the customer ScanSpace page with `?scanspaceDebug=1` (or add
-`&scanspaceDebug=1` if there is already a query string), then start a new scan.
-After finishing, use **Download scan diagnostics** on the partial or full room
-review. The existing capture-screen download remains available.
+After finishing a scan, use **Download scan diagnostics** on the partial or
+full room review. No debug URL is required. This is a local, in-memory snapshot;
+it is not uploaded. Leaving the review clears it. Camera photos are excluded.
 
 The export is captured before reconstruction transfers the typed arrays to the
 worker. Version 4 contains view-aligned depth grids, projection/pose matrices,
@@ -26,9 +25,17 @@ Check `coordinateMode`, `inputDepthSamples`, `filteredDepthSamples`,
 `roundTrip`, `alignment.pairs`, `alignment.rejectedFrameIds`, `cellRejections`,
 `wallStructure`, `rectangularRoomModelCompatible`, and the triangle counts
 before and after cleanup. Pair errors are in metres. Automatic pose mutation is
-disabled; incompatible frames are still rejected. `algorithmVersion: 6`
-identifies the canonical view-grid geometry and separate depth/color visibility
-paths.
+disabled; incompatible frames are still rejected. `algorithmVersion: 9`
+uses continuous inverse-depth sampling on supported surfaces. `frameSamples`
+reports input, retained measured, and repaired sample counts for every prepared
+frame. This distinguishes sensor gaps from filter and frame-selection losses.
+
+Capture retains one confirmation frame after a 1.2-second pause at a viewpoint.
+Further repeats require camera movement, limiting stationary duplicate views.
+The live preview now draws filtered measurements only from retained keyframes.
+Repeated transient frames cannot mark an area as saved. The overlap fraction
+includes missing pixels in its denominator and is not a guarantee of final mesh
+coverage. Spatial voxel compaction does not create repeat-observation evidence.
 
 Version 3 captures that contain transformed `depthUvs` are marked ambiguous and
 are not silently reinterpreted by the new algorithm. Replay reports that a fresh

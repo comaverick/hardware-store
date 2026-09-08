@@ -122,6 +122,15 @@ test("adaptive compaction preserves room coverage before reporting a hard limit"
   expect(cloud.compactions).toBeGreaterThan(0);
   expect(cloud.size).toBeGreaterThan(0.05);
   expect(cloud.full).toBe(false);
+  expect(cloud.previewStableCount()).toBe(0);
+});
+
+test("missing sensor pixels count against current view overlap", () => {
+  const cloud = new VoxelCloud();
+  const points = [{ x: 0, y: 0, z: -2 }];
+  cloud.add(points, 1);
+  cloud.add(points, 2);
+  expect(cloud.confirmedRatio(points, 100)).toBe(0.01);
 });
 function fixture(wallCount = 4) {
   const points = [];

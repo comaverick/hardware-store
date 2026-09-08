@@ -661,6 +661,32 @@ export function gridIndex(frame, u, v) {
   return y * frame.columns + x;
 }
 
+// Samples are at pixel CENTRES. Nearest-pixel sampling makes an angled wall
+// into depth steps; camera motion changes those steps and introduces artificial
+// disagreement into the variance test. Inverse depth is linear on a plane.
+// Interpolate only a complete, continuous measured footprint; missing pixels
+// and foreground/background transitions retain the original nearest sample.
+export function sampleProjectiveDepth(frame, u, v) {
+  const depths = frame.filteredDepth;
+  const nearest = depths[gridIndex(frame, u, v)];
+  if (!nearest) return 0;
+  const px = u * frame.columns - 0.5;
+  const py = v * frame.rows - 0.5;
+  const x = Math.floor(px), y = Math.floor(py);
+  if (x < 0 || y < 0 || x + 1 >= frame.columns || y + 1 >= frame.rows)
+    return nearest;
+  const i = y * frame.columns + x;
+  const a = depths[i], b = depths[i + 1];
+  const c = depths[i + frame.columns], d = depths[i + frame.columns + 1];
+  if (!a || !b || !c || !d) return nearest;
+  const min = Math.min(a, b, c, d);
+  if (Math.max(a, b, c, d) - min > Math.max(0.08, min * 0.06))
+    return nearest;
+  const tx = px - x, ty = py - y;
+  return 1 / ((1 - ty) * ((1 - tx) / a + tx / b) +
+    ty * ((1 - tx) / c + tx / d));
+}
+
 function sampleFrameColor(frame, u, v, depthIndex) {
   if (frame.colorImage?.length && frame.colorWidth && frame.colorHeight) {
     const x = clamp(Math.floor(u * frame.colorWidth), 0, frame.colorWidth - 1);
@@ -690,7 +716,7 @@ function integrateProjective(volume, frames, report) {
           const projected = projectView(frame, view);
           if (!projected || projected.depth < 0.2) continue;
           const depthIndex = gridIndex(frame, projected.u, projected.v);
-          const measuredDepth = frame.filteredDepth[depthIndex];
+          const measuredDepth = sampleProjectiveDepth(frame, projected.u, projected.v);
           if (!measuredDepth) continue;
           const signedDistance = measuredDepth - projected.depth;
           const index = volumeIndex(volume, x, y, z);
@@ -1966,13 +1992,20 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     options.maxKeyframes || 40,
   );
   const stages = {
-    algorithmVersion: 8,
+    algorithmVersion: 9,
+    depthSampling: "continuous-inverse-depth",
     coordinateMode: "view-aligned-v1",
     inputKeyframes: keyframes.length,
     ambiguousLegacyKeyframes,
     preparedKeyframes: prepared.length,
     inputDepthSamples: keyframes.reduce((sum, frame) => sum + (frame?.validCount || 0), 0),
     filteredDepthSamples: prepared.reduce((sum, frame) => sum + frame.filteredCount, 0),
+    frameSamples: prepared.map((frame) => ({
+      frameId: frame.frameId,
+      input: frame.validCount,
+      retainedMeasured: frame.measuredMask.reduce((sum, value) => sum + value, 0),
+      afterRepair: frame.filteredCount,
+    })),
     weakDepthSamplesRetained: prepared.reduce(
       (sum, frame) => sum + (frame.weakSupportedCount || 0),
       0,

@@ -19,7 +19,8 @@ export default function PartialScanReview({ scan, onRescan, onDone }) {
           <p className="ss-notice">
             This is a limited viewing sector, not a room-shaped capture: {quality.coverage}%
             heading coverage and {Math.round(quality.cameraBaseline * 100)} cm
-            of horizontal camera-position spread. A thin or curved open shell is expected.
+            of horizontal camera-position spread. Only part of the room was covered;
+            curved walls can also indicate unreliable depth.
             For the next scan, move sideways while keeping each wall in view.
           </p>
         )}

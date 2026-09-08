@@ -5,12 +5,13 @@ import {
   fillSmallMeshHoles,
   fuseRgbdKeyframes,
   gridIndex,
+  sampleProjectiveDepth,
   meshFragmentationIsUnacceptable,
   meshOutsideRectangularRoomModel,
   meshWallStructureDiagnostics,
   projectWorld,
 } from "./fusion";
-import { Matrix4, PerspectiveCamera } from "three";
+import { Matrix4, PerspectiveCamera, Vector3 } from "three";
 import { unprojectDepth } from "./depth";
 
 function grid(depthAt = () => 0) {
@@ -36,6 +37,34 @@ const projection = new Float32Array([
   0, 0, -1, -1,
   0, 0, -0.2, 0,
 ]);
+
+test("subpixel sampling preserves an oblique plane instead of depth steps", () => {
+  const columns = 32, rows = 24;
+  const exactDepth = (u, v) => 1 / (0.5 + 0.22 * (u - 0.5) + 0.08 * (v - 0.5));
+  const frame = { columns, rows, filteredDepth: new Float32Array(columns * rows) };
+  for (let y = 0; y < rows; y++)
+    for (let x = 0; x < columns; x++)
+      frame.filteredDepth[y * columns + x] = exactDepth((x + 0.5) / columns, (y + 0.5) / rows);
+  let oldError = 0, correctedError = 0;
+  for (let y = 1; y < rows - 2; y++)
+    for (let x = 1; x < columns - 2; x++) {
+      const u = (x + 0.91) / columns, v = (y + 0.83) / rows;
+      const expected = exactDepth(u, v);
+      oldError += Math.abs(frame.filteredDepth[gridIndex(frame, u, v)] - expected);
+      correctedError += Math.abs(sampleProjectiveDepth(frame, u, v) - expected);
+    }
+  expect(oldError).toBeGreaterThan(1);
+  expect(correctedError).toBeLessThan(oldError * 0.001);
+});
+
+test("subpixel sampling does not blend across an occlusion or missing depth", () => {
+  const frame = { columns: 2, rows: 2, filteredDepth: new Float32Array([1, 2, 1, 2]) };
+  expect(sampleProjectiveDepth(frame, 0.49, 0.5)).toBe(1);
+  expect(sampleProjectiveDepth(frame, 0.51, 0.5)).toBe(2);
+  frame.filteredDepth = new Float32Array([0, 2, 2, 2]);
+  expect(sampleProjectiveDepth(frame, 0.4, 0.4)).toBe(0);
+  expect(sampleProjectiveDepth(frame, 0.6, 0.4)).toBe(2);
+});
 
 function planeKeyframe(
   cameraX = 0,
@@ -309,6 +338,42 @@ test("filtered positions preserve a rotated wall captured with an off-axis proje
       Math.cos(angle) * result.mesh.positions[i + 2];
     expect(Math.abs(normalDistance + 2)).toBeLessThan(0.06);
   }
+});
+
+test("a wall viewed obliquely from different camera poses remains planar", () => {
+  const camera = new PerspectiveCamera(65, 0.65, 0.1, 20);
+  const normal = new Vector3(0.45, 0.18, 1);
+  const frames = [-0.15, 0, 0.15].map((x) => {
+    const pose = new Matrix4().makeRotationY(x * 0.6);
+    pose.setPosition(x, 0, 0);
+    const origin = new Vector3(x, 0, 0);
+    const view = { projectionMatrix: camera.projectionMatrix.elements, transform: { matrix: pose.elements } };
+    const points = unprojectDepth({ getDepthInMeters: (u, v) => {
+      const ray = new Vector3(u * 2 - 1, 1 - v * 2, 0.5)
+        .applyMatrix4(camera.projectionMatrixInverse);
+      ray.multiplyScalar(1 / -ray.z);
+      ray.applyMatrix4(pose).sub(origin);
+      return -(2.5 + normal.dot(origin)) / normal.dot(ray);
+    } }, view, 28, 40);
+    return createRgbdKeyframe(points, {
+      columns: 28, rows: 40,
+      projectionMatrix: view.projectionMatrix,
+      transformMatrix: pose.elements,
+      camera: origin,
+    });
+  });
+  const result = fuseRgbdKeyframes(frames, { maxDimension: 64 });
+  expect(result.mesh?.kind).toBe("projective-tsdf-surface-net");
+  let checked = 0, squaredError = 0;
+  const p = result.mesh.positions;
+  for (let i = 0; i < p.length; i += 3) {
+    if (Math.abs(p[i]) > 0.6 || Math.abs(p[i + 1]) > 0.6) continue;
+    const error = (normal.x * p[i] + normal.y * p[i + 1] + p[i + 2] + 2.5) / normal.length();
+    squaredError += error * error;
+    checked++;
+  }
+  expect(checked).toBeGreaterThan(100);
+  expect(Math.sqrt(squaredError / checked)).toBeLessThan(0.015);
 });
 
 test("does not fabricate a mesh from an unconfirmed single camera view", () => {

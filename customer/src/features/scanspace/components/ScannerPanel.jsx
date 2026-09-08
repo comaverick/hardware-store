@@ -3,7 +3,7 @@ import { RoomScanner } from "../xr/RoomScanner";
 import { surfaceTextures } from "../core/reconstruction";
 import { buildScanCloud } from "../core/scanCloud";
 import { buildStructuralRepair } from "../core/structuralRepair";
-import { captureDebugEnabled, snapshotDepthCapture, downloadDepthCapture } from "../core/captureDebug";
+import { snapshotDepthCapture, downloadDepthCapture } from "../core/captureDebug";
 import { scanReadiness } from "../core/readiness";
 
 function observationPoints(observations) {
@@ -85,6 +85,8 @@ function captureTargetState(stats, busy = false) {
       label: "Building result",
       hint: "Capture is safely paused",
     };
+  if (stats.paused)
+    return { tone: "busy", label: "Capture paused", hint: "Resume to save more views" };
   if (!stats.tracking)
     return {
       tone: "warning",
@@ -109,11 +111,17 @@ function captureTargetState(stats, busy = false) {
       label: "Weak depth here",
       hint: "Step back or change angle",
     };
-  if ((stats.currentConfirmedRatio || 0) >= 0.55)
+  if ((stats.cameraBaseline || 0) < 0.25)
+    return {
+      tone: "pending",
+      label: "Move slowly sideways",
+      hint: "Keep this surface in view as you move",
+    };
+  if ((stats.currentConfirmedRatio || 0) >= 0.7)
     return {
       tone: "complete",
-      label: "Area captured",
-      hint: "Move sideways to the next clear area",
+      label: "Depth overlap saved",
+      hint: "Revisit clear patches from another position",
     };
   if ((stats.currentConfirmedRatio || 0) >= 0.2)
     return {
@@ -123,8 +131,8 @@ function captureTargetState(stats, busy = false) {
     };
   return {
     tone: "pending",
-    label: "Hold on this area",
-    hint: "Wait for bright green circles",
+    label: "Add another viewpoint",
+    hint: "Move slowly sideways, keeping this area in view",
   };
 }
 
@@ -259,8 +267,7 @@ export default function ScannerPanel({
         floorY = raw.floorY,
         ceilingMeasured = false;
       scanner.current.paused = true;
-      if (captureDebugEnabled())
-        debugCapture.current = snapshotDepthCapture(raw);
+      debugCapture.current = snapshotDepthCapture(raw);
       try {
         const fused = await buildFusedMesh(raw, !allowPartial);
         scanMesh = fused.mesh;
@@ -487,7 +494,7 @@ export default function ScannerPanel({
             </div>
             <div className="ss-scan-area-key" aria-label="Scanned area legend">
               <span>
-                <i className="is-observed" /> Bright circles = confirmed depth
+                <i className="is-observed" /> Bright circles = saved depth overlap
               </span>
             </div>
             <div
@@ -514,8 +521,8 @@ export default function ScannerPanel({
                   : "Captured colors unavailable."}
               </p>
               <p className="ss-scan-hint">
-                {captureGuidance(stats, busy)} Bright mint circles are confirmed
-                depth. Clear areas have no repeat-confirmed depth yet.
+                {captureGuidance(stats, busy)} Mint circles mark repeated depth
+                in saved views. Reconstruction still checks their agreement.
               </p>
               {!busy && !readiness.ready && (
                 <p className="ss-scan-hint">

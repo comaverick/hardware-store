@@ -1,4 +1,4 @@
-// Diagnostics are opt-in and stay in memory until the user downloads them.
+// Review diagnostics stay in memory until the user downloads them.
 // Snapshot before worker transfer detaches the live typed arrays. Camera photos
 // are omitted to bound memory; per-point RGB is sufficient for geometry replay.
 export function captureDebugEnabled() {
