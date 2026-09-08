@@ -1901,246 +1901,6 @@ function meshBounds(positions, floorY) {
   return bounds;
 }
 
-function measuredFrameScore(value) {
-  const depths = [];
-  const stride = Math.max(1, Math.ceil(value.filteredCount / 320));
-  let cursor = 0;
-  value.filteredDepth.forEach((depth) => {
-    if (depth && cursor++ % stride === 0) depths.push(depth);
-  });
-  depths.sort((a, b) => a - b);
-  const medianDepth = depths[Math.floor(depths.length / 2)] || 1;
-  const colorCoverage =
-    (value.coloredCount || 0) / Math.max(1, value.validCount);
-  // At equal pixel coverage, a farther frame observes more physical wall area
-  // and is a better reference than a narrow close-up.
-  return value.filteredCount * medianDepth * medianDepth * (1 + colorCoverage);
-}
-
-// Reproject real measurements from other accepted frames into one stable
-// reference view. Only missing reference pixels are considered. A broad gap
-// needs the same depth from translated cameras; a lone measurement is accepted
-// only beside a continuous measured boundary. No depth value is synthesized.
-function measuredCompositeFrame(frames) {
-  const reference = [...frames].sort(
-    (left, right) => measuredFrameScore(right) - measuredFrameScore(left),
-  )[0];
-  if (!reference || frames.length < 2)
-    return { frame: reference, recoveredMeasuredPixels: 0 };
-  const candidates = Array.from(
-    { length: reference.filteredDepth.length },
-    () => null,
-  );
-  frames.forEach((frame) => {
-    if (frame === reference) return;
-    for (let index = 0; index < frame.filteredDepth.length; index++) {
-      if (!frame.measuredMask[index] || frame.depthConfidence[index] < 96)
-        continue;
-      const offset = index * 3;
-      const projected = projectWorld(
-        reference,
-        frame.positions[offset],
-        frame.positions[offset + 1],
-        frame.positions[offset + 2],
-      );
-      if (!projected) continue;
-      const target = gridIndex(reference, projected.u, projected.v);
-      if (reference.filteredDepth[target]) continue;
-      (candidates[target] ||= []).push({
-        depth: projected.depth,
-        confidence: frame.depthConfidence[index],
-        camera: frame.camera,
-      });
-    }
-  });
-  const filteredDepth = new Float32Array(reference.filteredDepth);
-  const positions = new Float32Array(reference.positions);
-  const measuredMask = new Uint8Array(reference.measuredMask);
-  const depthConfidence = new Uint8Array(reference.depthConfidence);
-  const freeSpaceMask = new Uint8Array(reference.freeSpaceMask);
-  let recoveredMeasuredPixels = 0;
-  candidates.forEach((values, index) => {
-    if (!values?.length) return;
-    values.sort((left, right) => left.depth - right.depth);
-    const clusters = [];
-    values.forEach((value) => {
-      const cluster = clusters[clusters.length - 1];
-      if (
-        !cluster ||
-        value.depth - cluster[0].depth >
-          Math.max(0.075, cluster[0].depth * 0.035)
-      )
-        clusters.push([value]);
-      else cluster.push(value);
-    });
-    const cluster = clusters.sort((left, right) => right.length - left.length)[0];
-    const neighborDepths = [];
-    const x = index % reference.columns;
-    const y = Math.floor(index / reference.columns);
-    for (let dy = -2; dy <= 2; dy++)
-      for (let dx = -2; dx <= 2; dx++) {
-        if (!dx && !dy) continue;
-        const nextX = x + dx, nextY = y + dy;
-        if (
-          nextX < 0 || nextY < 0 ||
-          nextX >= reference.columns || nextY >= reference.rows
-        )
-          continue;
-        const depth = reference.filteredDepth[nextY * reference.columns + nextX];
-        if (depth) neighborDepths.push(depth);
-      }
-    neighborDepths.sort((left, right) => left - right);
-    const depth = cluster[Math.floor(cluster.length / 2)].depth;
-    const neighborMedian = neighborDepths.length
-      ? neighborDepths[Math.floor(neighborDepths.length / 2)]
-      : null;
-    let translatedSupport = false;
-    for (let first = 0; first < cluster.length && !translatedSupport; first++)
-      for (let second = first + 1; second < cluster.length; second++)
-        if (
-          Math.hypot(
-            cluster[first].camera[0] - cluster[second].camera[0],
-            cluster[first].camera[1] - cluster[second].camera[1],
-            cluster[first].camera[2] - cluster[second].camera[2],
-          ) >= MIN_INDEPENDENT_VIEW_METERS
-        ) {
-          translatedSupport = true;
-          break;
-        }
-    if (!translatedSupport && neighborDepths.length < 5) return;
-    if (
-      neighborMedian !== null &&
-      Math.abs(depth - neighborMedian) > Math.max(0.1, neighborMedian * 0.05)
-    )
-      return;
-    const point = depthPosition(reference, index, depth);
-    if (!point?.every(Number.isFinite)) return;
-    filteredDepth[index] = depth;
-    positions.set(point, index * 3);
-    measuredMask[index] = 1;
-    depthConfidence[index] = Math.min(
-      220,
-      Math.max(...cluster.map((value) => value.confidence)),
-    );
-    freeSpaceMask[index] = 0;
-    recoveredMeasuredPixels++;
-  });
-  return {
-    frame: {
-      ...reference,
-      positions,
-      filteredDepth,
-      measuredMask,
-      depthConfidence,
-      freeSpaceMask,
-      filteredCount: reference.filteredCount + recoveredMeasuredPixels,
-    },
-    recoveredMeasuredPixels,
-  };
-}
-
-// When room-wide fusion is unsafe, retain a continuous registered surface made
-// only from captured RGB-D measurements. A single reference topology prevents
-// overlapping sheets; discontinuities remain open instead of becoming walls.
-function measuredDepthFallback(frames, options, failureReason, details = {}) {
-  if (!frames.length) return null;
-  const composite = measuredCompositeFrame(frames);
-  const frame = composite.frame;
-  const vertexMap = new Int32Array(frame.columns * frame.rows).fill(-1);
-  const positions = [];
-  const colors = [];
-  for (let index = 0; index < frame.filteredDepth.length; index++) {
-    if (!frame.filteredDepth[index]) continue;
-    const offset = index * 3;
-    const point = [
-      frame.positions[offset],
-      frame.positions[offset + 1],
-      frame.positions[offset + 2],
-    ];
-    if (!point.every(Number.isFinite)) continue;
-    vertexMap[index] = positions.length / 3;
-    positions.push(...point);
-    const color = sampleFrameColor(
-      frame,
-      ((index % frame.columns) + 0.5) / frame.columns,
-      (Math.floor(index / frame.columns) + 0.5) / frame.rows,
-      index,
-    );
-    colors.push(...(color ? color.map(linearByte) : FALLBACK_COLOR.map(linearByte)));
-  }
-  const indices = [];
-  const triangleIsContinuous = (gridIndices) => {
-    if (gridIndices.some((index) => vertexMap[index] < 0)) return false;
-    const depths = gridIndices.map((index) => frame.filteredDepth[index]);
-    const nearest = Math.min(...depths);
-    const depthRange = Math.max(...depths) - nearest;
-    if (depthRange > Math.max(0.1, nearest * 0.065)) return false;
-    const vertices = gridIndices.map((index) => vertexMap[index] * 3);
-    for (let edge = 0; edge < 3; edge++) {
-      const first = vertices[edge];
-      const second = vertices[(edge + 1) % 3];
-      const distance = Math.hypot(
-        positions[first] - positions[second],
-        positions[first + 1] - positions[second + 1],
-        positions[first + 2] - positions[second + 2],
-      );
-      if (distance > Math.max(0.18, nearest * 0.22)) return false;
-    }
-    return true;
-  };
-  const addTriangle = (a, b, c) => {
-    if (!triangleIsContinuous([a, b, c])) return;
-    indices.push(vertexMap[a], vertexMap[b], vertexMap[c]);
-  };
-  for (let y = 0; y < frame.rows - 1; y++)
-    for (let x = 0; x < frame.columns - 1; x++) {
-      const topLeft = y * frame.columns + x;
-      const topRight = topLeft + 1;
-      const bottomLeft = topLeft + frame.columns;
-      const bottomRight = bottomLeft + 1;
-      addTriangle(topLeft, bottomLeft, topRight);
-      addTriangle(topRight, bottomLeft, bottomRight);
-    }
-  let surface = removeSmallComponents({
-    positions: new Float32Array(positions),
-    colors: new Uint8Array(colors),
-    indices: new Uint32Array(indices),
-  });
-  if (surface.indices.length < 24 || surface.surfaceArea < 0.025) return null;
-  const textured = texturedMesh(surface, [frame]);
-  const floorY = Number.isFinite(options.floorY) ? options.floorY : 0;
-  const mesh = {
-    version: 3,
-    kind: "measured-depth-surface",
-    ...textured,
-    vertexCount: textured.positions.length / 3,
-    triangleCount: textured.indices.length / 3,
-    floorY,
-    bounds: meshBounds(textured.positions, floorY),
-    observer: {
-      x: options.observer?.x || 0,
-      y: 1.6,
-      z: options.observer?.z || 0,
-    },
-  };
-  return {
-    mesh,
-    observations: buildAcceptedObservations(frames),
-    diagnostics: {
-      ...details,
-      reason: `A continuous measured depth surface was used because ${failureReason}`,
-      fallback: composite.recoveredMeasuredPixels
-        ? "registered-measured-composite"
-        : "strongest-measured-view",
-      recoveredMeasuredPixels: composite.recoveredMeasuredPixels,
-      keyframes: frames.length,
-      triangles: mesh.triangleCount,
-      surfaceArea: surface.surfaceArea,
-      textureCoverage: mesh.textureCoverage,
-    },
-  };
-}
-
 export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   report?.("preparing", 3);
   const ambiguousLegacyKeyframes = keyframes.filter(
@@ -2162,7 +1922,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     options.maxKeyframes || 40,
   );
   const stages = {
-    algorithmVersion: 11,
+    algorithmVersion: 12,
     supportMode: "translated-camera-viewpoints",
     depthSampling: "continuous-inverse-depth",
     coordinateMode: "view-aligned-v1",
@@ -2196,43 +1956,33 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     );
   if (
     Number.isFinite(options.headingCoverage) &&
-    options.headingCoverage < 50
+    options.headingCoverage < 75
   )
-    return measuredDepthFallback(
-      usable.length ? usable : prepared,
-      options,
-      "a one-wall capture is safer as one registered measured surface than as a room-wide volume.",
-      { ...stages, oneWallMode: true, overlappingKeyframes: usable.length },
-    ) || failure("No continuous measured wall surface could be recovered.", {
-      keyframes: usable.length,
-      oneWallMode: true,
-    });
+    return failure(
+      `Only ${Math.round(options.headingCoverage)}% of the room-direction sweep has reliable depth. Reach at least 75% before finishing.`,
+      { headingCoverage: options.headingCoverage, minimumHeadingCoverage: 75 },
+    );
   if (usable.length < 2)
-    return measuredDepthFallback(
-      prepared,
-      options,
-      "the captured views could not be aligned for multi-view fusion.",
-      { ...stages, overlappingKeyframes: usable.length },
-    ) || failure("At least two overlapping depth views are required.", { keyframes: usable.length });
+    return failure("At least two overlapping depth views are required. Keep scanning from nearby translated positions.", {
+      keyframes: usable.length,
+      overlappingKeyframes: usable.length,
+    });
   const samples = collectBoundsSamples(usable);
   if (samples.length < 400)
-    return measuredDepthFallback(
-      usable,
-      options,
-      "there were not enough samples for multi-view fusion.",
-      { ...stages, samples: samples.length },
-    ) || failure("Not enough filtered RGB-D samples for a surface.", { keyframes: usable.length, samples: samples.length });
+    return failure("Not enough filtered RGB-D samples for a reliable surface. Keep scanning the weak areas.", {
+      keyframes: usable.length,
+      samples: samples.length,
+    });
   const bounds = sampleBounds(samples);
   const volume = makeVolume(bounds, options);
   report?.("fusing", 16, { voxelSize: volume.voxelSize, dimensions: volume.dimensions });
   const confirmedVoxels = integrateProjective(volume, usable, report);
   if (confirmedVoxels < 120)
-    return measuredDepthFallback(
-      usable,
-      options,
-      "the captured views did not overlap enough for full fusion.",
-      { ...stages, confirmedVoxels, voxelSize: volume.voxelSize },
-    ) || failure("The captured views do not overlap enough for a reliable surface.", { keyframes: usable.length, confirmedVoxels, voxelSize: volume.voxelSize });
+    return failure("The captured views do not overlap enough for a reliable surface. Keep each wall visible while moving sideways.", {
+      keyframes: usable.length,
+      confirmedVoxels,
+      voxelSize: volume.voxelSize,
+    });
   regularizeVolume(volume);
   propagateSurfaceColors(volume);
   report?.("meshing", 68);
@@ -2256,21 +2006,12 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   stages.rectangularRoomModelCompatible =
     !meshOutsideRectangularRoomModel(wallStructure);
   if (!stages.rectangularRoomModelCompatible)
-    return measuredDepthFallback(
-      usable,
-      options,
-      "the multi-view result contained curled or contradictory wall layers.",
-      {
-        ...stages,
-        confirmedVoxels,
-        voxelSize: volume.voxelSize,
-        fusedSurfaceArea: surface.surfaceArea,
-        fusedTriangles: surface.indices.length / 3,
-        rejectedUnsafeFusion: true,
-      },
-    ) || failure("The multi-view wall geometry was structurally inconsistent.", {
+    return failure("The measured views create curled or overlapping wall layers. Keep scanning the affected wall from overlapping sideways positions.", {
       ...stages,
       confirmedVoxels,
+      voxelSize: volume.voxelSize,
+      fusedSurfaceArea: surface.surfaceArea,
+      fusedTriangles: surface.indices.length / 3,
       rejectedUnsafeFusion: true,
     });
   const surfaceFailureReason = highlyFragmented
@@ -2281,21 +2022,16 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     surface.surfaceArea < 0.04 ||
     highlyFragmented
   )
-    return measuredDepthFallback(
-      usable,
-      options,
-      surfaceFailureReason,
-      {
-        ...stages,
-        confirmedVoxels,
-        voxelSize: volume.voxelSize,
-        fusedSurfaceArea: surface.surfaceArea,
-        fusedTriangles: surface.indices.length / 3,
-        fragmented: highlyFragmented,
-        rectangularRoomModelCompatible:
-          stages.rectangularRoomModelCompatible,
-      },
-    ) || failure("The fused surface did not pass measured-surface quality checks.", { keyframes: usable.length, confirmedVoxels, surfaceArea: surface.surfaceArea, triangles: surface.indices.length / 3, fragmented: highlyFragmented, rectangularRoomModelCompatible: stages.rectangularRoomModelCompatible });
+    return failure(`${surfaceFailureReason} Keep scanning until the missing sections have repeated depth overlap.`, {
+      keyframes: usable.length,
+      confirmedVoxels,
+      voxelSize: volume.voxelSize,
+      fusedSurfaceArea: surface.surfaceArea,
+      fusedTriangles: surface.indices.length / 3,
+      fragmented: highlyFragmented,
+      rectangularRoomModelCompatible:
+        stages.rectangularRoomModelCompatible,
+    });
   surface = stages.rectangularRoomModelCompatible
     ? stabilizeDominantWalls(surface, volume.voxelSize)
     : { ...surface, stabilizedPlaneCount: 0 };

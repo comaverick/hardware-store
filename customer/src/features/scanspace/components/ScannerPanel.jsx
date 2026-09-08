@@ -26,13 +26,6 @@ function observationPoints(observations) {
   });
 }
 
-const captureQualitySummary = (stats) => ({
-  coverage: stats.coverage || 0,
-  cameraBaseline: stats.cameraBaseline || 0,
-  acceptedDepthFrames: stats.acceptedDepthFrames || 0,
-  rejectedDepthFrames: stats.rejectedDepthFrames || 0,
-});
-
 function CoverageCompass({ sectors = [], heading = 0 }) {
   const views = sectors.length ? sectors : Array(24).fill(false);
   const step = 360 / views.length;
@@ -144,7 +137,6 @@ function captureTargetState(stats, busy = false) {
 export default function ScannerPanel({
   capabilities,
   onComplete,
-  onPartial,
   onCancel,
 }) {
   const canvas = useRef(),
@@ -263,7 +255,11 @@ export default function ScannerPanel({
       );
     });
   }
-  async function finish(allowPartial = false) {
+  async function finish() {
+    if (!readiness.ready) {
+      setError(`Keep scanning before finishing: ${readiness.missing.join(", ")}.`);
+      return;
+    }
     setBusy(true);
     setError("");
     setFusion({ stage: "preparing", progress: 0 });
@@ -278,14 +274,32 @@ export default function ScannerPanel({
       scanner.current.paused = true;
       debugCapture.current = snapshotDepthCapture(raw);
       try {
-        const fused = await buildFusedMesh(raw, !allowPartial);
+        const fused = await buildFusedMesh(raw, true);
         scanMesh = fused.mesh;
         acceptedPoints = observationPoints(fused.observations) || raw.points;
         raw.stats.fusion = fused.diagnostics;
+        if (!scanMesh) {
+          setPartial({
+            reason:
+              fused.diagnostics?.reason ||
+              "The measured views did not pass surface-quality checks.",
+            pointCount: acceptedPoints.length,
+            coverage: raw.stats.coverage || 0,
+            cameraBaseline: raw.stats.cameraBaseline || 0,
+            rejectedDepthFrames: raw.stats.rejectedDepthFrames || 0,
+          });
+          return;
+        }
       } catch (fusionError) {
-        // The cloud is the truthful fallback. Do not revive the old per-frame
-        // mesh path, which could turn a failed fusion into invented geometry.
         raw.stats.fusion = { reason: fusionError.message, triangles: 0 };
+        setPartial({
+          reason: fusionError.message,
+          pointCount: raw.points.length,
+          coverage: raw.stats.coverage || 0,
+          cameraBaseline: raw.stats.cameraBaseline || 0,
+          rejectedDepthFrames: raw.stats.rejectedDepthFrames || 0,
+        });
+        return;
       } finally {
         fusionWorker.current?.terminate();
         fusionWorker.current = null;
@@ -322,69 +336,16 @@ export default function ScannerPanel({
         });
         ({ room, floorY, ceilingMeasured } = result);
         if (!room && result.partial) {
-          if (!allowPartial) {
-            setPartial({
-              reason: result.partial.reason,
-              pointCount: result.partial.pointCount,
-              coverage: raw.stats.coverage || 0,
-              cameraBaseline: raw.stats.cameraBaseline || 0,
-              rejectedDepthFrames: raw.stats.rejectedDepthFrames || 0,
-            });
-            return;
-          }
-          finished.current = true;
-          await scanner.current.stop();
-          onPartial(
-            {
-              ...result.partial,
-              cloud: scanCloud,
-              mesh: scanMesh,
-              fusionReason:
-                !scanMesh || raw.stats.fusion?.fallback
-                  ? raw.stats.fusion?.reason
-                  : null,
-              fusionMode: raw.stats.fusion?.fallback || "multi-view",
-              captureQuality: captureQualitySummary(raw.stats),
-              debugCapture: debugCapture.current,
-              fusionDiagnostics: raw.stats.fusion,
-            },
-            {
-              stats: raw.stats,
-              ceilingMeasured,
-            },
-          );
+          setPartial({
+            reason: result.partial.reason,
+            pointCount: result.partial.pointCount,
+            coverage: raw.stats.coverage || 0,
+            cameraBaseline: raw.stats.cameraBaseline || 0,
+            rejectedDepthFrames: raw.stats.rejectedDepthFrames || 0,
+          });
           return;
         }
       } catch (reconstructionError) {
-        if (!allowPartial) throw reconstructionError;
-        if (scanCloud) {
-          finished.current = true;
-          await scanner.current.stop();
-          onPartial(
-            {
-              version: 1,
-              kind: "observed-depth",
-              name: "Partial room scan",
-              walls: [],
-              floorObserved: Number.isFinite(raw.floorY),
-              ceilingObserved: false,
-              pointCount: acceptedPoints.length,
-              reason: reconstructionError.message,
-              cloud: scanCloud,
-              mesh: scanMesh,
-              fusionReason:
-                !scanMesh || raw.stats.fusion?.fallback
-                  ? raw.stats.fusion?.reason
-                  : null,
-              fusionMode: raw.stats.fusion?.fallback || "multi-view",
-              captureQuality: captureQualitySummary(raw.stats),
-              debugCapture: debugCapture.current,
-              fusionDiagnostics: raw.stats.fusion,
-            },
-            { stats: raw.stats, ceilingMeasured: false },
-          );
-          return;
-        }
         setPartial({
           reason: reconstructionError.message,
           pointCount: acceptedPoints.length,
@@ -419,17 +380,6 @@ export default function ScannerPanel({
       setFusion(null);
       setBusy(false);
     }
-  }
-  function preparePartialReview() {
-    if (scanner.current) scanner.current.paused = true;
-    setPartial({
-      reason:
-        "Reviewing now will show an open measured sector, not a complete room.",
-      pointCount: stats.stablePointCount || stats.pointCount || 0,
-      coverage: stats.coverage || 0,
-      cameraBaseline: stats.cameraBaseline || 0,
-      rejectedDepthFrames: stats.rejectedDepthFrames || 0,
-    });
   }
   return (
     <div className={`ss-scanner ${active ? "is-scanning" : ""}`}>
@@ -540,8 +490,8 @@ export default function ScannerPanel({
               )}
               {stats.full && (
                 <p className="ss-error">
-                  Capture density is at its safe limit. Finish with the measured
-                  area, or keep scanning only the missing wall.
+                  Capture density is at its safe limit. If completion is still
+                  unavailable, restart and scan with steadier overlap.
                 </p>
               )}
               {!partial ? (
@@ -556,20 +506,14 @@ export default function ScannerPanel({
                   >
                     Finish room scan
                   </button>
-                  {!readiness.ready &&
-                    (stats.stablePointCount || 0) >= 300 && (
-                      <button disabled={busy} onClick={preparePartialReview}>
-                        Build measured wall result
-                      </button>
-                    )}
                 </div>
               ) : (
                 <section className="ss-partial-capture" role="status">
-                  <strong>Partial depth captured</strong>
+                  <strong>Scan is not ready to finish</strong>
                   <p>
                     {partial.pointCount.toLocaleString()} points across{" "}
-                    {partial.coverage}% of the view sweep. The missing room
-                    outline has not been guessed.
+                    {partial.coverage}% of the view sweep. No result was created
+                    because the measured geometry did not pass validation.
                   </p>
                   <p>
                     Horizontal camera-position spread: {Math.round(
@@ -588,13 +532,6 @@ export default function ScannerPanel({
                       Keep scanning
                     </button>
                     <button onClick={cancelScan}>Cancel scan</button>
-                    <button
-                      className="ss-primary"
-                      disabled={busy}
-                      onClick={() => finish(true)}
-                    >
-                      Build this measured wall
-                    </button>
                   </div>
                 </section>
               )}

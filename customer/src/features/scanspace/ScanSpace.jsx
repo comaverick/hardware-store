@@ -16,15 +16,10 @@ import "./scanspace.css";
 const ScannerPanel = lazy(() => import("./components/ScannerPanel"));
 const RoomEditor = lazy(() => import("./components/RoomEditor"));
 const RoomScene = lazy(() => import("./components/RoomScene"));
-const PartialScanReview = lazy(
-  () => import("./components/PartialScanReview"),
-);
-
 export default function ScanSpace() {
   const [stage, setStage] = useState("welcome"),
     [capabilities, setCapabilities] = useState(null),
     [reviewRoom, setReviewRoom] = useState(null),
-    [partialScan, setPartialScan] = useState(null),
     [capture, setCapture] = useState({}),
     [error, setError] = useState(""),
     [draft, setDraft] = useState(false);
@@ -238,30 +233,6 @@ export default function ScanSpace() {
               setReviewRoom(room);
               setCapture(data);
               setStage("review");
-            }}
-            onPartial={(scan, data) => {
-              setPartialScan(scan);
-              setCapture(data);
-              setStage("partial");
-            }}
-          />
-        </Suspense>
-      )}
-      {stage === "partial" && partialScan && (
-        <Suspense
-          fallback={<div className="ss-loading">Opening partial scan…</div>}
-        >
-          <PartialScanReview
-            scan={partialScan}
-            onDone={() => {
-              setPartialScan(null);
-              setCapture({});
-              setStage("welcome");
-            }}
-            onRescan={() => {
-              setPartialScan(null);
-              setCapture({});
-              setStage("scan");
             }}
           />
         </Suspense>

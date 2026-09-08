@@ -376,15 +376,15 @@ test("a wall viewed obliquely from different camera poses remains planar", () =>
   expect(Math.sqrt(squaredError / checked)).toBeLessThan(0.015);
 });
 
-test("returns the real measured surface when only one camera view is usable", () => {
+test("refuses to finish when room-direction coverage is incomplete", () => {
   const keyframe = planeKeyframe(0, false);
   const result = fuseRgbdKeyframes([keyframe], {
     floorY: 0,
     headingCoverage: 25,
   });
-  expect(result.mesh?.kind).toBe("measured-depth-surface");
-  expect(result.mesh?.triangleCount).toBeGreaterThan(100);
-  expect(result.diagnostics.fallback).toBe("strongest-measured-view");
+  expect(result.mesh).toBeNull();
+  expect(result.diagnostics.reason).toMatch(/Reach at least 75%/);
+  expect(result.diagnostics.fallback).toBeUndefined();
 });
 
 test("rejects a drifted pose without losing the consistent wall", () => {
@@ -627,63 +627,58 @@ test("preserves a measured back surface through ordinary furniture-depth occlusi
   expect(backVertices).toBeGreaterThan(0);
 });
 
-test("uses a continuous measured surface instead of dots when strict close-range fusion cannot mesh", () => {
+test("refuses a close-range capture when strict fusion cannot make a reliable mesh", () => {
   const result = fuseRgbdKeyframes(
     [0, 0.04, -0.04].map((cameraX) =>
       planeKeyframe(cameraX, true, false, false, 0.62),
     ),
     { floorY: 0 },
   );
-  expect(result.mesh?.triangleCount).toBeGreaterThan(100);
-  expect(result.mesh.kind).toBe("measured-depth-surface");
-  expect(result.diagnostics.fallback).toBe("strongest-measured-view");
+  expect(result.mesh).toBeNull();
+  expect(result.diagnostics.reason).toMatch(/reliable|overlap|surface/i);
+  expect(result.diagnostics.fallback).toBeUndefined();
 });
 
-test("a repaired depth dropout has a matching 3D vertex in the measured-view fallback", () => {
+test("does not substitute a single-view mesh when close-range fusion fails", () => {
   const result = fuseRgbdKeyframes(
     [0, 0.04, -0.04].map((x) => planeKeyframe(x, true, "single", false, 0.62)),
   );
-  expect(result.mesh?.kind).toBe("measured-depth-surface");
-  // Every candidate frame originally lacked this pixel. Repaired depth must
-  // produce a position as well; retaining the raw NaN left a hole in fallback.
-  expect(result.mesh.triangleCount).toBe(450);
-  expect(Array.from(result.mesh.positions).every(Number.isFinite)).toBe(true);
+  expect(result.mesh).toBeNull();
+  expect(result.diagnostics.fallback).toBeUndefined();
 });
 
-test("one-wall mode recovers only registered depth measured by other views", () => {
+test("one-wall coverage cannot bypass the room completion gate", () => {
   const reference = planeKeyframe(0, true, true);
   const result = fuseRgbdKeyframes([
     reference,
     planeKeyframe(0.08, false),
     planeKeyframe(-0.08, false),
   ], { floorY: 0, headingCoverage: 25 });
-  expect(result.mesh?.kind).toBe("measured-depth-surface");
-  expect(result.diagnostics.oneWallMode).toBe(true);
-  expect(result.diagnostics.fallback).toBe("registered-measured-composite");
-  expect(result.diagnostics.recoveredMeasuredPixels).toBeGreaterThan(0);
-  expect(result.mesh.triangleCount).toBeGreaterThan(430);
+  expect(result.mesh).toBeNull();
+  expect(result.diagnostics.reason).toMatch(/75%/);
+  expect(result.diagnostics.fallback).toBeUndefined();
 });
 
-test("uses one measured view instead of dots when captured poses cannot be aligned", () => {
+test("refuses a result when captured poses cannot be aligned", () => {
   const result = fuseRgbdKeyframes(
     [planeKeyframe(0), planeKeyframe(8)],
     { floorY: 0 },
   );
-  expect(result.mesh?.triangleCount).toBeGreaterThan(100);
-  expect(result.mesh.kind).toBe("measured-depth-surface");
+  expect(result.mesh).toBeNull();
   expect(result.diagnostics.overlappingKeyframes).toBe(1);
+  expect(result.diagnostics.fallback).toBeUndefined();
 });
 
 test("same-position frames cannot masquerade as independent fusion support", () => {
   const repeated = planeKeyframe(0);
   const duplicate = planeKeyframe(0);
   const result = fuseRgbdKeyframes([repeated, duplicate], { floorY: 0 });
-  expect(result.mesh?.kind).toBe("measured-depth-surface");
-  expect(result.diagnostics.fallback).toBe("strongest-measured-view");
+  expect(result.mesh).toBeNull();
   expect(result.diagnostics.confirmedVoxels).toBe(0);
+  expect(result.diagnostics.fallback).toBeUndefined();
 });
 
-test("unaligned fallback favors the wider measured view over a narrow close-up", () => {
+test("does not choose either unaligned view as a fallback result", () => {
   const result = fuseRgbdKeyframes(
     [
       planeKeyframe(0, true, false, false, 0.7),
@@ -691,6 +686,7 @@ test("unaligned fallback favors the wider measured view over a narrow close-up",
     ],
     { floorY: 0 },
   );
-  expect(result.mesh?.kind).toBe("measured-depth-surface");
-  expect(result.mesh.bounds.max.x - result.mesh.bounds.min.x).toBeGreaterThan(3);
+  expect(result.mesh).toBeNull();
+  expect(result.diagnostics.overlappingKeyframes).toBe(1);
+  expect(result.diagnostics.fallback).toBeUndefined();
 });

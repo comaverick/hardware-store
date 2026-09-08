@@ -1,7 +1,7 @@
 # Replaying a ScanSpace depth failure
 
-After finishing a scan, use **Download scan diagnostics** on the partial or
-full room review. No debug URL is required. This is a local, in-memory snapshot;
+During a scan, use **Download scan diagnostics** in device diagnostics, or use
+the same action after a successful room review. No debug URL is required. This is a local, in-memory snapshot;
 it is not uploaded. Leaving the review clears it. Camera photos are excluded.
 
 The export is captured before reconstruction transfers the typed arrays to the
@@ -25,7 +25,7 @@ Check `coordinateMode`, `inputDepthSamples`, `filteredDepthSamples`,
 `roundTrip`, `alignment.pairs`, `alignment.rejectedFrameIds`, `cellRejections`,
 `wallStructure`, `rectangularRoomModelCompatible`, and the triangle counts
 before and after cleanup. Pair errors are in metres. Automatic pose mutation is
-disabled; incompatible frames are still rejected. `algorithmVersion: 11`
+disabled; incompatible frames are still rejected. `algorithmVersion: 12`
 uses continuous inverse-depth sampling on supported surfaces. `frameSamples`
 reports input, retained measured, and repaired sample counts for every prepared
 frame. This distinguishes sensor gaps from filter and frame-selection losses.
@@ -34,11 +34,12 @@ Algorithm 10 requires at least 4 cm of camera translation before two samples
 can count as independent support for the same fused voxel. Turning in place can
 capture another direction, but it cannot reinforce a bowed depth surface.
 
-Algorithm 11 uses a registered measured composite for captures below 50%
-heading coverage. Missing reference pixels can be recovered only from actual
-accepted depth samples in other frames. It never creates a plane or wall.
-The same measured fallback replaces a room-wide mesh when wall diagnostics
-detect curled or contradictory layers.
+Algorithm 12 has no single-view or registered-composite fallback. Captures below
+75% heading coverage, captures without overlapping translated viewpoints, and
+fused surfaces with fragmented, curled, or contradictory wall layers return no
+mesh. The scanner remains open and reports what must be rescanned. Only a
+multi-view measured surface and a closed four-wall depth boundary may proceed
+to room review; missing room walls are never synthesized.
 
 Capture requires a genuinely new camera viewpoint for every retained keyframe.
 Waiting at one pose cannot add duplicate support to a warped depth observation.
