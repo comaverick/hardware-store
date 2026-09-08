@@ -639,6 +639,15 @@ test("uses one measured view instead of dots when captured poses cannot be align
   expect(result.diagnostics.overlappingKeyframes).toBe(1);
 });
 
+test("same-position frames cannot masquerade as independent fusion support", () => {
+  const repeated = planeKeyframe(0);
+  const duplicate = planeKeyframe(0);
+  const result = fuseRgbdKeyframes([repeated, duplicate], { floorY: 0 });
+  expect(result.mesh?.kind).toBe("measured-depth-surface");
+  expect(result.diagnostics.fallback).toBe("strongest-measured-view");
+  expect(result.diagnostics.confirmedVoxels).toBe(0);
+});
+
 test("unaligned fallback favors the wider measured view over a narrow close-up", () => {
   const result = fuseRgbdKeyframes(
     [

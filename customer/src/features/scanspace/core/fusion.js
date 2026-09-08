@@ -1,5 +1,6 @@
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const MIN_ROOM_DEPTH_METERS = 0.45;
+const MIN_INDEPENDENT_VIEW_METERS = 0.04;
 const FALLBACK_COLOR = [108, 122, 116];
 const CUBE_CORNERS = [
   [0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0],
@@ -53,6 +54,13 @@ export function createRgbdKeyframe(points, options = {}) {
   });
   if (validCount < 6) return null;
   const image = options.colorImage;
+  const transformMatrix = new Float32Array(options.transformMatrix || []);
+  const cameraCoordinate = (name, offset) =>
+    Number.isFinite(options.camera?.[name])
+      ? options.camera[name]
+      : Number.isFinite(transformMatrix[offset])
+        ? transformMatrix[offset]
+        : 0;
   return {
     version: 3,
     geometryMode: options.geometryMode || "view-aligned-v1",
@@ -67,7 +75,7 @@ export function createRgbdKeyframe(points, options = {}) {
     colorHeight: image?.height || 0,
     colorChannels: image?.channels || 4,
     projectionMatrix: new Float32Array(options.projectionMatrix || []),
-    transformMatrix: new Float32Array(options.transformMatrix || []),
+    transformMatrix,
     // Depth geometry is used for fusion. The XR/color view is retained
     // separately so camera pixels are projected with the camera that produced
     // them when the phone exposes a non-coincident depth sensor.
@@ -85,9 +93,9 @@ export function createRgbdKeyframe(points, options = {}) {
         : [],
     ),
     camera: new Float32Array([
-      options.camera?.x || 0,
-      options.camera?.y || 0,
-      options.camera?.z || 0,
+      cameraCoordinate("x", 12),
+      cameraCoordinate("y", 13),
+      cameraCoordinate("z", 14),
     ]),
     timestamp: options.timestamp || 0,
     tracking: true,
@@ -611,12 +619,16 @@ function makeVolume(bounds, options) {
     z: bounds.min.z - voxelSize * 2,
   };
   const count = cellCount();
+  const firstViewIds = new Uint8Array(count);
+  firstViewIds.fill(255);
   return {
     origin,
     dimensions,
     voxelSize,
     values: new Float32Array(count),
     weights: new Uint8Array(count),
+    viewpointCounts: new Uint8Array(count),
+    firstViewIds,
     weightSums: new Float32Array(count),
     varianceSums: new Float32Array(count),
     depthSums: new Float32Array(count),
@@ -705,7 +717,7 @@ function integrateProjective(volume, frames, report) {
   volume.truncation = truncation;
   const total = frames.length * depth;
   let completed = 0;
-  frames.forEach((frame) => {
+  frames.forEach((frame, frameIndex) => {
     for (let z = 0; z < depth; z++) {
       const worldZ = volume.origin.z + (z + 0.5) * volume.voxelSize;
       for (let y = 0; y < height; y++) {
@@ -748,6 +760,21 @@ function integrateProjective(volume, frames, report) {
           volume.weightSums[index] = nextWeight;
           volume.depthSums[index] += projected.depth * sampleWeight;
           volume.weights[index] = Math.min(32, previousViews + 1);
+          if (!volume.viewpointCounts[index]) {
+            volume.viewpointCounts[index] = 1;
+            volume.firstViewIds[index] = frameIndex;
+          } else if (volume.viewpointCounts[index] === 1) {
+            const firstCamera = frames[volume.firstViewIds[index]]?.camera;
+            if (
+              firstCamera &&
+              Math.hypot(
+                frame.camera[0] - firstCamera[0],
+                frame.camera[1] - firstCamera[1],
+                frame.camera[2] - firstCamera[2],
+              ) >= MIN_INDEPENDENT_VIEW_METERS
+            )
+              volume.viewpointCounts[index] = 2;
+          }
           if (Math.abs(signedDistance) <= volume.voxelSize * 1.15) {
             const colorProjection = projectColorWorld(
               frame,
@@ -781,7 +808,10 @@ function integrateProjective(volume, frames, report) {
         report?.("fusing", 18 + Math.round((completed / total) * 48));
     }
   });
-  return volume.weights.reduce((count, weight) => count + (weight >= 2 ? 1 : 0), 0);
+  return volume.viewpointCounts.reduce(
+    (count, viewpoints) => count + (viewpoints >= 2 ? 1 : 0),
+    0,
+  );
 }
 
 function regularizeVolume(volume) {
@@ -880,6 +910,7 @@ function volumeCorner(volume, x, y, z) {
     z: volume.origin.z + (z + 0.5) * volume.voxelSize,
     value: volume.values[index],
     weight: volume.weights[index],
+    viewpoints: volume.viewpointCounts[index],
     variance: volume.weightSums[index] > 0
       ? Math.sqrt(Math.max(0, volume.varianceSums[index] / volume.weightSums[index])) * volume.truncation
       : Infinity,
@@ -927,6 +958,7 @@ function extractSurfaceNet(volume, report) {
             corner.freeSpaceVotes >= Math.max(3, corner.weight * 1.25);
           return (
             corner.weight >= requiredViews &&
+            corner.viewpoints >= 2 &&
             corner.variance <= varianceLimit &&
             !contradictedByFreeSpace
           );
@@ -1992,7 +2024,8 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     options.maxKeyframes || 40,
   );
   const stages = {
-    algorithmVersion: 9,
+    algorithmVersion: 10,
+    supportMode: "translated-camera-viewpoints",
     depthSampling: "continuous-inverse-depth",
     coordinateMode: "view-aligned-v1",
     inputKeyframes: keyframes.length,

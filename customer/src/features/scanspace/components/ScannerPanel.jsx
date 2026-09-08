@@ -4,7 +4,13 @@ import { surfaceTextures } from "../core/reconstruction";
 import { buildScanCloud } from "../core/scanCloud";
 import { buildStructuralRepair } from "../core/structuralRepair";
 import { snapshotDepthCapture, downloadDepthCapture } from "../core/captureDebug";
-import { scanReadiness } from "../core/readiness";
+import {
+  scanReadiness,
+  MIN_CAMERA_BASELINE_METERS,
+  MIN_DIRECTION_COVERAGE,
+  MIN_FUSION_KEYFRAMES,
+  MIN_STABLE_POINTS,
+} from "../core/readiness";
 
 function observationPoints(observations) {
   if (!observations?.count || !observations.positions?.length) return null;
@@ -67,13 +73,13 @@ function captureGuidance(stats, busy = false) {
     return "Aim at the floor until floor detection says Ready.";
   if ((stats.fusionKeyframes || 0) < 2)
     return "Move slowly sideways while keeping the same surface centered.";
-  if ((stats.fusionKeyframes || 0) < 6)
+  if ((stats.fusionKeyframes || 0) < MIN_FUSION_KEYFRAMES)
     return "Good start. Continue one slow sideways pass for stronger overlap.";
-  if ((stats.cameraBaseline || 0) < 0.25)
-    return "Do not only pivot in place. Move sideways at least 25 cm while keeping the same wall centered.";
-  if ((stats.coverage || 0) < 50)
+  if ((stats.cameraBaseline || 0) < MIN_CAMERA_BASELINE_METERS)
+    return "Do not only pivot in place. Move sideways at least 40 cm while keeping the same wall centered.";
+  if ((stats.coverage || 0) < MIN_DIRECTION_COVERAGE)
     return "Turn through the unscanned directions and keep each wall in view.";
-  if ((stats.stablePointCount || 0) < 1200)
+  if ((stats.stablePointCount || 0) < MIN_STABLE_POINTS)
     return "Keep scanning the walls from overlapping angles to fill the remaining gaps.";
   return "Surface overlap is building. Cover dark or reflective areas from another angle.";
 }
@@ -111,7 +117,7 @@ function captureTargetState(stats, busy = false) {
       label: "Weak depth here",
       hint: "Step back or change angle",
     };
-  if ((stats.cameraBaseline || 0) < 0.25)
+  if ((stats.cameraBaseline || 0) < MIN_CAMERA_BASELINE_METERS)
     return {
       tone: "pending",
       label: "Move slowly sideways",
@@ -555,7 +561,7 @@ export default function ScannerPanel({
                   {!readiness.ready &&
                     (stats.stablePointCount || 0) >= 300 && (
                       <button disabled={busy} onClick={preparePartialReview}>
-                        Review partial capture
+                        Preview incomplete capture
                       </button>
                     )}
                 </div>
@@ -589,7 +595,7 @@ export default function ScannerPanel({
                       disabled={busy}
                       onClick={() => finish(true)}
                     >
-                      Review open sector anyway
+                      Preview open sector only
                     </button>
                   </div>
                 </section>
@@ -659,10 +665,7 @@ export default function ScannerPanel({
           {stats.errors?.map((e, i) => (
             <p key={i}>{e}</p>
           ))}
-          {active &&
-            new URLSearchParams(window.location.search).has(
-              "scanspaceDebug",
-            ) && (
+          {active && (stats.fusionKeyframes || 0) > 0 && (
               <button type="button" onClick={downloadDebugCapture}>
                 Export RGB-D debug capture
               </button>

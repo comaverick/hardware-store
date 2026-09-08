@@ -120,14 +120,20 @@ function ScanControls({ cloud, mode, input, view, reset }) {
 export default function PartialScanScene({ scan }) {
   const [mode, setMode] = useState("orbit");
   const [low, setLow] = useState(false);
-  const [surfaceMode, setSurfaceMode] = useState("captured");
+  const [surfaceMode, setSurfaceMode] = useState(() =>
+    scan.structuralRepair?.cleanSurface ? "repaired" : "captured",
+  );
   const [reset, setReset] = useState(0);
   const [knob, setKnob] = useState({ x: 0, y: 0 });
   const input = useRef({ x: 0, y: 0, keys: {} });
   const mesh = scan.mesh;
   const cloud = scan.cloud;
   const repair = scan.structuralRepair;
-  const visual = mesh || cloud;
+  const cleanSurface = repair?.cleanSurface;
+  const capturedVisual = mesh || cloud;
+  const visual = surfaceMode === "repaired" && cleanSurface
+    ? cleanSurface
+    : capturedVisual;
   const view = useMemo(() => {
     if (!visual)
       return {
@@ -176,8 +182,8 @@ export default function PartialScanScene({ scan }) {
     <div className="ss-partial-scene">
       <Canvas
         camera={{ position: view.position, fov: 48, near: 0.025, far: 100 }}
-        dpr={low ? 1 : [1, 1.5]}
-        gl={{ antialias: false, powerPreference: "high-performance" }}
+        dpr={low ? 1 : [1, 2]}
+        gl={{ antialias: true, powerPreference: "high-performance" }}
         onCreated={({ gl }) => {
           gl.outputColorSpace = THREE.SRGBColorSpace;
           gl.toneMapping = THREE.ACESFilmicToneMapping;
@@ -188,13 +194,12 @@ export default function PartialScanScene({ scan }) {
         <hemisphereLight args={["#fff8ed", "#66756f", 2.1]} />
         <ambientLight intensity={0.35} />
         <directionalLight position={[3, 7, 4]} intensity={1.6} />
-        {mesh ? (
+        {surfaceMode === "repaired" && cleanSurface ? (
+          <ScanMesh mesh={cleanSurface} low={low} />
+        ) : mesh ? (
           <ScanMesh mesh={mesh} low={low} />
         ) : (
           <ScanPointCloud cloud={cloud} low={low} />
-        )}
-        {surfaceMode === "repaired" && repair && (
-          <ScanMesh mesh={repair} low={low} />
         )}
         <ScanControls
           cloud={visual}
@@ -223,7 +228,7 @@ export default function PartialScanScene({ scan }) {
           Reset
         </button>
       </div>
-      {repair && (
+      {cleanSurface && (
         <div
           className="ss-surface-modebar"
           role="group"
@@ -271,8 +276,8 @@ export default function PartialScanScene({ scan }) {
       </span>
       <span className="ss-partial-legend">
         <i className={surfaceMode === "repaired" ? "is-inferred" : ""} />{" "}
-        {surfaceMode === "repaired" && repair
-          ? "Measured + inferred wall repair"
+        {surfaceMode === "repaired" && cleanSurface
+          ? "Planar walls fitted to measured bounds"
           : mesh?.kind === "measured-depth-surface"
           ? "Single-view measured RGB-D surface"
           : mesh

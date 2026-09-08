@@ -132,6 +132,15 @@ test("missing sensor pixels count against current view overlap", () => {
   cloud.add(points, 2);
   expect(cloud.confirmedRatio(points, 100)).toBe(0.01);
 });
+test("rotation at one camera position is not independent depth support", () => {
+  const cloud = new VoxelCloud();
+  const points = [{ x: 0, y: 1, z: -2 }];
+  cloud.add(points, 1, new Float32Array([0, 1.6, 0]));
+  cloud.add(points, 2, new Float32Array([0, 1.6, 0]));
+  expect(cloud.confirmedRatio(points)).toBe(0);
+  cloud.add(points, 3, new Float32Array([0.08, 1.6, 0]));
+  expect(cloud.confirmedRatio(points)).toBe(1);
+});
 function fixture(wallCount = 4) {
   const points = [];
   for (let y = 0.4; y < 2.5; y += 0.13)

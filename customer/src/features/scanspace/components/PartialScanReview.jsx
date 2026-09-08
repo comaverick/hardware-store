@@ -1,13 +1,17 @@
 import PartialScanScene from "./PartialScanScene";
 import { downloadDepthCapture } from "../core/captureDebug";
+import {
+  MIN_CAMERA_BASELINE_METERS,
+  MIN_DIRECTION_COVERAGE,
+} from "../core/readiness";
 
 export default function PartialScanReview({ scan, onRescan, onDone }) {
   const quality = scan.captureQuality;
   return (
     <section className="ss-partial-review">
       <header>
-        <span className="ss-kicker">Partial scan finished</span>
-        <h2>Your captured room.</h2>
+        <span className="ss-kicker">Incomplete scan preview</span>
+        <h2>Your measured surfaces.</h2>
         <p>
           This view is built from the camera colors and depth points that were
           actually captured. Missing areas remain open instead of becoming
@@ -15,7 +19,8 @@ export default function PartialScanReview({ scan, onRescan, onDone }) {
         </p>
       </header>
       {quality &&
-        (quality.coverage < 50 || quality.cameraBaseline < 0.25) && (
+        (quality.coverage < MIN_DIRECTION_COVERAGE ||
+          quality.cameraBaseline < MIN_CAMERA_BASELINE_METERS) && (
           <p className="ss-notice">
             This is a limited viewing sector, not a room-shaped capture: {quality.coverage}%
             heading coverage and {Math.round(quality.cameraBaseline * 100)} cm
@@ -25,16 +30,17 @@ export default function PartialScanReview({ scan, onRescan, onDone }) {
           </p>
         )}
       <PartialScanScene scan={scan} />
-      {scan.structuralRepair && (
+      {scan.structuralRepair?.cleanSurface && (
         <p className="ss-notice ss-inference-notice">
-          Clean walls adds {scan.structuralRepair.repairedCellCount} neutral
-          patches only to small enclosed gaps on confidently measured wall
-          planes
+          Clean walls is shown by default. It replaces bowed depth fragments
+          with flat wall panels constrained to the measured wall bounds, so
+          sensor holes do not remain in the presentation
           {scan.structuralRepair.inferredWindowCount
             ? ` and marks ${scan.structuralRepair.inferredWindowCount} enclosed rectangular dropout as a probable window panel`
             : ""}
-          . Captured pixels are unchanged. Irregular large gaps, outer edges,
-          and floor-connected doorway gaps remain open.
+          . Switch to Captured to inspect the unchanged raw reconstruction.
+          These fitted panels do not claim that unscanned room directions were
+          measured.
         </p>
       )}
       <div className="ss-partial-facts">

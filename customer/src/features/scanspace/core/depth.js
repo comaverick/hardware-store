@@ -152,7 +152,7 @@ export class VoxelCloud {
     this.compactions++;
     return true;
   }
-  add(points, frameId) {
+  add(points, frameId, viewpoint = null) {
     for (const p of points) {
       if (![p.x, p.y, p.z].every((v) => Number.isFinite(v) && Math.abs(v) < 60))
         continue;
@@ -166,6 +166,19 @@ export class VoxelCloud {
       if (previous) {
         if (previous.frameId === frameId) continue;
         previous.frameId = frameId;
+        // A turn from the same spot is useful for looking at another wall, but
+        // it is not an independent geometric observation of an overlapping
+        // surface. Require camera translation before marking a voxel stable.
+        if (
+          viewpoint &&
+          Number.isFinite(previous.viewX) &&
+          Math.hypot(
+            viewpoint[0] - previous.viewX,
+            viewpoint[1] - previous.viewY,
+            viewpoint[2] - previous.viewZ,
+          ) < 0.04
+        )
+          continue;
         if (previous.hits === 1) this.repeatedCells++;
         previous.hits++;
         const weight = 1 / Math.min(previous.hits, 8);
@@ -177,7 +190,14 @@ export class VoxelCloud {
             ? previous.color.map((v, i) => v + (p.color[i] - v) * weight)
             : p.color;
       } else if (this.cells.size < this.limit)
-        this.cells.set(key, { ...p, frameId, hits: 1 });
+        this.cells.set(key, {
+          ...p,
+          frameId,
+          hits: 1,
+          viewX: viewpoint?.[0],
+          viewY: viewpoint?.[1],
+          viewZ: viewpoint?.[2],
+        });
       else this.full = this.size >= this.maxSize;
     }
   }

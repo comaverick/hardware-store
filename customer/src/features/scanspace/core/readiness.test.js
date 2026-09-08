@@ -4,10 +4,10 @@ const readyStats = {
   depthActive: true,
   depthCurrent: true,
   floorY: 0,
-  fusionKeyframes: 6,
-  cameraBaseline: 0.25,
-  coverage: 50,
-  stablePointCount: 1200,
+  fusionKeyframes: 12,
+  cameraBaseline: 0.4,
+  coverage: 75,
+  stablePointCount: 2000,
 };
 
 test("does not call a sparse depth capture a complete room scan", () => {
@@ -23,10 +23,10 @@ test("does not call a sparse depth capture a complete room scan", () => {
   expect(result.missing).toEqual(
     expect.arrayContaining([
       "a detected floor",
-      "six captured depth views",
-      "25 cm of horizontal camera-position spread",
-      "half of the camera heading sweep",
-      "1,200 stable points",
+      "12 translated or clearly separated depth views",
+      "40 cm of horizontal camera-position spread",
+      "three quarters of the camera heading sweep",
+      "2,000 independently observed surface points",
     ]),
   );
 });

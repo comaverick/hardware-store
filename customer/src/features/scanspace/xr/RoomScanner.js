@@ -411,7 +411,7 @@ export class RoomScanner {
       const turned = 2 * Math.acos(dot);
       // Slightly denser poses improve projective overlap without retaining
       // every XR frame. The global keyframe cap still bounds phone memory.
-      if (moved < 0.08 && turned < 0.1) return false;
+      if (moved < 0.08 && turned < 0.18) return false;
     }
     return true;
   }
@@ -492,7 +492,7 @@ export class RoomScanner {
           : undefined,
       });
     });
-    this.cloud.add(points, frameId);
+    this.cloud.add(points, frameId, frame.camera);
   }
   togglePause() {
     if (this.originChanged) return;

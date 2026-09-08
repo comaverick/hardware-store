@@ -36,6 +36,8 @@ test("repairs a small enclosed dropout on a measured wall plane", () => {
   expect(repair.repairedCellCount).toBe(1);
   expect(repair.triangleCount).toBe(2);
   expect(repair.positions).toBeInstanceOf(Float32Array);
+  expect(repair.cleanSurface.kind).toBe("inferred-planar-wall-surface");
+  expect(repair.cleanSurface.triangleCount).toBe(2);
 });
 
 test("does not close a gap connected to the wall boundary", () => {
@@ -44,7 +46,8 @@ test("does not close a gap connected to the wall boundary", () => {
     gridCloud((column, row) => column === 0 && row >= 3 && row <= 5),
     options,
   );
-  expect(repair).toBeNull();
+  expect(repair.repairedCellCount).toBe(0);
+  expect(repair.cleanSurface.triangleCount).toBe(2);
 });
 
 test("does not close a floor-connected probable doorway", () => {
@@ -53,7 +56,8 @@ test("does not close a floor-connected probable doorway", () => {
     gridCloud((column, row) => column >= 4 && column <= 5 && row <= 4),
     options,
   );
-  expect(repair).toBeNull();
+  expect(repair.repairedCellCount).toBe(0);
+  expect(repair.cleanSurface.triangleCount).toBe(2);
 });
 
 test("does not close a large unsupported interior region", () => {
@@ -65,7 +69,8 @@ test("does not close a large unsupported interior region", () => {
     ),
     options,
   );
-  expect(repair).toBeNull();
+  expect(repair.repairedCellCount).toBe(0);
+  expect(repair.cleanSurface.triangleCount).toBe(2);
 });
 
 test("marks a large enclosed rectangular dropout as a probable window", () => {

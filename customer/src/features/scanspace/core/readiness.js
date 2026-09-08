@@ -1,4 +1,7 @@
-export const MIN_CAMERA_BASELINE_METERS = 0.25;
+export const MIN_CAMERA_BASELINE_METERS = 0.4;
+export const MIN_DIRECTION_COVERAGE = 75;
+export const MIN_FUSION_KEYFRAMES = 12;
+export const MIN_STABLE_POINTS = 2000;
 
 export function depthFrameQuality({
   validSamples = 0,
@@ -21,13 +24,13 @@ export function scanReadiness(stats) {
   const missing = [];
   if (!stats.depthActive || !stats.depthCurrent) missing.push("live depth");
   if (!Number.isFinite(stats.floorY)) missing.push("a detected floor");
-  if ((stats.fusionKeyframes || 0) < 6)
-    missing.push("six captured depth views");
+  if ((stats.fusionKeyframes || 0) < MIN_FUSION_KEYFRAMES)
+    missing.push("12 translated or clearly separated depth views");
   if ((stats.cameraBaseline || 0) < MIN_CAMERA_BASELINE_METERS)
-    missing.push("25 cm of horizontal camera-position spread");
-  if ((stats.coverage || 0) < 50)
-    missing.push("half of the camera heading sweep");
-  if ((stats.stablePointCount || 0) < 1200)
-    missing.push("1,200 stable points");
+    missing.push("40 cm of horizontal camera-position spread");
+  if ((stats.coverage || 0) < MIN_DIRECTION_COVERAGE)
+    missing.push("three quarters of the camera heading sweep");
+  if ((stats.stablePointCount || 0) < MIN_STABLE_POINTS)
+    missing.push("2,000 independently observed surface points");
   return { ready: missing.length === 0, missing };
 }
