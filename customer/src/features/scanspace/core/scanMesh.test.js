@@ -11,6 +11,7 @@ import {
   meshWallStructureDiagnostics,
   measuredSurfaceQualityDiagnostics,
   measuredWallSectorQualityDiagnostics,
+  wallConsensusKeyframes,
   projectWorld,
 } from "./fusion";
 import { Matrix4, PerspectiveCamera, Vector3 } from "three";
@@ -298,6 +299,41 @@ test("surface quality detects competing parallel wall layers", () => {
   );
   expect(duplicated.assessed).toBe(true);
   expect(duplicated.dominantLayerRatio).toBeLessThan(0.58);
+  expect(duplicated.duplicateLayerLikely).toBe(true);
+});
+
+test("surface quality keeps a localized parallel furniture front", () => {
+  const mesh = {
+    positions: new Float32Array([
+      0, 0, 0, 2, 0, 0, 2, 2, 0, 0, 2, 0,
+      0.7, 0, 0.3, 1.3, 0, 0.3, 1.3, 0.5, 0.3, 0.7, 0.5, 0.3,
+    ]),
+    indices: new Uint32Array([0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7]),
+  };
+  const quality = measuredSurfaceQualityDiagnostics(mesh);
+  expect(quality.assessed).toBe(true);
+  expect(quality.dominantLayerRatio).toBeLessThan(1);
+  expect(quality.duplicateLayerLikely).toBe(false);
+});
+
+test("automatic layer repair prunes frames outside the consensus wall", () => {
+  const frame = (frameId, z) => ({
+    frameId,
+    filteredCount: 12,
+    filteredDepth: new Float32Array(12).fill(2),
+    measuredMask: new Uint8Array(12).fill(1),
+    positions: new Float32Array(
+      Array.from({ length: 12 }, (_, index) => [index / 12, 0, z]).flat(),
+    ),
+  });
+  const repair = wallConsensusKeyframes(
+    [frame(0, 0), frame(1, 0), frame(2, 0), frame(3, 0), frame(4, 0.3), frame(5, 0.3)],
+    {
+      walls: [{ dominantNormal: { x: 0, z: 1 }, wallOffset: 0 }],
+    },
+  );
+  expect(repair.keptFrameIds).toEqual([0, 1, 2, 3]);
+  expect(repair.removedFrameIds).toEqual([4, 5]);
 });
 
 test("surface quality detects a large enclosed unmeasured wall gap", () => {

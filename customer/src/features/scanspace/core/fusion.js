@@ -1650,6 +1650,55 @@ export function measuredSurfaceQualityDiagnostics(mesh, gridSize = 20) {
       }
   });
   const occupiedCells = occupied.reduce((sum, value) => sum + value, 0);
+  const competing = new Uint8Array(gridSize * gridSize);
+  aligned.forEach((record) => {
+    const distance = Math.abs(
+      record.center.x * best.nx +
+        record.center.z * best.nz -
+        wallOffset,
+    );
+    // Opposite room walls can legitimately share an orientation. Tracking
+    // duplicates and furniture fronts are normally much closer to the
+    // consensus wall, so only nearby alternate layers are classified here.
+    if (distance <= layerTolerance || distance > 0.75) return;
+    const triangle = record.vertices.map((point) => ({
+      x: point.x * tangent.x + point.z * tangent.z,
+      y: point.y,
+    }));
+    const xs = triangle.map((point) =>
+      Math.max(
+        0,
+        Math.min(
+          gridSize - 1,
+          Math.floor(((point.x - bounds.minX) / width) * gridSize),
+        ),
+      ),
+    );
+    const ys = triangle.map((point) =>
+      Math.max(
+        0,
+        Math.min(
+          gridSize - 1,
+          Math.floor(((point.y - bounds.minY) / height) * gridSize),
+        ),
+      ),
+    );
+    for (let y = Math.min(...ys); y <= Math.max(...ys); y++)
+      for (let x = Math.min(...xs); x <= Math.max(...xs); x++) {
+        const px = bounds.minX + ((x + 0.5) / gridSize) * width;
+        const py = bounds.minY + ((y + 0.5) / gridSize) * height;
+        if (pointInsideTriangle2d(px, py, triangle))
+          competing[y * gridSize + x] = 1;
+      }
+  });
+  const competingCells = competing.reduce((sum, value) => sum + value, 0);
+  let overlappingLayerCells = 0;
+  competing.forEach((value, index) => {
+    if (value && occupied[index]) overlappingLayerCells++;
+  });
+  const competingLayerCoverage = competingCells / occupied.length;
+  const competingLayerOverlapRatio =
+    overlappingLayerCells / Math.max(1, competingCells);
   let enclosedEmptyCells = 0;
   for (let y = 1; y < gridSize - 1; y++)
     for (let x = 1; x < gridSize - 1; x++) {
@@ -1675,6 +1724,11 @@ export function measuredSurfaceQualityDiagnostics(mesh, gridSize = 20) {
     width,
     height,
     gridCoverage: occupiedCells / occupied.length,
+    competingLayerCoverage,
+    competingLayerOverlapRatio,
+    duplicateLayerLikely:
+      competingLayerCoverage >= 0.2 &&
+      competingLayerOverlapRatio >= 0.55,
     enclosedEmptyCells,
     interiorMissingRatio:
       enclosedEmptyCells / Math.max(1, occupiedCells + enclosedEmptyCells),
@@ -1742,10 +1796,76 @@ export function measuredWallSectorQualityDiagnostics(mesh) {
     dominantLayerRatio: Math.min(
       ...walls.map((wall) => wall.dominantLayerRatio),
     ),
+    duplicateLayerLikely: walls.some((wall) => wall.duplicateLayerLikely),
+    competingLayerCoverage: Math.max(
+      ...walls.map((wall) => wall.competingLayerCoverage),
+    ),
+    competingLayerOverlapRatio: Math.max(
+      ...walls.map((wall) => wall.competingLayerOverlapRatio),
+    ),
     gridCoverage: Math.min(...walls.map((wall) => wall.gridCoverage)),
     interiorMissingRatio: Math.max(
       ...walls.map((wall) => wall.interiorMissingRatio),
     ),
+  };
+}
+
+export function wallConsensusKeyframes(frames, quality) {
+  const walls = quality?.walls || [];
+  if (!walls.length) return null;
+  const scored = frames.map((frame) => {
+    let measured = 0;
+    let consensus = 0;
+    const stride = Math.max(1, Math.ceil(frame.filteredCount / 500));
+    let cursor = 0;
+    for (let index = 0; index < frame.filteredDepth.length; index++) {
+      if (!frame.measuredMask[index] || cursor++ % stride) continue;
+      const offset = index * 3;
+      const x = frame.positions[offset];
+      const z = frame.positions[offset + 2];
+      if (!Number.isFinite(x) || !Number.isFinite(z)) continue;
+      measured++;
+      if (
+        walls.some(
+          (wall) =>
+            Math.abs(
+              x * wall.dominantNormal.x +
+                z * wall.dominantNormal.z -
+                wall.wallOffset,
+            ) <= 0.09,
+        )
+      )
+        consensus++;
+    }
+    return {
+      frame,
+      measured,
+      consensus,
+      ratio: consensus / Math.max(1, measured),
+    };
+  });
+  const ratios = scored.map((entry) => entry.ratio).sort((a, b) => a - b);
+  const medianRatio = ratios[Math.floor(ratios.length / 2)] || 0;
+  const minimumRatio = Math.max(0.04, medianRatio * 0.45);
+  const kept = scored.filter(
+    (entry) => entry.consensus >= 8 && entry.ratio >= minimumRatio,
+  );
+  const minimumFrames = Math.max(3, Math.ceil(frames.length * 0.45));
+  if (kept.length < minimumFrames || kept.length === frames.length) return null;
+  const keptIds = new Set(kept.map((entry) => entry.frame.frameId));
+  return {
+    keptFrameIds: [...keptIds],
+    removedFrameIds: scored
+      .filter((entry) => !keptIds.has(entry.frame.frameId))
+      .map((entry) => entry.frame.frameId),
+    medianConsensusRatio: medianRatio,
+    minimumConsensusRatio: minimumRatio,
+    frameScores: scored.map((entry) => ({
+      frameId: entry.frame.frameId,
+      measured: entry.measured,
+      consensus: entry.consensus,
+      ratio: entry.ratio,
+    })),
   };
 }
 
@@ -2212,7 +2332,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     options.maxKeyframes || 40,
   );
   const stages = {
-    algorithmVersion: 15,
+    algorithmVersion: 16,
     completionMode: options.completionMode === "surface" ? "surface" : "room",
     supportMode: "translated-camera-viewpoints",
     depthSampling: "continuous-inverse-depth",
@@ -2312,16 +2432,44 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
         rejectedUnsafeFusion: true,
       },
     );
-  if (measuredSurfaceQuality?.dominantLayerRatio < 0.58)
+  if (measuredSurfaceQuality?.duplicateLayerLikely) {
+    const repair =
+      options.autoLayerRepair === false
+        ? null
+        : wallConsensusKeyframes(usable, measuredSurfaceQuality);
+    if (repair?.keptFrameIds.length >= 3) {
+      const keptIds = new Set(repair.keptFrameIds);
+      const repaired = fuseRgbdKeyframes(
+        keyframes.filter((_, index) => keptIds.has(index)),
+        { ...options, autoLayerRepair: false },
+        report,
+      );
+      repaired.diagnostics.autoLayerRepair = {
+        attempted: true,
+        succeeded: !!repaired.mesh,
+        removedFrameIds: repair.removedFrameIds,
+        keptFrameIds: repair.keptFrameIds,
+        medianConsensusRatio: repair.medianConsensusRatio,
+        minimumConsensusRatio: repair.minimumConsensusRatio,
+        frameScores: repair.frameScores,
+      };
+      return repaired;
+    }
     return failure(
-      "The same wall appears in competing depth layers. Return to a confirmed area and rescan slowly before finishing.",
+      "A large part of the same wall appears in conflicting depth layers, and automatic frame repair could not isolate a reliable layer. Hold on a confirmed area and rescan slowly.",
       {
         ...stages,
         confirmedVoxels,
         voxelSize: volume.voxelSize,
         rejectedUnsafeFusion: true,
+        autoLayerRepair: {
+          attempted: options.autoLayerRepair !== false,
+          succeeded: false,
+          removedFrameIds: repair?.removedFrameIds || [],
+        },
       },
     );
+  }
   if (
     measuredSurfaceQuality &&
     (measuredSurfaceQuality.gridCoverage < 0.42 ||

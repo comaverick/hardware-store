@@ -544,6 +544,8 @@ export default function ScannerPanel({
               <p className="ss-scan-caption">
                 {busy
                   ? "Capture is paused during reconstruction."
+                  : partial
+                    ? "Capture is paused after validation. Keep scanning will resume the camera."
                   : stats.depthCurrent
                     ? "Depth frames are being received."
                     : stats.depthActive
@@ -554,15 +556,18 @@ export default function ScannerPanel({
                   : "Captured colors unavailable."}
               </p>
               <p className="ss-scan-hint">
-                {captureGuidance(stats, busy)} Mint circles mark repeated depth
+                {partial
+                  ? "The existing capture is still available; no wall was generated."
+                  : captureGuidance(stats, busy)}{" "}
+                Mint circles mark repeated depth
                 in saved views. Reconstruction still checks their agreement.
               </p>
-              {!busy && !readiness.ready && (
+              {!busy && !partial && !readiness.ready && (
                 <p className="ss-scan-hint">
                   Needed before a complete room scan: {readiness.missing.join(", ")}.
                 </p>
               )}
-              {!busy && !surfaceReadiness.ready && (
+              {!busy && !partial && !surfaceReadiness.ready && (
                 <p className="ss-scan-hint">
                   Needed for one measured surface: {surfaceReadiness.missing.join(", ")}.
                 </p>
