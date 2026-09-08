@@ -10,8 +10,8 @@ export default function PartialScanReview({ scan, onRescan, onDone }) {
   return (
     <section className="ss-partial-review">
       <header>
-        <span className="ss-kicker">Incomplete scan preview</span>
-        <h2>Your measured surfaces.</h2>
+        <span className="ss-kicker">Measured wall result</span>
+        <h2>Your captured 3D surface.</h2>
         <p>
           This view is built from the camera colors and depth points that were
           actually captured. Missing areas remain open instead of becoming
@@ -30,19 +30,6 @@ export default function PartialScanReview({ scan, onRescan, onDone }) {
           </p>
         )}
       <PartialScanScene scan={scan} />
-      {scan.structuralRepair?.cleanSurface && (
-        <p className="ss-notice ss-inference-notice">
-          Clean walls is shown by default. It replaces bowed depth fragments
-          with flat wall panels constrained to the measured wall bounds, so
-          sensor holes do not remain in the presentation
-          {scan.structuralRepair.inferredWindowCount
-            ? ` and marks ${scan.structuralRepair.inferredWindowCount} enclosed rectangular dropout as a probable window panel`
-            : ""}
-          . Switch to Captured to inspect the unchanged raw reconstruction.
-          These fitted panels do not claim that unscanned room directions were
-          measured.
-        </p>
-      )}
       <div className="ss-partial-facts">
         <span>
           <strong>

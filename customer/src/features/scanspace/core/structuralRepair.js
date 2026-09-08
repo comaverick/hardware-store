@@ -140,42 +140,9 @@ function addCell(
   geometry.indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
 }
 
-function emptyGeometry() {
-  return {
-    positions: [],
-    colors: [],
-    indices: [],
-    bounds: {
-      min: { x: Infinity, y: Infinity, z: Infinity },
-      max: { x: -Infinity, y: -Infinity, z: -Infinity },
-    },
-  };
-}
-
-function wallColor(wall) {
-  const value = wall?.material?.color;
-  const match = typeof value === "string" && value.match(/^#([0-9a-f]{6})$/i);
-  return match
-    ? [0, 2, 4].map((offset) => parseInt(match[1].slice(offset, offset + 2), 16))
-    : [198, 204, 200];
-}
-
-function typedSurface(geometry, kind) {
-  return {
-    version: 1,
-    kind,
-    inferred: true,
-    positions: new Float32Array(geometry.positions),
-    colors: new Uint8Array(geometry.colors),
-    indices: new Uint32Array(geometry.indices),
-    triangleCount: geometry.indices.length / 3,
-    bounds: geometry.bounds,
-  };
-}
-
-// Build a clean planar presentation constrained to robust measured wall bounds,
-// plus a conservative patch-only layer for diagnostics. No panel extends into
-// a room direction for which a wall plane was not detected.
+// Build only the wall pixels that are absent from the measured surface. The
+// repair is intentionally conservative: unsupported edges, floor-connected
+// gaps (probable doors), and large gaps stay open.
 export function buildStructuralRepair(walls, cloud, options = {}) {
   const points = cloudPositions(cloud);
   if (!Array.isArray(walls) || !walls.length || !points.length) return null;
@@ -185,8 +152,15 @@ export function buildStructuralRepair(walls, cloud, options = {}) {
   const maxHoleArea = options.maxHoleArea || 0.8;
   const maxWindowArea = options.maxWindowArea ?? 3.5;
   const minAxisCoverage = options.minAxisCoverage || 0.3;
-  const geometry = emptyGeometry();
-  const cleanGeometry = emptyGeometry();
+  const geometry = {
+    positions: [],
+    colors: [],
+    indices: [],
+    bounds: {
+      min: { x: Infinity, y: Infinity, z: Infinity },
+      max: { x: -Infinity, y: -Infinity, z: -Infinity },
+    },
+  };
   let wallCount = 0;
   let repairedCellCount = 0;
   let repairedArea = 0;
@@ -209,19 +183,6 @@ export function buildStructuralRepair(walls, cloud, options = {}) {
     if (length < 0.5) return;
     const tangent = { x: dx / length, z: dz / length };
     const normal = { x: -tangent.z, z: tangent.x };
-    // The clean representation is a planar rectangle constrained to the
-    // measured wall's robust 2nd-98th percentile bounds. It fills sensor
-    // dropouts without extending the wall into an unobserved room sector.
-    addCell(
-      cleanGeometry,
-      { ...sourceWall, length },
-      tangent,
-      0,
-      0,
-      length,
-      sourceWall.height,
-      wallColor(sourceWall),
-    );
     const columns = Math.max(3, Math.ceil(length / cellSize));
     const rows = Math.max(3, Math.ceil(sourceWall.height / cellSize));
     const cellWidth = length / columns;
@@ -308,19 +269,20 @@ export function buildStructuralRepair(walls, cloud, options = {}) {
     repairedCellCount += repairedThisWall;
   });
 
-  if (!cleanGeometry.indices.length) return null;
-  const cleanSurface = typedSurface(
-    cleanGeometry,
-    "inferred-planar-wall-surface",
-  );
+  if (!geometry.indices.length) return null;
   return {
-    ...typedSurface(geometry, "inferred-structural-repair"),
-    cleanSurface,
+    version: 1,
+    kind: "inferred-structural-repair",
+    inferred: true,
+    positions: new Float32Array(geometry.positions),
+    colors: new Uint8Array(geometry.colors),
+    indices: new Uint32Array(geometry.indices),
+    triangleCount: geometry.indices.length / 3,
     wallCount,
     repairedCellCount,
     repairedArea,
     inferredWindowCount,
     preservedOpeningCount,
-    bounds: geometry.indices.length ? geometry.bounds : cleanSurface.bounds,
+    bounds: geometry.bounds,
   };
 }

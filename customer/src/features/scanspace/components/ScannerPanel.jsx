@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { RoomScanner } from "../xr/RoomScanner";
 import { surfaceTextures } from "../core/reconstruction";
 import { buildScanCloud } from "../core/scanCloud";
-import { buildStructuralRepair } from "../core/structuralRepair";
 import { snapshotDepthCapture, downloadDepthCapture } from "../core/captureDebug";
 import {
   scanReadiness,
@@ -331,16 +330,11 @@ export default function ScannerPanel({
           }
           finished.current = true;
           await scanner.current.stop();
-          const structuralRepair = buildStructuralRepair(
-            result.partial.walls,
-            scanCloud,
-          );
           onPartial(
             {
               ...result.partial,
               cloud: scanCloud,
               mesh: scanMesh,
-              structuralRepair,
               fusionReason:
                 !scanMesh || raw.stats.fusion?.fallback
                   ? raw.stats.fusion?.reason
@@ -561,7 +555,7 @@ export default function ScannerPanel({
                   {!readiness.ready &&
                     (stats.stablePointCount || 0) >= 300 && (
                       <button disabled={busy} onClick={preparePartialReview}>
-                        Preview incomplete capture
+                        Build measured wall result
                       </button>
                     )}
                 </div>
@@ -595,7 +589,7 @@ export default function ScannerPanel({
                       disabled={busy}
                       onClick={() => finish(true)}
                     >
-                      Preview open sector only
+                      Build this measured wall
                     </button>
                   </div>
                 </section>
