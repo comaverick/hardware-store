@@ -1097,6 +1097,215 @@ function removeSmallComponents(mesh) {
   };
 }
 
+const meshEdgeKey = (first, second) =>
+  first < second ? `${first},${second}` : `${second},${first}`;
+
+function meshTriangleNormal(positions, first, second, third) {
+  const a = first * 3;
+  const b = second * 3;
+  const c = third * 3;
+  const ab = [
+    positions[b] - positions[a],
+    positions[b + 1] - positions[a + 1],
+    positions[b + 2] - positions[a + 2],
+  ];
+  const ac = [
+    positions[c] - positions[a],
+    positions[c + 1] - positions[a + 1],
+    positions[c + 2] - positions[a + 2],
+  ];
+  return [
+    ab[1] * ac[2] - ab[2] * ac[1],
+    ab[2] * ac[0] - ab[0] * ac[2],
+    ab[0] * ac[1] - ab[1] * ac[0],
+  ];
+}
+
+// Cap only small, closed, nearly planar inner boundary loops. Directed edge
+// winding distinguishes an actual hole from a component's outer scan edge, so
+// an open capture boundary or doorway cannot be turned into a surface.
+export function fillSmallMeshHoles(mesh, options = {}) {
+  if (!mesh?.indices?.length || !mesh?.positions?.length)
+    return { ...mesh, filledHoleCount: 0, filledHoleTriangles: 0 };
+  const edgeRecords = new Map();
+  for (let index = 0; index < mesh.indices.length; index += 3) {
+    const triangle = [
+      mesh.indices[index],
+      mesh.indices[index + 1],
+      mesh.indices[index + 2],
+    ];
+    const normal = meshTriangleNormal(mesh.positions, ...triangle);
+    for (let corner = 0; corner < 3; corner++) {
+      const first = triangle[corner];
+      const second = triangle[(corner + 1) % 3];
+      const key = meshEdgeKey(first, second);
+      const existing = edgeRecords.get(key);
+      if (existing) existing.count++;
+      else edgeRecords.set(key, { key, first, second, count: 1, normal });
+    }
+  }
+  const boundary = [...edgeRecords.values()].filter(
+    (edge) => edge.count === 1,
+  );
+  const outgoing = new Map();
+  const incoming = new Map();
+  boundary.forEach((edge) => {
+    const next = outgoing.get(edge.first) || [];
+    next.push(edge);
+    outgoing.set(edge.first, next);
+    incoming.set(edge.second, (incoming.get(edge.second) || 0) + 1);
+  });
+  const visited = new Set();
+  const loops = [];
+  boundary.forEach((seed) => {
+    if (visited.has(seed.key)) return;
+    const vertices = [];
+    const edges = [];
+    let edge = seed;
+    let closed = false;
+    for (let step = 0; step <= boundary.length; step++) {
+      if (visited.has(edge.key)) break;
+      visited.add(edge.key);
+      vertices.push(edge.first);
+      edges.push(edge);
+      if (edge.second === seed.first) {
+        closed = true;
+        break;
+      }
+      const candidates = outgoing.get(edge.second) || [];
+      if (candidates.length !== 1 || (incoming.get(edge.second) || 0) !== 1)
+        break;
+      [edge] = candidates;
+    }
+    if (
+      closed &&
+      vertices.length >= 3 &&
+      vertices.length <= (options.maxVertices || 80)
+    )
+      loops.push({ vertices, edges });
+  });
+
+  const positions = Array.from(mesh.positions);
+  const colors = Array.from(mesh.colors || []);
+  const indices = Array.from(mesh.indices);
+  const maxDiameter = options.maxDiameter || 0.42;
+  const maxPerimeter = options.maxPerimeter || maxDiameter * 5.5;
+  const maxPlanarity = options.maxPlanarity || 0.055;
+  let filledHoleCount = 0;
+  let filledHoleTriangles = 0;
+  let addedArea = 0;
+  loops.forEach((loop) => {
+    const points = loop.vertices.map((vertex) => [
+      mesh.positions[vertex * 3],
+      mesh.positions[vertex * 3 + 1],
+      mesh.positions[vertex * 3 + 2],
+    ]);
+    const min = [Infinity, Infinity, Infinity];
+    const max = [-Infinity, -Infinity, -Infinity];
+    const center = [0, 0, 0];
+    points.forEach((point) =>
+      point.forEach((value, axis) => {
+        min[axis] = Math.min(min[axis], value);
+        max[axis] = Math.max(max[axis], value);
+        center[axis] += value / points.length;
+      }),
+    );
+    const diameter = Math.hypot(
+      max[0] - min[0],
+      max[1] - min[1],
+      max[2] - min[2],
+    );
+    let perimeter = 0;
+    points.forEach((point, index) => {
+      const next = points[(index + 1) % points.length];
+      perimeter += Math.hypot(
+        next[0] - point[0],
+        next[1] - point[1],
+        next[2] - point[2],
+      );
+    });
+    if (diameter > maxDiameter || perimeter > maxPerimeter) return;
+    const referenceNormal = loop.edges.reduce(
+      (sum, edge) => sum.map((value, axis) => value + edge.normal[axis]),
+      [0, 0, 0],
+    );
+    const loopNormal = [0, 0, 0];
+    points.forEach((point, index) => {
+      const next = points[(index + 1) % points.length];
+      loopNormal[0] += (point[1] - next[1]) * (point[2] + next[2]);
+      loopNormal[1] += (point[2] - next[2]) * (point[0] + next[0]);
+      loopNormal[2] += (point[0] - next[0]) * (point[1] + next[1]);
+    });
+    const referenceLength = Math.hypot(...referenceNormal);
+    const loopLength = Math.hypot(...loopNormal);
+    if (referenceLength < 0.00001 || loopLength < 0.00001) return;
+    const winding = loopNormal.reduce(
+      (sum, value, axis) => sum + value * referenceNormal[axis],
+      0,
+    );
+    if (winding >= 0) return;
+    referenceNormal.forEach((value, axis) => {
+      referenceNormal[axis] = value / referenceLength;
+    });
+    if (
+      !points.every(
+        (point) =>
+          Math.abs(
+            (point[0] - center[0]) * referenceNormal[0] +
+              (point[1] - center[1]) * referenceNormal[1] +
+              (point[2] - center[2]) * referenceNormal[2],
+          ) <= maxPlanarity,
+      )
+    )
+      return;
+    const centerVertex = positions.length / 3;
+    positions.push(...center);
+    if (mesh.colors?.length) {
+      colors.push(
+        ...[0, 1, 2].map((axis) =>
+          Math.round(
+            loop.vertices.reduce(
+              (sum, vertex) => sum + mesh.colors[vertex * 3 + axis],
+              0,
+            ) / loop.vertices.length,
+          ),
+        ),
+      );
+    }
+    let holeArea = 0;
+    loop.edges.forEach((edge) => {
+      indices.push(edge.second, edge.first, centerVertex);
+      holeArea +=
+        Math.hypot(
+          ...meshTriangleNormal(
+            positions,
+            edge.second,
+            edge.first,
+            centerVertex,
+          ),
+        ) * 0.5;
+    });
+    if (holeArea < 0.0005) {
+      positions.splice(centerVertex * 3, 3);
+      if (mesh.colors?.length) colors.splice(centerVertex * 3, 3);
+      indices.splice(indices.length - loop.edges.length * 3);
+      return;
+    }
+    addedArea += holeArea;
+    filledHoleCount++;
+    filledHoleTriangles += loop.edges.length;
+  });
+  return {
+    ...mesh,
+    positions: new Float32Array(positions),
+    colors: mesh.colors?.length ? new Uint8Array(colors) : mesh.colors,
+    indices: new Uint32Array(indices),
+    surfaceArea: (mesh.surfaceArea || 0) + addedArea,
+    filledHoleCount,
+    filledHoleTriangles,
+  };
+}
+
 export function meshFragmentationIsUnacceptable(surface) {
   return (
     (surface.keptComponentCount || 0) > 8 &&
@@ -1757,7 +1966,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     options.maxKeyframes || 40,
   );
   const stages = {
-    algorithmVersion: 7,
+    algorithmVersion: 8,
     coordinateMode: "view-aligned-v1",
     inputKeyframes: keyframes.length,
     ambiguousLegacyKeyframes,
@@ -1818,6 +2027,12 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   stages.componentCount = surface.componentCount;
   stages.keptComponentCount = surface.keptComponentCount;
   stages.dominantAreaRatio = surface.dominantAreaRatio;
+  surface = fillSmallMeshHoles(surface, {
+    maxDiameter: clamp(volume.voxelSize * 9, 0.3, 0.45),
+    maxPlanarity: Math.max(0.04, volume.voxelSize * 1.2),
+  });
+  stages.filledHoleCount = surface.filledHoleCount;
+  stages.filledHoleTriangles = surface.filledHoleTriangles;
   const highlyFragmented = meshFragmentationIsUnacceptable(surface);
   const wallStructure = meshWallStructureDiagnostics(surface);
   stages.wallStructure = wallStructure;
@@ -1884,6 +2099,8 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       dominantAreaRatio: surface.dominantAreaRatio ?? 1,
       wallStructure,
       removedComponents: surface.removedComponentCount || 0,
+      filledHoleCount: surface.filledHoleCount || 0,
+      filledHoleTriangles: surface.filledHoleTriangles || 0,
       textureCoverage: mesh.textureCoverage,
     },
   };

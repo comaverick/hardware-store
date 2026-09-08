@@ -2,6 +2,7 @@ import {
   createRgbdKeyframe,
   depthPosition,
   filterDepth,
+  fillSmallMeshHoles,
   fuseRgbdKeyframes,
   gridIndex,
   meshFragmentationIsUnacceptable,
@@ -127,6 +128,52 @@ test("does not retain an isolated or depth-discontinuous sample", () => {
   depths[17] = 3;
   const result = filterDepth({ columns: 5, rows: 5, depths });
   expect(result.filtered[12]).toBe(0);
+});
+
+function gridPlaneWithMissingCell(missingColumn, missingRow) {
+  const positions = [];
+  const colors = [];
+  const indices = [];
+  for (let row = 0; row < 4; row++)
+    for (let column = 0; column < 4; column++) {
+      positions.push(column / 3, row / 3, 0);
+      colors.push(120, 160, 140);
+    }
+  for (let row = 0; row < 3; row++)
+    for (let column = 0; column < 3; column++) {
+      if (column === missingColumn && row === missingRow) continue;
+      const first = row * 4 + column;
+      indices.push(
+        first,
+        first + 4,
+        first + 1,
+        first + 1,
+        first + 4,
+        first + 5,
+      );
+    }
+  return {
+    positions: new Float32Array(positions),
+    colors: new Uint8Array(colors),
+    indices: new Uint32Array(indices),
+    surfaceArea: 8 / 9,
+  };
+}
+
+test("fills a small closed planar hole in the extracted mesh", () => {
+  const mesh = gridPlaneWithMissingCell(1, 1);
+  const repaired = fillSmallMeshHoles(mesh, { maxDiameter: 0.5 });
+  expect(repaired.filledHoleCount).toBe(1);
+  expect(repaired.filledHoleTriangles).toBe(4);
+  expect(repaired.indices.length).toBe(mesh.indices.length + 12);
+  expect(repaired.positions.length).toBe(mesh.positions.length + 3);
+});
+
+test("does not fill a hole connected to the mesh boundary", () => {
+  const mesh = gridPlaneWithMissingCell(1, 0);
+  const repaired = fillSmallMeshHoles(mesh, { maxDiameter: 0.5 });
+  expect(repaired.filledHoleCount).toBe(0);
+  expect(repaired.indices).toEqual(mesh.indices);
 });
 
 test("rejects a mesh made from many similarly sized floating islands", () => {

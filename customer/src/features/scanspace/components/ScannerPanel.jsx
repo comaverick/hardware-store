@@ -638,6 +638,7 @@ export default function ScannerPanel({
               fusedTriangles: stats.fusion?.triangles || 0,
               retainedWeakDepthSamples:
                 stats.fusion?.weakDepthSamplesRetained || 0,
+              safelyFilledMeshHoles: stats.fusion?.filledHoleCount || 0,
               fusionVoxelSize: stats.fusion?.voxelSize
                 ? `${Math.round(stats.fusion.voxelSize * 100)} cm`
                 : "Not yet reconstructed",
