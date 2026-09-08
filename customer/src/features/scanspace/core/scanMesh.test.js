@@ -1,6 +1,7 @@
 import {
   createRgbdKeyframe,
   depthPosition,
+  filterDepth,
   fuseRgbdKeyframes,
   gridIndex,
   meshFragmentationIsUnacceptable,
@@ -106,6 +107,26 @@ test("returns a safe no-mesh result when depth coverage is too small", () => {
   const result = fuseRgbdKeyframes([], { floorY: 0 });
   expect(result.mesh).toBeNull();
   expect(result.diagnostics.reason).toMatch(/required|Not enough/i);
+});
+
+test("retains a real depth edge supported by two agreeing neighbors", () => {
+  const depths = new Float32Array(25);
+  [2, 7, 12, 17, 22].forEach((index) => {
+    depths[index] = 2;
+  });
+  const result = filterDepth({ columns: 5, rows: 5, depths });
+  expect(result.filtered[12]).toBeCloseTo(2);
+  expect(result.confidence[12]).toBeGreaterThan(0);
+  expect(result.weakSupportedCount).toBeGreaterThan(0);
+});
+
+test("does not retain an isolated or depth-discontinuous sample", () => {
+  const depths = new Float32Array(25);
+  depths[12] = 2;
+  depths[7] = 1;
+  depths[17] = 3;
+  const result = filterDepth({ columns: 5, rows: 5, depths });
+  expect(result.filtered[12]).toBe(0);
 });
 
 test("rejects a mesh made from many similarly sized floating islands", () => {

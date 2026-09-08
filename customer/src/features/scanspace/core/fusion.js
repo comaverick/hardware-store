@@ -103,9 +103,10 @@ function selectEvenly(values, limit) {
   );
 }
 
-function filterDepth(frame) {
+export function filterDepth(frame) {
   const filtered = new Float32Array(frame.depths.length);
   const confidence = new Uint8Array(frame.depths.length);
+  let weakSupportedCount = 0;
   for (let y = 0; y < frame.rows; y++)
     for (let x = 0; x < frame.columns; x++) {
       const index = y * frame.columns + x;
@@ -136,10 +137,16 @@ function filterDepth(frame) {
           differenceSum += difference;
           support++;
         }
-      if (support >= 3) {
+      // Keep a real sensor sample when two neighboring pixels agree. These
+      // lower-confidence edge samples cannot vote for free space and still
+      // need repeated camera views before they become final geometry. Dropping
+      // them here created avoidable holes around shelves, curtains, and other
+      // thin or partly occluded surfaces.
+      if (support >= 2) {
         filtered[index] = sum / weight;
         const agreement = 1 - clamp(differenceSum / support / range, 0, 1);
         confidence[index] = Math.round(255 * clamp((support / 8) * 0.7 + agreement * 0.3, 0.15, 1));
+        if (support === 2) weakSupportedCount++;
       }
     }
   const measuredMask = Uint8Array.from(filtered, (depth) => depth > 0 ? 1 : 0);
@@ -239,7 +246,7 @@ function filterDepth(frame) {
       confidence[index] = repairedConfidence;
     });
   }
-  return { filtered, confidence, measuredMask };
+  return { filtered, confidence, measuredMask, weakSupportedCount };
 }
 
 export function depthPosition(frame, index, depth) {
@@ -320,6 +327,7 @@ function prepareFrame(frame, frameId) {
     measuredMask: filtered.measuredMask,
     freeSpaceMask,
     depthConfidence: filtered.confidence,
+    weakSupportedCount: filtered.weakSupportedCount,
     filteredCount: valid,
   };
 }
@@ -879,7 +887,7 @@ function extractSurfaceNet(volume, report) {
         // An unknown corner is not evidence of empty space. Allow a supported
         // boundary cell, but intersect only edges with measured endpoints.
         const known = corners.filter((corner) => corner.weight >= 1);
-        if (known.length < 5) {
+        if (known.length < 4) {
           rejectionCounts.insufficientSupport++;
           continue;
         }
@@ -900,7 +908,10 @@ function extractSurfaceNet(volume, report) {
         const confirmed = corners.filter(
           reliable,
         ).length;
-        if (confirmed < 5) {
+        // Four independently reliable corners are sufficient to retain a
+        // boundary cell. Edge intersections below still require measured
+        // endpoints, so this cannot span a genuinely unknown opening.
+        if (confirmed < 4) {
           const contradicted = known.some((corner) =>
             corner.freeSpaceVotes >= Math.max(3, corner.weight * 1.25));
           rejectionCounts[contradicted ? "freeSpace" : "unstable"]++;
@@ -1746,13 +1757,17 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     options.maxKeyframes || 40,
   );
   const stages = {
-    algorithmVersion: 6,
+    algorithmVersion: 7,
     coordinateMode: "view-aligned-v1",
     inputKeyframes: keyframes.length,
     ambiguousLegacyKeyframes,
     preparedKeyframes: prepared.length,
     inputDepthSamples: keyframes.reduce((sum, frame) => sum + (frame?.validCount || 0), 0),
     filteredDepthSamples: prepared.reduce((sum, frame) => sum + frame.filteredCount, 0),
+    weakDepthSamplesRetained: prepared.reduce(
+      (sum, frame) => sum + (frame.weakSupportedCount || 0),
+      0,
+    ),
     roundTrip: prepared.map((frame) => frameRoundTripDiagnostics(frame)),
     alignment,
     fusedFrameIds: usable.map((frame) => frame.frameId),

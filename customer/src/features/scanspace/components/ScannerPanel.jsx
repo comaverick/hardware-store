@@ -625,7 +625,7 @@ export default function ScannerPanel({
               tracking: !!stats.tracking,
               floorCalibrated: stats.floorY != null,
               colorCaptured: !!stats.colorActive,
-              viewSweep: `${stats.coverage || 0}%`,
+              directionSweep: `${stats.coverage || 0}%`,
               observedPlanes: stats.planes || 0,
               fusionKeyframes: stats.fusionKeyframes || 0,
               acceptedDepthFrames: stats.acceptedDepthFrames || 0,
@@ -636,6 +636,8 @@ export default function ScannerPanel({
               cameraTravel: `${Math.round((stats.cameraTravel || 0) * 100)} cm`,
               fusionOptimizations: stats.fusionKeyframeCompactions || 0,
               fusedTriangles: stats.fusion?.triangles || 0,
+              retainedWeakDepthSamples:
+                stats.fusion?.weakDepthSamplesRetained || 0,
               fusionVoxelSize: stats.fusion?.voxelSize
                 ? `${Math.round(stats.fusion.voxelSize * 100)} cm`
                 : "Not yet reconstructed",
