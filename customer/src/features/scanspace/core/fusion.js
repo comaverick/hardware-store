@@ -2347,8 +2347,9 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     options.maxKeyframes || 40,
   );
   const stages = {
-    algorithmVersion: 17,
+    algorithmVersion: 18,
     completionMode: options.completionMode === "surface" ? "surface" : "room",
+    reconstructionProfile: options.reconstructionProfile || "quality",
     supportMode: "translated-camera-viewpoints",
     depthSampling: "continuous-inverse-depth",
     coordinateMode: "view-aligned-v1",
@@ -2401,7 +2402,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       samples: samples.length,
     });
   const bounds = sampleBounds(samples);
-  const volume = makeVolume(bounds, options);
+  let volume = makeVolume(bounds, options);
   report?.("fusing", 16, { voxelSize: volume.voxelSize, dimensions: volume.dimensions });
   const confirmedVoxels = integrateProjective(volume, usable, report);
   if (confirmedVoxels < 120)
@@ -2457,6 +2458,10 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
         : wallConsensusKeyframes(usable, measuredSurfaceQuality);
     if (repair?.keptFrameIds.length >= 3) {
       const keptIds = new Set(repair.keptFrameIds);
+      // The retry builds another dense fusion volume. Drop the first volume's
+      // final strong reference before recursing so mobile browsers can reclaim
+      // it instead of briefly retaining two full reconstruction grids.
+      volume = null;
       const repaired = fuseRgbdKeyframes(
         keyframes.filter((_, index) => keptIds.has(index)),
         { ...options, autoLayerRepair: false },

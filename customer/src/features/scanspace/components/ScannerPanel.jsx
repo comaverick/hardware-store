@@ -223,9 +223,6 @@ export default function ScannerPanel({
     completionMode = "room",
   ) {
     if (!raw.keyframes?.length) return { mesh: null, diagnostics: null };
-    fusionWorker.current = new Worker(
-      new URL("../core/fusion.worker.js", import.meta.url),
-    );
     const transfer = preserveInput
       ? []
       : raw.keyframes.flatMap((frame) =>
@@ -245,33 +242,89 @@ export default function ScannerPanel({
             .filter(Boolean)
             .map((array) => array.buffer),
         );
-    return new Promise((resolve, reject) => {
-      fusionWorker.current.onmessage = (event) => {
-        if (event.data.type === "progress") {
-          setFusion(event.data);
-          return;
+    const baseOptions = {
+      floorY: raw.floorY,
+      observer: raw.observer,
+      headingCoverage: raw.stats.coverage || 0,
+      completionMode,
+      reconstructionProfile: "quality",
+    };
+    const runWorker = (options, transferable = []) =>
+      new Promise((resolve, reject) => {
+        const activeWorker = new Worker(
+          new URL("../core/fusion.worker.js", import.meta.url),
+        );
+        fusionWorker.current = activeWorker;
+        let settled = false;
+        activeWorker.onmessage = (event) => {
+          if (event.data.type === "progress") {
+            setFusion(event.data);
+            return;
+          }
+          if (settled) return;
+          if (event.data.type === "error") {
+            settled = true;
+            reject(new Error(event.data.error));
+            return;
+          }
+          if (event.data.type === "complete") {
+            settled = true;
+            resolve(event.data.result);
+          }
+        };
+        activeWorker.onerror = (event) => {
+          if (settled) return;
+          settled = true;
+          const error = new Error(
+            event?.message || "The reconstruction worker stopped unexpectedly.",
+          );
+          error.workerCrash = true;
+          reject(error);
+        };
+        try {
+          activeWorker.postMessage(
+            { keyframes: raw.keyframes, options },
+            transferable,
+          );
+        } catch (error) {
+          settled = true;
+          reject(error);
         }
-        if (event.data.type === "error") {
-          reject(new Error(event.data.error));
-          return;
-        }
-        if (event.data.type === "complete") resolve(event.data.result);
-      };
-      fusionWorker.current.onerror = () =>
-        reject(new Error("Measured-surface reconstruction failed."));
-      fusionWorker.current.postMessage(
-        {
-          keyframes: raw.keyframes,
-          options: {
-            floorY: raw.floorY,
-            observer: raw.observer,
-            headingCoverage: raw.stats.coverage || 0,
-            completionMode,
-          },
-        },
-        transfer,
-      );
-    });
+      });
+    try {
+      return await runWorker(baseOptions, transfer);
+    } catch (error) {
+      const canRetrySafely =
+        error.workerCrash && completionMode === "surface" && preserveInput;
+      fusionWorker.current?.terminate();
+      fusionWorker.current = null;
+      if (!canRetrySafely) throw error;
+      setFusion({
+        stage: "retrying with a mobile-safe grid",
+        progress: 5,
+      });
+      try {
+        const result = await runWorker({
+          ...baseOptions,
+          reconstructionProfile: "mobile-safe-retry",
+          maxDimension: 112,
+          maxCells: 520000,
+          maxKeyframes: 28,
+          minVoxelSize: 0.03,
+        });
+        if (result?.diagnostics)
+          result.diagnostics.workerRecovery = {
+            retried: true,
+            profile: "mobile-safe-retry",
+          };
+        return result;
+      } catch (retryError) {
+        if (!retryError.workerCrash) throw retryError;
+        throw new Error(
+          "The phone ran out of reconstruction capacity twice. The scan is still available; try finishing again after closing other browser tabs.",
+        );
+      }
+    }
   }
   async function finish() {
     if (!readiness.ready) {

@@ -25,7 +25,7 @@ Check `coordinateMode`, `inputDepthSamples`, `filteredDepthSamples`,
 `roundTrip`, `alignment.pairs`, `alignment.rejectedFrameIds`, `cellRejections`,
 `wallStructure`, `rectangularRoomModelCompatible`, and the triangle counts
 before and after cleanup. Pair errors are in metres. Automatic pose mutation is
-disabled; incompatible frames are still rejected. `algorithmVersion: 17`
+disabled; incompatible frames are still rejected. `algorithmVersion: 18`
 uses continuous inverse-depth sampling on supported surfaces. `frameSamples`
 reports input, retained measured, and repaired sample counts for every prepared
 frame. This distinguishes sensor gaps from filter and frame-selection losses.
@@ -34,7 +34,7 @@ Algorithm 10 requires at least 4 cm of camera translation before two samples
 can count as independent support for the same fused voxel. Turning in place can
 capture another direction, but it cannot reinforce a bowed depth surface.
 
-Algorithm 17 has no single-view or registered-composite fallback. Room captures below
+Algorithm 18 has no single-view or registered-composite fallback. Room captures below
 75% heading coverage, captures without overlapping translated viewpoints, and
 fused surfaces with fragmented, curled, or contradictory wall layers return no
 mesh. The scanner remains open and reports what must be rescanned. Only a
@@ -55,6 +55,13 @@ Large gaps no longer invalidate an otherwise structurally sound partial
 surface. `measuredGapWarning` records wall-grid coverage and the internal
 missing ratio so the UI can offer either continued scanning or an explicit
 measured-gaps result. No triangles are created for those gaps.
+
+If a mobile browser terminates the high-quality fusion worker under memory
+pressure, measured-surface completion retries once with a bounded 520,000-cell
+grid and at most 28 evenly selected keyframes. Diagnostics record
+`reconstructionProfile: "mobile-safe-retry"` and `workerRecovery`. Automatic
+layer repair also releases its first dense volume before rebuilding. These
+memory safeguards reduce resolution only; they never create replacement walls.
 
 Capture requires a genuinely new camera viewpoint for every retained keyframe.
 Waiting at one pose cannot add duplicate support to a warped depth observation.
