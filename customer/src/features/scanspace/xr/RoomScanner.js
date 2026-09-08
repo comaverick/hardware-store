@@ -4,6 +4,21 @@ import { createRgbdKeyframe } from "../core/fusion";
 import { depthFrameQuality } from "../core/readiness";
 import { createCameraColorReader } from "./cameraColor";
 
+function roundPointTexture() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 32;
+  canvas.height = 32;
+  const context = canvas.getContext("2d");
+  context.clearRect(0, 0, 32, 32);
+  context.beginPath();
+  context.arc(16, 16, 13, 0, Math.PI * 2);
+  context.fillStyle = "#fff";
+  context.fill();
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.needsUpdate = true;
+  return texture;
+}
+
 export class RoomScanner {
   constructor({ canvas, overlay, onUpdate, onEnd }) {
     Object.assign(this, { canvas, overlay, onUpdate, onEnd });
@@ -42,6 +57,7 @@ export class RoomScanner {
       cameraBaseline: 0,
       cameraTravel: 0,
       nearDepthWarning: false,
+      currentConfirmedRatio: 0,
     };
     this.directions = new Set();
     this.observer = { x: 0, z: 0 };
@@ -132,13 +148,16 @@ export class RoomScanner {
         new THREE.BufferAttribute(this.colors, 3),
       );
       this.pointGeometry.setDrawRange(0, 0);
+      this.pointTexture = roundPointTexture();
       const points = new THREE.Points(
         this.pointGeometry,
         new THREE.PointsMaterial({
-          size: 0.03,
+          size: 0.018,
           vertexColors: true,
+          map: this.pointTexture,
+          alphaTest: 0.35,
           transparent: true,
-          opacity: 0.82,
+          opacity: 0.94,
           depthWrite: false,
         }),
       );
@@ -259,6 +278,8 @@ export class RoomScanner {
             if (quality.accepted) {
               this.stats.acceptedDepthFrames++;
               this.cloud.add(framePoints, this.stats.depthFrames);
+              this.stats.currentConfirmedRatio =
+                this.cloud.confirmedRatio(framePoints);
               // Pose gating decides whether this accepted depth frame adds a
               // useful new viewpoint. Fast/sparse frames never reach fusion.
               if (keyframeEligible)
@@ -272,7 +293,10 @@ export class RoomScanner {
                   keyframePose,
                   depth,
                 );
-            } else this.stats.rejectedDepthFrames++;
+            } else {
+              this.stats.rejectedDepthFrames++;
+              this.stats.currentConfirmedRatio = 0;
+            }
             this.stats.cloudCellSize = this.cloud.size;
             this.stats.cloudCompactions = this.cloud.compactions;
             const m = view.transform.matrix;
@@ -316,23 +340,24 @@ export class RoomScanner {
     }
   }
   updatePreview() {
-    const points = this.cloud.values(),
-      stride = Math.max(1, Math.ceil(points.length / 12000));
+    const allPoints = this.cloud.values();
+    const points = allPoints.filter((point) => point.hits >= 2);
+    const stride = Math.max(1, Math.ceil(points.length / 9000));
     let count = 0;
     for (let i = 0; i < points.length; i += stride) {
       const p = points[i];
       this.positions.set([p.x, p.y, p.z], count * 3);
-      // These are measured points, not reconstructed surfaces. Brighter mint
-      // means the depth is stable; subdued points are still being confirmed.
-      const c = new THREE.Color(p.hits > 1 ? "#83f2cb" : "#3d7565");
+      // Only repeat-observed voxels stay visible. Single-hit samples are not
+      // rendered because they made unconfirmed space look already scanned.
+      const c = new THREE.Color("#83f2cb");
       this.colors.set([c.r, c.g, c.b], count * 3);
       count++;
     }
     this.pointGeometry.attributes.position.needsUpdate = true;
     this.pointGeometry.attributes.color.needsUpdate = true;
     this.pointGeometry.setDrawRange(0, count);
-    this.stats.pointCount = points.length;
-    this.stats.stablePointCount = this.cloud.previewStableCount();
+    this.stats.pointCount = allPoints.length;
+    this.stats.stablePointCount = points.length;
   }
   keyframePose(view) {
     const position = view.transform.position;
@@ -478,6 +503,7 @@ export class RoomScanner {
     this.hitSource?.cancel();
     this.renderer?.setAnimationLoop(null);
     this.colorReader?.dispose();
+    this.pointTexture?.dispose();
     this.scene?.traverse((o) => {
       o.geometry?.dispose();
       if (o.material) o.material.dispose();

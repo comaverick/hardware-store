@@ -1134,10 +1134,60 @@
   position: absolute;
   left: 50%;
   top: 43%;
-  font-size: 30px;
-  font-weight: 300;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 174px;
+  padding: 8px 11px;
+  border: 1px solid #ffffff36;
+  border-radius: 999px;
+  background: #14271fd4;
+  color: #fff;
   pointer-events: none !important;
-  text-shadow: 0 1px 4px #000;
+  box-shadow: 0 3px 14px #07120d42;
+  backdrop-filter: blur(5px);
+}
+.ss-scanning-target > i {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 10px;
+  border: 2px solid #d8e7df;
+  border-radius: 50%;
+}
+.ss-scanning-target > span {
+  display: grid;
+  gap: 1px;
+  text-align: left;
+}
+.ss-scanning-target strong {
+  font-size: 11px;
+  line-height: 1.2;
+}
+.ss-scanning-target small {
+  color: #d4e1da;
+  font-size: 8px;
+  line-height: 1.25;
+}
+.ss-scanning-target.is-complete {
+  border-color: #83f2cb9c;
+  background: #173c30e6;
+}
+.ss-scanning-target.is-complete > i {
+  border-color: #83f2cb;
+  background: #83f2cb;
+  box-shadow: 0 0 0 4px #83f2cb20;
+}
+.ss-scanning-target.is-active > i {
+  border-color: #83f2cb;
+  box-shadow: 0 0 0 4px #83f2cb20;
+}
+.ss-scanning-target.is-warning {
+  border-color: #ffc47b9c;
+  background: #432c1de3;
+}
+.ss-scanning-target.is-warning > i {
+  border-color: #ffc47b;
 }
 .ss-scan-bottom {
   margin-top: auto;

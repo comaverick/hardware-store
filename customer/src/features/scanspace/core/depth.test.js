@@ -104,8 +104,10 @@ test("repeat observations and neighbors produce stable geometry", () => {
     { x: 0.1, y: 0.1, z: 0 },
   ];
   cloud.add(points, 1);
+  expect(cloud.confirmedRatio(points)).toBe(0);
   cloud.add(points, 2);
   expect(cloud.values(true)).toHaveLength(3);
+  expect(cloud.confirmedRatio(points)).toBe(1);
 });
 test("adaptive compaction preserves room coverage before reporting a hard limit", () => {
   const cloud = new VoxelCloud(0.05, 10, 0.2);

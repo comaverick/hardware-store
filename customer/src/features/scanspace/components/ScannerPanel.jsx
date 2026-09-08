@@ -35,7 +35,7 @@ function CoverageCompass({ sectors = [], heading = 0 }) {
     .map((seen, index) => {
       const start = index * step + 1;
       const end = (index + 1) * step - 1;
-      return `${seen ? "#65dcb7" : "#456257"} ${start}deg ${end}deg`;
+      return `${seen ? "#65dcb7" : "#ffffff20"} ${start}deg ${end}deg`;
     })
     .join(", ");
   return (
@@ -78,6 +78,56 @@ function captureGuidance(stats, busy = false) {
   return "Surface overlap is building. Cover dark or reflective areas from another angle.";
 }
 
+function captureTargetState(stats, busy = false) {
+  if (busy)
+    return {
+      tone: "busy",
+      label: "Building result",
+      hint: "Capture is safely paused",
+    };
+  if (!stats.tracking)
+    return {
+      tone: "warning",
+      label: "Tracking lost",
+      hint: "Aim at a confirmed area",
+    };
+  if (stats.movingTooFast)
+    return {
+      tone: "warning",
+      label: "Slow down",
+      hint: "This frame was not saved",
+    };
+  if (!stats.depthCurrent)
+    return {
+      tone: "warning",
+      label: "No reliable depth",
+      hint: "Change distance or angle",
+    };
+  if (stats.frameQuality === "sparse-depth" || stats.nearDepthWarning)
+    return {
+      tone: "warning",
+      label: "Weak depth here",
+      hint: "Step back or change angle",
+    };
+  if ((stats.currentConfirmedRatio || 0) >= 0.55)
+    return {
+      tone: "complete",
+      label: "Area captured",
+      hint: "Move sideways to the next clear area",
+    };
+  if ((stats.currentConfirmedRatio || 0) >= 0.2)
+    return {
+      tone: "active",
+      label: "Building coverage",
+      hint: "Keep moving slowly sideways",
+    };
+  return {
+    tone: "pending",
+    label: "Hold on this area",
+    hint: "Wait for bright green circles",
+  };
+}
+
 export default function ScannerPanel({
   capabilities,
   onComplete,
@@ -104,6 +154,7 @@ export default function ScannerPanel({
     [fusion, setFusion] = useState(null),
     [error, setError] = useState("");
   const readiness = scanReadiness(stats);
+  const targetState = captureTargetState(stats, busy);
   useEffect(
     () => () => {
       worker.current?.terminate();
@@ -430,23 +481,24 @@ export default function ScannerPanel({
                 />
                 <div>
                   <strong>{stats.coverage || 0}%</strong>
-                  <span>view sweep</span>
+                  <span>direction sweep</span>
                 </div>
               </div>
             </div>
             <div className="ss-scan-area-key" aria-label="Scanned area legend">
               <span>
-                <i className="is-observed" /> Stable scanned depth
-              </span>
-              <span>
-                <i className="is-next" /> Still stabilizing
-              </span>
-              <span>
-                <i /> Not scanned yet
+                <i className="is-observed" /> Bright circles = confirmed depth
               </span>
             </div>
-            <div className="ss-scanning-target" aria-hidden="true">
-              +
+            <div
+              className={`ss-scanning-target is-${targetState.tone}`}
+              role="status"
+            >
+              <i aria-hidden="true" />
+              <span>
+                <strong>{targetState.label}</strong>
+                <small>{targetState.hint}</small>
+              </span>
             </div>
             <div className="ss-scan-bottom">
               <p className="ss-scan-caption">
@@ -462,8 +514,8 @@ export default function ScannerPanel({
                   : "Captured colors unavailable."}
               </p>
               <p className="ss-scan-hint">
-                {captureGuidance(stats, busy)} Bright mint dots are confirmed depth;
-                soft mint dots are still stabilizing.
+                {captureGuidance(stats, busy)} Bright mint circles are confirmed
+                depth. Clear areas have no repeat-confirmed depth yet.
               </p>
               {!busy && !readiness.ready && (
                 <p className="ss-scan-hint">

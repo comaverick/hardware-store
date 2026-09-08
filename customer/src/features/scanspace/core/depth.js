@@ -183,6 +183,14 @@ export class VoxelCloud {
   previewStableCount() {
     return this.repeatedCells;
   }
+  confirmedRatio(points) {
+    if (!points?.length) return 0;
+    const confirmed = points.reduce((count, point) => {
+      const stored = this.cells.get(this.key(point));
+      return count + (stored?.hits >= 2 ? 1 : 0);
+    }, 0);
+    return confirmed / points.length;
+  }
   values(filtered = false) {
     const all = [...this.cells.values()];
     if (!filtered) return all;
