@@ -10,6 +10,7 @@ import {
   meshOutsideRectangularRoomModel,
   meshWallStructureDiagnostics,
   measuredSurfaceQualityDiagnostics,
+  measuredWallSectorQualityDiagnostics,
   projectWorld,
 } from "./fusion";
 import { Matrix4, PerspectiveCamera, Vector3 } from "three";
@@ -273,7 +274,7 @@ function joinedWallPlanes(offsets, perpendicular = false) {
   };
 }
 
-test("surface quality accepts one wall but detects multiple wall directions", () => {
+test("surface quality identifies multiple wall directions without rejecting the sector", () => {
   const single = measuredSurfaceQualityDiagnostics(joinedWallPlanes([0]));
   expect(single.assessed).toBe(true);
   expect(single.dominantOrientationRatio).toBeGreaterThan(0.95);
@@ -283,6 +284,12 @@ test("surface quality accepts one wall but detects multiple wall directions", ()
     joinedWallPlanes([0, 0], true),
   );
   expect(corner.dominantOrientationRatio).toBeLessThan(0.68);
+  const sector = measuredWallSectorQualityDiagnostics(
+    joinedWallPlanes([0, 0], true),
+  );
+  expect(sector.assessed).toBe(true);
+  expect(sector.wallCount).toBe(2);
+  expect(sector.walls.every((wall) => wall.assessed)).toBe(true);
 });
 
 test("surface quality detects competing parallel wall layers", () => {

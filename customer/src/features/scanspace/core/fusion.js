@@ -1668,6 +1668,7 @@ export function measuredSurfaceQualityDiagnostics(mesh, gridSize = 20) {
   return {
     assessed: true,
     verticalArea,
+    dominantNormal: { x: best.nx, z: best.nz },
     dominantOrientationRatio,
     dominantLayerRatio,
     wallOffset,
@@ -1677,6 +1678,74 @@ export function measuredSurfaceQualityDiagnostics(mesh, gridSize = 20) {
     enclosedEmptyCells,
     interiorMissingRatio:
       enclosedEmptyCells / Math.max(1, occupiedCells + enclosedEmptyCells),
+  };
+}
+
+function meshWithoutWallDirection(mesh, normal) {
+  const indices = [];
+  const alignmentLimit = Math.cos((18 * Math.PI) / 180);
+  for (let index = 0; index < mesh.indices.length; index += 3) {
+    const triangle = [
+      mesh.indices[index],
+      mesh.indices[index + 1],
+      mesh.indices[index + 2],
+    ];
+    const value = meshTriangleNormal(mesh.positions, ...triangle);
+    const horizontalLength = Math.hypot(value[0], value[2]);
+    if (
+      horizontalLength < 0.00001 ||
+      Math.abs(
+        (value[0] / horizontalLength) * normal.x +
+          (value[2] / horizontalLength) * normal.z,
+      ) < alignmentLimit
+    )
+      indices.push(...triangle);
+  }
+  return { ...mesh, indices: new Uint32Array(indices) };
+}
+
+// A partial result may contain one or several walls. Assess every significant
+// wall direction independently so "at least one wall" never becomes "exactly
+// one wall", while an incomplete secondary wall cannot hide behind a good one.
+export function measuredWallSectorQualityDiagnostics(mesh) {
+  const totalVerticalArea = meshWallStructureDiagnostics(mesh).verticalArea;
+  const minimumWallArea = Math.max(0.12, totalVerticalArea * 0.12);
+  const walls = [];
+  let remaining = mesh;
+  for (let wall = 0; wall < 4; wall++) {
+    const quality = measuredSurfaceQualityDiagnostics(remaining);
+    if (!quality.assessed || !quality.dominantNormal) break;
+    const wallArea = quality.verticalArea * quality.dominantOrientationRatio;
+    if (wallArea < minimumWallArea) break;
+    walls.push({ ...quality, wallArea });
+    remaining = meshWithoutWallDirection(remaining, quality.dominantNormal);
+  }
+  const remainingVerticalArea =
+    meshWallStructureDiagnostics(remaining).verticalArea;
+  if (!walls.length)
+    return {
+      assessed: false,
+      reason: "No sufficiently large vertical measured surface was found.",
+      wallCount: 0,
+      walls,
+      totalVerticalArea,
+      remainingVerticalArea,
+    };
+  return {
+    assessed: true,
+    wallCount: walls.length,
+    walls,
+    totalVerticalArea,
+    remainingVerticalArea,
+    unassignedVerticalAreaRatio:
+      remainingVerticalArea / Math.max(0.00001, totalVerticalArea),
+    dominantLayerRatio: Math.min(
+      ...walls.map((wall) => wall.dominantLayerRatio),
+    ),
+    gridCoverage: Math.min(...walls.map((wall) => wall.gridCoverage)),
+    interiorMissingRatio: Math.max(
+      ...walls.map((wall) => wall.interiorMissingRatio),
+    ),
   };
 }
 
@@ -2143,7 +2212,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     options.maxKeyframes || 40,
   );
   const stages = {
-    algorithmVersion: 14,
+    algorithmVersion: 15,
     completionMode: options.completionMode === "surface" ? "surface" : "room",
     supportMode: "translated-camera-viewpoints",
     depthSampling: "continuous-inverse-depth",
@@ -2228,7 +2297,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   stages.wallStructure = wallStructure;
   const measuredSurfaceQuality =
     options.completionMode === "surface"
-      ? measuredSurfaceQualityDiagnostics(surface)
+      ? measuredWallSectorQualityDiagnostics(surface)
       : null;
   stages.measuredSurfaceQuality = measuredSurfaceQuality;
   stages.rectangularRoomModelCompatible =
@@ -2236,16 +2305,6 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   if (measuredSurfaceQuality && !measuredSurfaceQuality.assessed)
     return failure(
       `${measuredSurfaceQuality.reason} Keep one wall centered and rescan it from overlapping sideways positions.`,
-      {
-        ...stages,
-        confirmedVoxels,
-        voxelSize: volume.voxelSize,
-        rejectedUnsafeFusion: true,
-      },
-    );
-  if (measuredSurfaceQuality?.dominantOrientationRatio < 0.68)
-    return failure(
-      "This surface capture contains several wall directions. Finish one wall at a time, or continue to a complete room scan.",
       {
         ...stages,
         confirmedVoxels,
@@ -2308,7 +2367,9 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     ? stabilizeDominantWalls(
         surface,
         volume.voxelSize,
-        options.completionMode === "surface" ? 1 : 3,
+        options.completionMode === "surface"
+          ? Math.max(1, measuredSurfaceQuality?.wallCount || 1)
+          : 3,
       )
     : { ...surface, stabilizedPlaneCount: 0 };
   surface = smoothPositions(
