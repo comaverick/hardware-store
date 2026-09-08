@@ -618,11 +618,19 @@ function sampleBounds(samples) {
 function makeVolume(bounds, options) {
   const ranges = ["x", "y", "z"].map((axis) => bounds.max[axis] - bounds.min[axis]);
   const maxRange = Math.max(...ranges);
-  const maxDimension = clamp(options.maxDimension || 96, 64, 112);
-  let voxelSize = Math.max(options.minVoxelSize || 0.04, maxRange / (maxDimension - 5));
+  const surfaceMode = options.completionMode === "surface";
+  const maxDimension = clamp(
+    options.maxDimension || (surfaceMode ? 144 : 96),
+    64,
+    surfaceMode ? 160 : 112,
+  );
+  let voxelSize = Math.max(
+    options.minVoxelSize || (surfaceMode ? 0.025 : 0.04),
+    maxRange / (maxDimension - 5),
+  );
   const dimensionsFor = () => ranges.map((range) => Math.max(5, Math.ceil((range + voxelSize * 4) / voxelSize) + 1));
   let dimensions = dimensionsFor();
-  const maxCells = options.maxCells || 700000;
+  const maxCells = options.maxCells || (surfaceMode ? 1200000 : 700000);
   const cellCount = () => dimensions[0] * dimensions[1] * dimensions[2];
   if (cellCount() > maxCells) {
     voxelSize *= Math.cbrt(cellCount() / maxCells) * 1.01;
@@ -1459,6 +1467,219 @@ export function meshWallStructureDiagnostics(mesh) {
   };
 }
 
+function pointInsideTriangle2d(px, py, triangle) {
+  const [a, b, c] = triangle;
+  const denominator =
+    (b.y - c.y) * (a.x - c.x) +
+    (c.x - b.x) * (a.y - c.y);
+  if (Math.abs(denominator) < 0.0000001) return false;
+  const first =
+    ((b.y - c.y) * (px - c.x) +
+      (c.x - b.x) * (py - c.y)) /
+    denominator;
+  const second =
+    ((c.y - a.y) * (px - c.x) +
+      (a.x - c.x) * (py - c.y)) /
+    denominator;
+  const third = 1 - first - second;
+  return first >= -0.001 && second >= -0.001 && third >= -0.001;
+}
+
+// Surface completion is intentionally stricter than generic room fusion. It
+// must represent one dominant wall layer with reasonably continuous measured
+// coverage. This rejects a wide multi-wall sector and duplicated wall sheets;
+// it does not fill missing depth or turn the fitted plane into geometry.
+export function measuredSurfaceQualityDiagnostics(mesh, gridSize = 20) {
+  const records = [];
+  let verticalArea = 0;
+  for (let index = 0; index < mesh.indices.length; index += 3) {
+    const vertices = [0, 1, 2].map((corner) => {
+      const offset = mesh.indices[index + corner] * 3;
+      return {
+        x: mesh.positions[offset],
+        y: mesh.positions[offset + 1],
+        z: mesh.positions[offset + 2],
+      };
+    });
+    const normal = meshTriangleNormal(
+      mesh.positions,
+      mesh.indices[index],
+      mesh.indices[index + 1],
+      mesh.indices[index + 2],
+    );
+    const twiceArea = Math.hypot(...normal);
+    if (twiceArea < 0.00001) continue;
+    let nx = normal[0] / twiceArea;
+    const ny = normal[1] / twiceArea;
+    let nz = normal[2] / twiceArea;
+    if (Math.abs(ny) > 0.45) continue;
+    const horizontalLength = Math.hypot(nx, nz);
+    if (horizontalLength < 0.75) continue;
+    nx /= horizontalLength;
+    nz /= horizontalLength;
+    if (nx < 0 || (Math.abs(nx) < 0.0001 && nz < 0)) {
+      nx *= -1;
+      nz *= -1;
+    }
+    const area = twiceArea * 0.5;
+    verticalArea += area;
+    records.push({
+      vertices,
+      nx,
+      nz,
+      area,
+      center: {
+        x: vertices.reduce((sum, point) => sum + point.x / 3, 0),
+        y: vertices.reduce((sum, point) => sum + point.y / 3, 0),
+        z: vertices.reduce((sum, point) => sum + point.z / 3, 0),
+      },
+    });
+  }
+  if (verticalArea < 0.12 || !records.length)
+    return {
+      assessed: false,
+      reason: "No sufficiently large vertical measured surface was found.",
+      verticalArea,
+    };
+
+  let best = null;
+  const alignmentLimit = Math.cos((18 * Math.PI) / 180);
+  for (let degree = -90; degree < 90; degree += 3) {
+    const angle = (degree * Math.PI) / 180;
+    const nx = Math.cos(angle);
+    const nz = Math.sin(angle);
+    const alignedArea = records.reduce(
+      (sum, record) =>
+        sum +
+        (Math.abs(record.nx * nx + record.nz * nz) >= alignmentLimit
+          ? record.area
+          : 0),
+      0,
+    );
+    if (!best || alignedArea > best.alignedArea)
+      best = { nx, nz, alignedArea };
+  }
+  const aligned = records.filter(
+    (record) =>
+      Math.abs(record.nx * best.nx + record.nz * best.nz) >= alignmentLimit,
+  );
+  const offsets = aligned
+    .map((record) => ({
+      value: record.center.x * best.nx + record.center.z * best.nz,
+      area: record.area,
+    }))
+    .sort((left, right) => left.value - right.value);
+  const halfArea = best.alignedArea / 2;
+  let accumulatedArea = 0;
+  const wallOffset =
+    offsets.find((entry) => {
+      accumulatedArea += entry.area;
+      return accumulatedArea >= halfArea;
+    })?.value || 0;
+  const layerTolerance = 0.11;
+  const layer = aligned.filter(
+    (record) =>
+      Math.abs(
+        record.center.x * best.nx +
+          record.center.z * best.nz -
+          wallOffset,
+      ) <= layerTolerance,
+  );
+  const layerArea = layer.reduce((sum, record) => sum + record.area, 0);
+  const dominantOrientationRatio = best.alignedArea / verticalArea;
+  const dominantLayerRatio = layerArea / Math.max(0.00001, best.alignedArea);
+
+  const tangent = { x: -best.nz, z: best.nx };
+  const projected = layer.flatMap((record) =>
+    record.vertices.map((point) => ({
+      x: point.x * tangent.x + point.z * tangent.z,
+      y: point.y,
+    })),
+  );
+  const bounds = projected.reduce(
+    (value, point) => ({
+      minX: Math.min(value.minX, point.x),
+      maxX: Math.max(value.maxX, point.x),
+      minY: Math.min(value.minY, point.y),
+      maxY: Math.max(value.maxY, point.y),
+    }),
+    { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity },
+  );
+  const width = bounds.maxX - bounds.minX;
+  const height = bounds.maxY - bounds.minY;
+  if (!Number.isFinite(width) || width < 0.45 || height < 0.45)
+    return {
+      assessed: false,
+      reason: "The dominant measured wall area is too small.",
+      verticalArea,
+      dominantOrientationRatio,
+      dominantLayerRatio,
+      width,
+      height,
+    };
+  const occupied = new Uint8Array(gridSize * gridSize);
+  layer.forEach((record) => {
+    const triangle = record.vertices.map((point) => ({
+      x: point.x * tangent.x + point.z * tangent.z,
+      y: point.y,
+    }));
+    const xs = triangle.map((point) =>
+      Math.max(
+        0,
+        Math.min(
+          gridSize - 1,
+          Math.floor(((point.x - bounds.minX) / width) * gridSize),
+        ),
+      ),
+    );
+    const ys = triangle.map((point) =>
+      Math.max(
+        0,
+        Math.min(
+          gridSize - 1,
+          Math.floor(((point.y - bounds.minY) / height) * gridSize),
+        ),
+      ),
+    );
+    for (let y = Math.min(...ys); y <= Math.max(...ys); y++)
+      for (let x = Math.min(...xs); x <= Math.max(...xs); x++) {
+        const px = bounds.minX + ((x + 0.5) / gridSize) * width;
+        const py = bounds.minY + ((y + 0.5) / gridSize) * height;
+        if (pointInsideTriangle2d(px, py, triangle))
+          occupied[y * gridSize + x] = 1;
+      }
+  });
+  const occupiedCells = occupied.reduce((sum, value) => sum + value, 0);
+  let enclosedEmptyCells = 0;
+  for (let y = 1; y < gridSize - 1; y++)
+    for (let x = 1; x < gridSize - 1; x++) {
+      if (occupied[y * gridSize + x]) continue;
+      let left = false, right = false, above = false, below = false;
+      for (let next = 0; next < x; next++)
+        left ||= !!occupied[y * gridSize + next];
+      for (let next = x + 1; next < gridSize; next++)
+        right ||= !!occupied[y * gridSize + next];
+      for (let next = 0; next < y; next++)
+        above ||= !!occupied[next * gridSize + x];
+      for (let next = y + 1; next < gridSize; next++)
+        below ||= !!occupied[next * gridSize + x];
+      if (left && right && above && below) enclosedEmptyCells++;
+    }
+  return {
+    assessed: true,
+    verticalArea,
+    dominantOrientationRatio,
+    dominantLayerRatio,
+    wallOffset,
+    width,
+    height,
+    gridCoverage: occupiedCells / occupied.length,
+    enclosedEmptyCells,
+    interiorMissingRatio:
+      enclosedEmptyCells / Math.max(1, occupiedCells + enclosedEmptyCells),
+  };
+}
+
 export function meshOutsideRectangularRoomModel(diagnostics) {
   return (
     diagnostics.verticalArea >= 0.4 &&
@@ -1467,7 +1688,7 @@ export function meshOutsideRectangularRoomModel(diagnostics) {
   );
 }
 
-function stabilizeDominantWalls(mesh, voxelSize) {
+function stabilizeDominantWalls(mesh, voxelSize, maxPlanes = 3) {
   const groups = new Map();
   let verticalArea = 0;
   for (let index = 0; index < mesh.indices.length; index += 3) {
@@ -1522,7 +1743,7 @@ function stabilizeDominantWalls(mesh, voxelSize) {
   const planes = [...groups.values()]
     .filter((group) => group.area >= Math.max(0.22, verticalArea * 0.1))
     .sort((left, right) => right.area - left.area)
-    .slice(0, 3)
+    .slice(0, maxPlanes)
     .map((group) => {
       const length = Math.hypot(group.nx, group.ny, group.nz) || 1;
       return {
@@ -1922,7 +2143,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     options.maxKeyframes || 40,
   );
   const stages = {
-    algorithmVersion: 13,
+    algorithmVersion: 14,
     completionMode: options.completionMode === "surface" ? "surface" : "room",
     supportMode: "translated-camera-viewpoints",
     depthSampling: "continuous-inverse-depth",
@@ -2005,8 +2226,57 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   const highlyFragmented = meshFragmentationIsUnacceptable(surface);
   const wallStructure = meshWallStructureDiagnostics(surface);
   stages.wallStructure = wallStructure;
+  const measuredSurfaceQuality =
+    options.completionMode === "surface"
+      ? measuredSurfaceQualityDiagnostics(surface)
+      : null;
+  stages.measuredSurfaceQuality = measuredSurfaceQuality;
   stages.rectangularRoomModelCompatible =
     !meshOutsideRectangularRoomModel(wallStructure);
+  if (measuredSurfaceQuality && !measuredSurfaceQuality.assessed)
+    return failure(
+      `${measuredSurfaceQuality.reason} Keep one wall centered and rescan it from overlapping sideways positions.`,
+      {
+        ...stages,
+        confirmedVoxels,
+        voxelSize: volume.voxelSize,
+        rejectedUnsafeFusion: true,
+      },
+    );
+  if (measuredSurfaceQuality?.dominantOrientationRatio < 0.68)
+    return failure(
+      "This surface capture contains several wall directions. Finish one wall at a time, or continue to a complete room scan.",
+      {
+        ...stages,
+        confirmedVoxels,
+        voxelSize: volume.voxelSize,
+        rejectedUnsafeFusion: true,
+      },
+    );
+  if (measuredSurfaceQuality?.dominantLayerRatio < 0.58)
+    return failure(
+      "The same wall appears in competing depth layers. Return to a confirmed area and rescan slowly before finishing.",
+      {
+        ...stages,
+        confirmedVoxels,
+        voxelSize: volume.voxelSize,
+        rejectedUnsafeFusion: true,
+      },
+    );
+  if (
+    measuredSurfaceQuality &&
+    (measuredSurfaceQuality.gridCoverage < 0.42 ||
+      measuredSurfaceQuality.interiorMissingRatio > 0.18)
+  )
+    return failure(
+      "The measured wall still has large internal depth gaps. Revisit the dark regions from another angle; reflective or hidden areas may need to be uncovered.",
+      {
+        ...stages,
+        confirmedVoxels,
+        voxelSize: volume.voxelSize,
+        rejectedUnsafeFusion: true,
+      },
+    );
   if (!stages.rectangularRoomModelCompatible)
     return failure("The measured views create curled or overlapping wall layers. Keep scanning the affected wall from overlapping sideways positions.", {
       ...stages,
@@ -2035,9 +2305,17 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
         stages.rectangularRoomModelCompatible,
     });
   surface = stages.rectangularRoomModelCompatible
-    ? stabilizeDominantWalls(surface, volume.voxelSize)
+    ? stabilizeDominantWalls(
+        surface,
+        volume.voxelSize,
+        options.completionMode === "surface" ? 1 : 3,
+      )
     : { ...surface, stabilizedPlaneCount: 0 };
-  surface = smoothPositions(surface, options.smoothingPasses ?? 3);
+  surface = smoothPositions(
+    surface,
+    options.smoothingPasses ??
+      (options.completionMode === "surface" ? 2 : 3),
+  );
   report?.("texturing", 88);
   const textured = texturedMesh(surface, usable);
   const floorY = Number.isFinite(options.floorY) ? options.floorY : 0;

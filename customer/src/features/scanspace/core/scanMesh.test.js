@@ -9,6 +9,7 @@ import {
   meshFragmentationIsUnacceptable,
   meshOutsideRectangularRoomModel,
   meshWallStructureDiagnostics,
+  measuredSurfaceQualityDiagnostics,
   projectWorld,
 } from "./fusion";
 import { Matrix4, PerspectiveCamera, Vector3 } from "three";
@@ -255,6 +256,70 @@ test("distinguishes planar room walls from a curled shell", () => {
   expect(meshOutsideRectangularRoomModel(shell)).toBe(true);
 });
 
+function joinedWallPlanes(offsets, perpendicular = false) {
+  const positions = [];
+  const indices = [];
+  offsets.forEach((offset, plane) => {
+    const start = positions.length / 3;
+    if (perpendicular && plane === offsets.length - 1)
+      positions.push(0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1);
+    else
+      positions.push(0, 0, offset, 1, 0, offset, 1, 1, offset, 0, 1, offset);
+    indices.push(start, start + 1, start + 2, start, start + 2, start + 3);
+  });
+  return {
+    positions: new Float32Array(positions),
+    indices: new Uint32Array(indices),
+  };
+}
+
+test("surface quality accepts one wall but detects multiple wall directions", () => {
+  const single = measuredSurfaceQualityDiagnostics(joinedWallPlanes([0]));
+  expect(single.assessed).toBe(true);
+  expect(single.dominantOrientationRatio).toBeGreaterThan(0.95);
+  expect(single.dominantLayerRatio).toBeGreaterThan(0.95);
+
+  const corner = measuredSurfaceQualityDiagnostics(
+    joinedWallPlanes([0, 0], true),
+  );
+  expect(corner.dominantOrientationRatio).toBeLessThan(0.68);
+});
+
+test("surface quality detects competing parallel wall layers", () => {
+  const duplicated = measuredSurfaceQualityDiagnostics(
+    joinedWallPlanes([0, 0.3]),
+  );
+  expect(duplicated.assessed).toBe(true);
+  expect(duplicated.dominantLayerRatio).toBeLessThan(0.58);
+});
+
+test("surface quality detects a large enclosed unmeasured wall gap", () => {
+  const size = 7;
+  const positions = [];
+  const indices = [];
+  for (let y = 0; y < size; y++)
+    for (let x = 0; x < size; x++) positions.push(x / 6, y / 6, 0);
+  for (let y = 0; y < size - 1; y++)
+    for (let x = 0; x < size - 1; x++) {
+      if (x >= 2 && x <= 4 && y >= 2 && y <= 4) continue;
+      const first = y * size + x;
+      indices.push(
+        first,
+        first + size,
+        first + 1,
+        first + 1,
+        first + size,
+        first + size + 1,
+      );
+    }
+  const quality = measuredSurfaceQualityDiagnostics({
+    positions: new Float32Array(positions),
+    indices: new Uint32Array(indices),
+  });
+  expect(quality.assessed).toBe(true);
+  expect(quality.interiorMissingRatio).toBeGreaterThan(0.18);
+});
+
 test.each([
   ["identity", [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]],
   ["90 degrees", [0, -1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1]],
@@ -395,6 +460,8 @@ test("allows validated multi-view surface fusion without a room heading sweep", 
   expect(result.mesh?.kind).toBe("projective-tsdf-surface-net");
   expect(result.mesh?.triangleCount).toBeGreaterThan(0);
   expect(result.diagnostics.completionMode).toBe("surface");
+  expect(result.diagnostics.measuredSurfaceQuality.assessed).toBe(true);
+  expect(result.diagnostics.measuredSurfaceQuality.gridCoverage).toBeGreaterThan(0.42);
   expect(result.diagnostics.fallback).toBeUndefined();
 });
 
