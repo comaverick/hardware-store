@@ -25,7 +25,7 @@ Check `coordinateMode`, `inputDepthSamples`, `filteredDepthSamples`,
 `roundTrip`, `alignment.pairs`, `alignment.rejectedFrameIds`, `cellRejections`,
 `wallStructure`, `rectangularRoomModelCompatible`, and the triangle counts
 before and after cleanup. Pair errors are in metres. Automatic pose mutation is
-disabled; incompatible frames are still rejected. `algorithmVersion: 12`
+disabled; incompatible frames are still rejected. `algorithmVersion: 13`
 uses continuous inverse-depth sampling on supported surfaces. `frameSamples`
 reports input, retained measured, and repaired sample counts for every prepared
 frame. This distinguishes sensor gaps from filter and frame-selection losses.
@@ -34,12 +34,15 @@ Algorithm 10 requires at least 4 cm of camera translation before two samples
 can count as independent support for the same fused voxel. Turning in place can
 capture another direction, but it cannot reinforce a bowed depth surface.
 
-Algorithm 12 has no single-view or registered-composite fallback. Captures below
+Algorithm 13 has no single-view or registered-composite fallback. Room captures below
 75% heading coverage, captures without overlapping translated viewpoints, and
 fused surfaces with fragmented, curled, or contradictory wall layers return no
 mesh. The scanner remains open and reports what must be rescanned. Only a
 multi-view measured surface and a closed four-wall depth boundary may proceed
-to room review; missing room walls are never synthesized.
+to room review; missing room walls are never synthesized. The separate surface
+completion mode may skip the room heading and closed-footprint requirements,
+but it still uses the same validated multi-view fusion and never substitutes a
+single frame.
 
 Capture requires a genuinely new camera viewpoint for every retained keyframe.
 Waiting at one pose cannot add duplicate support to a warped depth observation.

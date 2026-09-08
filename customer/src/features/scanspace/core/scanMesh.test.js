@@ -387,6 +387,17 @@ test("refuses to finish when room-direction coverage is incomplete", () => {
   expect(result.diagnostics.fallback).toBeUndefined();
 });
 
+test("allows validated multi-view surface fusion without a room heading sweep", () => {
+  const result = fuseRgbdKeyframes(
+    [planeKeyframe(0), planeKeyframe(0.08), planeKeyframe(-0.08)],
+    { floorY: 0, headingCoverage: 25, completionMode: "surface" },
+  );
+  expect(result.mesh?.kind).toBe("projective-tsdf-surface-net");
+  expect(result.mesh?.triangleCount).toBeGreaterThan(0);
+  expect(result.diagnostics.completionMode).toBe("surface");
+  expect(result.diagnostics.fallback).toBeUndefined();
+});
+
 test("rejects a drifted pose without losing the consistent wall", () => {
   const result = fuseRgbdKeyframes(
     [planeKeyframe(0), planeKeyframe(0.08), planeKeyframe(-0.08), planeKeyframe(8)],

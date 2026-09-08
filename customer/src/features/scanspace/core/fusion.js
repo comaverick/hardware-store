@@ -1922,7 +1922,8 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     options.maxKeyframes || 40,
   );
   const stages = {
-    algorithmVersion: 12,
+    algorithmVersion: 13,
+    completionMode: options.completionMode === "surface" ? "surface" : "room",
     supportMode: "translated-camera-viewpoints",
     depthSampling: "continuous-inverse-depth",
     coordinateMode: "view-aligned-v1",
@@ -1955,6 +1956,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       "This older diagnostic capture used ambiguous depth-buffer coordinates. Record a fresh scan with the repaired view-aligned geometry format.",
     );
   if (
+    options.completionMode !== "surface" &&
     Number.isFinite(options.headingCoverage) &&
     options.headingCoverage < 75
   )

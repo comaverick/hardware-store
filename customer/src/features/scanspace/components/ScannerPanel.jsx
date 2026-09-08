@@ -5,6 +5,7 @@ import { buildScanCloud } from "../core/scanCloud";
 import { snapshotDepthCapture, downloadDepthCapture } from "../core/captureDebug";
 import {
   scanReadiness,
+  surfaceScanReadiness,
   MIN_CAMERA_BASELINE_METERS,
   MIN_DIRECTION_COVERAGE,
   MIN_FUSION_KEYFRAMES,
@@ -25,6 +26,13 @@ function observationPoints(observations) {
     return point;
   });
 }
+
+const captureQualitySummary = (stats) => ({
+  coverage: stats.coverage || 0,
+  cameraBaseline: stats.cameraBaseline || 0,
+  acceptedDepthFrames: stats.acceptedDepthFrames || 0,
+  rejectedDepthFrames: stats.rejectedDepthFrames || 0,
+});
 
 function CoverageCompass({ sectors = [], heading = 0 }) {
   const views = sectors.length ? sectors : Array(24).fill(false);
@@ -137,6 +145,7 @@ function captureTargetState(stats, busy = false) {
 export default function ScannerPanel({
   capabilities,
   onComplete,
+  onSurface,
   onCancel,
 }) {
   const canvas = useRef(),
@@ -159,6 +168,7 @@ export default function ScannerPanel({
     [fusion, setFusion] = useState(null),
     [error, setError] = useState("");
   const readiness = scanReadiness(stats);
+  const surfaceReadiness = surfaceScanReadiness(stats);
   const targetState = captureTargetState(stats, busy);
   useEffect(
     () => () => {
@@ -204,7 +214,11 @@ export default function ScannerPanel({
     if (!source?.keyframes?.length) return;
     downloadDepthCapture(debugCapture.current || snapshotDepthCapture(source), source.stats.fusion);
   }
-  async function buildFusedMesh(raw, preserveInput = false) {
+  async function buildFusedMesh(
+    raw,
+    preserveInput = false,
+    completionMode = "room",
+  ) {
     if (!raw.keyframes?.length) return { mesh: null, diagnostics: null };
     fusionWorker.current = new Worker(
       new URL("../core/fusion.worker.js", import.meta.url),
@@ -249,6 +263,7 @@ export default function ScannerPanel({
             floorY: raw.floorY,
             observer: raw.observer,
             headingCoverage: raw.stats.coverage || 0,
+            completionMode,
           },
         },
         transfer,
@@ -381,6 +396,70 @@ export default function ScannerPanel({
       setBusy(false);
     }
   }
+  async function finishSurface() {
+    if (!surfaceReadiness.ready) {
+      setError(
+        `Keep scanning this surface before finishing: ${surfaceReadiness.missing.join(", ")}.`,
+      );
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setFusion({ stage: "preparing", progress: 0 });
+    try {
+      const raw = scanner.current.result();
+      scanner.current.paused = true;
+      debugCapture.current = snapshotDepthCapture(raw);
+      const fused = await buildFusedMesh(raw, true, "surface");
+      raw.stats.fusion = fused.diagnostics;
+      const acceptedPoints =
+        observationPoints(fused.observations) || raw.points;
+      if (!fused.mesh) {
+        setPartial({
+          reason:
+            fused.diagnostics?.reason ||
+            "The measured surface did not pass multi-view quality checks.",
+          pointCount: acceptedPoints.length,
+          coverage: raw.stats.coverage || 0,
+          cameraBaseline: raw.stats.cameraBaseline || 0,
+          rejectedDepthFrames: raw.stats.rejectedDepthFrames || 0,
+        });
+        return;
+      }
+      const scanCloud = buildScanCloud(acceptedPoints, {
+        floorY: Number.isFinite(raw.floorY) ? raw.floorY : 0,
+        observer: raw.observer,
+        voxelSize: raw.stats.cloudCellSize,
+      });
+      finished.current = true;
+      await scanner.current.stop();
+      onSurface({
+        version: 2,
+        kind: "validated-measured-surface",
+        name: "Measured surface scan",
+        walls: [],
+        floorObserved: Number.isFinite(raw.floorY),
+        ceilingObserved: false,
+        pointCount: acceptedPoints.length,
+        reason:
+          "Validated multi-view surface. A complete room boundary was not requested.",
+        cloud: scanCloud,
+        mesh: fused.mesh,
+        fusionMode: "multi-view",
+        captureQuality: captureQualitySummary(raw.stats),
+        debugCapture: debugCapture.current,
+        fusionDiagnostics: fused.diagnostics,
+      });
+    } catch (surfaceError) {
+      setError(surfaceError.message);
+      if (scanner.current) scanner.current.paused = false;
+    } finally {
+      fusionWorker.current?.terminate();
+      fusionWorker.current = null;
+      setFusion(null);
+      setBusy(false);
+    }
+  }
   return (
     <div className={`ss-scanner ${active ? "is-scanning" : ""}`}>
       <canvas className="ss-xr-canvas" ref={canvas} />
@@ -483,6 +562,11 @@ export default function ScannerPanel({
                   Needed before a complete room scan: {readiness.missing.join(", ")}.
                 </p>
               )}
+              {!busy && !surfaceReadiness.ready && (
+                <p className="ss-scan-hint">
+                  Needed for one measured surface: {surfaceReadiness.missing.join(", ")}.
+                </p>
+              )}
               {stats.cloudCompactions > 0 && (
                 <p className="ss-scan-hint">
                   Capture density was optimized to retain room coverage.
@@ -505,6 +589,12 @@ export default function ScannerPanel({
                     onClick={() => finish()}
                   >
                     Finish room scan
+                  </button>
+                  <button
+                    disabled={busy || !surfaceReadiness.ready}
+                    onClick={finishSurface}
+                  >
+                    Finish scanned surface
                   </button>
                 </div>
               ) : (

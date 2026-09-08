@@ -244,10 +244,8 @@ export default function PartialScanScene({ scan }) {
       </span>
       <span className="ss-partial-legend">
         <i />{" "}
-        {mesh?.kind === "measured-depth-surface"
-          ? "Registered measured RGB-D surface"
-          : mesh
-            ? "Reconstructed RGB-D surface"
+        {mesh
+            ? "Validated multi-view RGB-D surface"
             : "Captured RGB-D points"}
       </span>
       <button className="ss-quality" onClick={() => setLow((value) => !value)}>

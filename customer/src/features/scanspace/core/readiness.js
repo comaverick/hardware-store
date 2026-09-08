@@ -2,6 +2,9 @@ export const MIN_CAMERA_BASELINE_METERS = 0.4;
 export const MIN_DIRECTION_COVERAGE = 75;
 export const MIN_FUSION_KEYFRAMES = 12;
 export const MIN_STABLE_POINTS = 2000;
+export const MIN_SURFACE_CAMERA_BASELINE_METERS = 0.25;
+export const MIN_SURFACE_FUSION_KEYFRAMES = 6;
+export const MIN_SURFACE_STABLE_POINTS = 800;
 
 export function depthFrameQuality({
   validSamples = 0,
@@ -32,5 +35,17 @@ export function scanReadiness(stats) {
     missing.push("three quarters of the camera heading sweep");
   if ((stats.stablePointCount || 0) < MIN_STABLE_POINTS)
     missing.push("2,000 independently observed surface points");
+  return { ready: missing.length === 0, missing };
+}
+
+export function surfaceScanReadiness(stats) {
+  const missing = [];
+  if (!stats.depthActive || !stats.depthCurrent) missing.push("live depth");
+  if ((stats.fusionKeyframes || 0) < MIN_SURFACE_FUSION_KEYFRAMES)
+    missing.push("6 translated or clearly separated depth views");
+  if ((stats.cameraBaseline || 0) < MIN_SURFACE_CAMERA_BASELINE_METERS)
+    missing.push("25 cm of horizontal camera-position spread");
+  if ((stats.stablePointCount || 0) < MIN_SURFACE_STABLE_POINTS)
+    missing.push("800 independently observed surface points");
   return { ready: missing.length === 0, missing };
 }

@@ -16,10 +16,14 @@ import "./scanspace.css";
 const ScannerPanel = lazy(() => import("./components/ScannerPanel"));
 const RoomEditor = lazy(() => import("./components/RoomEditor"));
 const RoomScene = lazy(() => import("./components/RoomScene"));
+const PartialScanReview = lazy(
+  () => import("./components/PartialScanReview"),
+);
 export default function ScanSpace() {
   const [stage, setStage] = useState("welcome"),
     [capabilities, setCapabilities] = useState(null),
     [reviewRoom, setReviewRoom] = useState(null),
+    [surfaceScan, setSurfaceScan] = useState(null),
     [capture, setCapture] = useState({}),
     [error, setError] = useState(""),
     [draft, setDraft] = useState(false);
@@ -233,6 +237,27 @@ export default function ScanSpace() {
               setReviewRoom(room);
               setCapture(data);
               setStage("review");
+            }}
+            onSurface={(scan) => {
+              setSurfaceScan(scan);
+              setStage("surface");
+            }}
+          />
+        </Suspense>
+      )}
+      {stage === "surface" && surfaceScan && (
+        <Suspense
+          fallback={<div className="ss-loading">Opening measured surface…</div>}
+        >
+          <PartialScanReview
+            scan={surfaceScan}
+            onDone={() => {
+              setSurfaceScan(null);
+              setStage("welcome");
+            }}
+            onRescan={() => {
+              setSurfaceScan(null);
+              setStage("scan");
             }}
           />
         </Suspense>
