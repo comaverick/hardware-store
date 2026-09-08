@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { VoxelCloud, unprojectDepth, viewSampleGrid } from "../core/depth";
 import { createRgbdKeyframe } from "../core/fusion";
+import { depthFrameQuality } from "../core/readiness";
 import { createCameraColorReader } from "./cameraColor";
 
 export class RoomScanner {
@@ -31,6 +32,15 @@ export class RoomScanner {
       currentDirection: 0,
       fusionKeyframes: 0,
       fusionKeyframeCompactions: 0,
+      acceptedDepthFrames: 0,
+      rejectedDepthFrames: 0,
+      frameQuality: "waiting",
+      validDepthRatio: 0,
+      movingTooFast: false,
+      linearSpeed: 0,
+      angularSpeed: 0,
+      cameraBaseline: 0,
+      cameraTravel: 0,
       nearDepthWarning: false,
     };
     this.directions = new Set();
@@ -192,6 +202,7 @@ export class RoomScanner {
             this.stats.depthUsage = this.session.depthUsage;
             this.stats.dimensions = `${depth.width} × ${depth.height}`;
             const keyframePose = this.keyframePose(view);
+            const motion = this.measureFrameMotion(keyframePose, time);
             const keyframeEligible = this.shouldCaptureKeyframe(keyframePose);
             let colorAt = null;
             if (
@@ -233,22 +244,35 @@ export class RoomScanner {
             const nearRatio = framePoints.length
               ? nearPointCount / framePoints.length
               : 0;
+            const quality = depthFrameQuality({
+              validSamples: framePoints.length,
+              totalSamples: columns * rows,
+              nearRatio,
+              ...motion,
+            });
+            this.stats.frameQuality = quality.reason;
+            this.stats.validDepthRatio = quality.validRatio;
+            this.stats.movingTooFast = quality.reason === "moving-too-fast";
+            this.stats.linearSpeed = motion.linearSpeed;
+            this.stats.angularSpeed = motion.angularSpeed;
             this.stats.nearDepthWarning = nearRatio > 0.12;
-            this.cloud.add(framePoints, this.stats.depthFrames);
-            // Pose gating inside captureKeyframe decides whether this depth
-            // view adds useful parallax. Checking every depth frame prevents a
-            // slow single-wall sweep from falling between a timer cadence.
-            if (keyframeEligible)
-              this.captureKeyframe(
-                framePoints,
-                view,
-                columns,
-                rows,
-                time,
-                colorAt,
-                keyframePose,
-                depth,
-              );
+            if (quality.accepted) {
+              this.stats.acceptedDepthFrames++;
+              this.cloud.add(framePoints, this.stats.depthFrames);
+              // Pose gating decides whether this accepted depth frame adds a
+              // useful new viewpoint. Fast/sparse frames never reach fusion.
+              if (keyframeEligible)
+                this.captureKeyframe(
+                  framePoints,
+                  view,
+                  columns,
+                  rows,
+                  time,
+                  colorAt,
+                  keyframePose,
+                  depth,
+                );
+            } else this.stats.rejectedDepthFrames++;
             this.stats.cloudCellSize = this.cloud.size;
             this.stats.cloudCompactions = this.cloud.compactions;
             const m = view.transform.matrix;
@@ -256,7 +280,7 @@ export class RoomScanner {
               Math.floor(
                 ((Math.atan2(-m[8], -m[10]) + Math.PI) / (Math.PI * 2)) * 24,
               ) % 24;
-            this.directions.add(direction);
+            if (quality.accepted) this.directions.add(direction);
             this.stats.currentDirection = direction;
             this.stats.directionCoverage = Array.from(
               { length: 24 },
@@ -323,6 +347,28 @@ export class RoomScanner {
       },
     };
   }
+  measureFrameMotion(pose, timestamp) {
+    const previous = this.lastDepthPose;
+    this.lastDepthPose = { pose, timestamp };
+    if (!previous || timestamp <= previous.timestamp)
+      return { linearSpeed: 0, angularSpeed: 0 };
+    const seconds = Math.max(0.001, (timestamp - previous.timestamp) / 1000);
+    const linearDistance = Math.hypot(
+      pose.position.x - previous.pose.position.x,
+      pose.position.y - previous.pose.position.y,
+      pose.position.z - previous.pose.position.z,
+    );
+    const a = pose.orientation;
+    const b = previous.pose.orientation;
+    const dot = Math.min(
+      1,
+      Math.abs(a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w),
+    );
+    return {
+      linearSpeed: linearDistance / seconds,
+      angularSpeed: (2 * Math.acos(dot)) / seconds,
+    };
+  }
   shouldCaptureKeyframe(pose) {
     if (this.lastMeshPose) {
       const moved = Math.hypot(
@@ -371,6 +417,24 @@ export class RoomScanner {
       colorImage: colorAt?.snapshot?.(),
     });
     if (!keyframe) return;
+    const capturedPositions = (this.keyframePositions ||= []);
+    capturedPositions.forEach((position) => {
+      this.stats.cameraBaseline = Math.max(
+        this.stats.cameraBaseline,
+        Math.hypot(
+          pose.position.x - position.x,
+          pose.position.z - position.z,
+        ),
+      );
+    });
+    const previousPosition = capturedPositions[capturedPositions.length - 1];
+    if (previousPosition)
+      this.stats.cameraTravel += Math.hypot(
+        pose.position.x - previousPosition.x,
+        pose.position.y - previousPosition.y,
+        pose.position.z - previousPosition.z,
+      );
+    capturedPositions.push({ ...pose.position });
     // A bounded set is important on phones: the worker receives at most sixty
     // compact grids, not a growing collection of full per-frame meshes.
     if (this.keyframes.length >= 60) {

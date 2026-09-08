@@ -2,6 +2,7 @@ import PartialScanScene from "./PartialScanScene";
 import { downloadDepthCapture } from "../core/captureDebug";
 
 export default function PartialScanReview({ scan, onRescan, onDone }) {
+  const quality = scan.captureQuality;
   return (
     <section className="ss-partial-review">
       <header>
@@ -13,6 +14,15 @@ export default function PartialScanReview({ scan, onRescan, onDone }) {
           generated walls.
         </p>
       </header>
+      {quality &&
+        (quality.coverage < 50 || quality.cameraBaseline < 0.25) && (
+          <p className="ss-notice">
+            This is a limited viewing sector, not a room-shaped capture: {quality.coverage}%
+            heading coverage and {Math.round(quality.cameraBaseline * 100)} cm
+            of horizontal camera-position spread. A thin or curved open shell is expected.
+            For the next scan, move sideways while keeping each wall in view.
+          </p>
+        )}
       <PartialScanScene scan={scan} />
       <div className="ss-partial-facts">
         <span>

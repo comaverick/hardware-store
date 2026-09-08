@@ -20,6 +20,13 @@ function observationPoints(observations) {
   });
 }
 
+const captureQualitySummary = (stats) => ({
+  coverage: stats.coverage || 0,
+  cameraBaseline: stats.cameraBaseline || 0,
+  acceptedDepthFrames: stats.acceptedDepthFrames || 0,
+  rejectedDepthFrames: stats.rejectedDepthFrames || 0,
+});
+
 function CoverageCompass({ sectors = [], heading = 0 }) {
   const views = sectors.length ? sectors : Array(24).fill(false);
   const step = 360 / views.length;
@@ -42,11 +49,17 @@ function CoverageCompass({ sectors = [], heading = 0 }) {
   );
 }
 
-function captureGuidance(stats) {
+function captureGuidance(stats, busy = false) {
+  if (busy)
+    return "Capture is safely paused while the accepted depth frames are reconstructed.";
   if (!stats.tracking)
     return "Tracking is unstable. Point back at a confirmed area and hold still.";
   if (!stats.depthCurrent)
     return "Depth paused. Move back toward a textured, well-lit surface.";
+  if (stats.movingTooFast)
+    return "Move more slowly. Fast depth frames are being skipped to prevent warped surfaces.";
+  if (stats.frameQuality === "sparse-depth")
+    return "Depth is sparse here. Aim at a matte, well-lit surface and revisit shiny or dark areas from another angle.";
   if (stats.nearDepthWarning)
     return "Something is reading very close. Step back, keep fingers clear, and rescan that area slowly.";
   if (!Number.isFinite(stats.floorY))
@@ -55,6 +68,8 @@ function captureGuidance(stats) {
     return "Move slowly sideways while keeping the same surface centered.";
   if ((stats.fusionKeyframes || 0) < 6)
     return "Good start. Continue one slow sideways pass for stronger overlap.";
+  if ((stats.cameraBaseline || 0) < 0.25)
+    return "Do not only pivot in place. Move sideways at least 25 cm while keeping the same wall centered.";
   if ((stats.coverage || 0) < 50)
     return "Turn through the unscanned directions and keep each wall in view.";
   if ((stats.stablePointCount || 0) < 1200)
@@ -244,6 +259,8 @@ export default function ScannerPanel({
               reason: result.partial.reason,
               pointCount: result.partial.pointCount,
               coverage: raw.stats.coverage || 0,
+              cameraBaseline: raw.stats.cameraBaseline || 0,
+              rejectedDepthFrames: raw.stats.rejectedDepthFrames || 0,
             });
             return;
           }
@@ -259,6 +276,7 @@ export default function ScannerPanel({
                   ? raw.stats.fusion?.reason
                   : null,
               fusionMode: raw.stats.fusion?.fallback || "multi-view",
+              captureQuality: captureQualitySummary(raw.stats),
               debugCapture: debugCapture.current,
               fusionDiagnostics: raw.stats.fusion,
             },
@@ -291,6 +309,7 @@ export default function ScannerPanel({
                   ? raw.stats.fusion?.reason
                   : null,
               fusionMode: raw.stats.fusion?.fallback || "multi-view",
+              captureQuality: captureQualitySummary(raw.stats),
               debugCapture: debugCapture.current,
               fusionDiagnostics: raw.stats.fusion,
             },
@@ -302,6 +321,8 @@ export default function ScannerPanel({
           reason: reconstructionError.message,
           pointCount: acceptedPoints.length,
           coverage: raw.stats.coverage || 0,
+          cameraBaseline: raw.stats.cameraBaseline || 0,
+          rejectedDepthFrames: raw.stats.rejectedDepthFrames || 0,
         });
         return;
       }
@@ -331,6 +352,17 @@ export default function ScannerPanel({
       setBusy(false);
     }
   }
+  function preparePartialReview() {
+    if (scanner.current) scanner.current.paused = true;
+    setPartial({
+      reason:
+        "Reviewing now will show an open measured sector, not a complete room.",
+      pointCount: stats.stablePointCount || stats.pointCount || 0,
+      coverage: stats.coverage || 0,
+      cameraBaseline: stats.cameraBaseline || 0,
+      rejectedDepthFrames: stats.rejectedDepthFrames || 0,
+    });
+  }
   return (
     <div className={`ss-scanner ${active ? "is-scanning" : ""}`}>
       <canvas className="ss-xr-canvas" ref={canvas} />
@@ -339,20 +371,24 @@ export default function ScannerPanel({
           <span className="ss-kicker">ScanSpace capture</span>
           <h2>
             {active
-              ? stats.depthActive
-                ? "Depth scanning"
-                : "Looking for depth"
+              ? busy
+                ? "Reconstructing capture"
+                : stats.depthActive
+                  ? "Depth scanning"
+                  : "Looking for depth"
               : "Bring your room into ScanSpace."}
           </h2>
           <p>
             {active
-              ? stats.paused
-                ? "Scanning paused."
-                : !stats.tracking
-                  ? "Tracking lost. Move slowly toward an area you already scanned."
-                  : stats.depthActive
-                    ? "Move slowly around the room. ScanSpace finds the floor, walls, and ceiling automatically."
-                    : "Move slowly around the room while ScanSpace looks for depth."
+              ? busy
+                ? "Using the accepted depth frames already captured."
+                : stats.paused
+                  ? "Scanning paused."
+                  : !stats.tracking
+                    ? "Tracking lost. Move slowly toward an area you already scanned."
+                    : stats.depthActive
+                      ? "Move slowly around the room. ScanSpace finds the floor, walls, and ceiling automatically."
+                      : "Move slowly around the room while ScanSpace looks for depth."
               : "Your room stays on this phone during scanning. Depth and captured colors depend on the capabilities granted by your browser."}
           </p>
         </div>
@@ -408,20 +444,22 @@ export default function ScannerPanel({
             </div>
             <div className="ss-scan-bottom">
               <p className="ss-scan-caption">
-                {stats.depthCurrent
-                  ? "Depth frames are being received."
-                  : stats.depthActive
-                    ? "Depth frames have stopped. Resume or move slowly to recover tracking."
-                    : "Depth unavailable or not yet received. Assisted capture is ready."}{" "}
+                {busy
+                  ? "Capture is paused during reconstruction."
+                  : stats.depthCurrent
+                    ? "Depth frames are being received."
+                    : stats.depthActive
+                      ? "Depth frames have stopped. Resume or move slowly to recover tracking."
+                      : "Depth unavailable or not yet received. Assisted capture is ready."}{" "}
                 {stats.colorActive
                   ? "Camera colors captured."
                   : "Captured colors unavailable."}
               </p>
               <p className="ss-scan-hint">
-                {captureGuidance(stats)} Bright mint dots are confirmed depth;
+                {captureGuidance(stats, busy)} Bright mint dots are confirmed depth;
                 soft mint dots are still stabilizing.
               </p>
-              {!readiness.ready && (
+              {!busy && !readiness.ready && (
                 <p className="ss-scan-hint">
                   Needed before a complete room scan: {readiness.missing.join(", ")}.
                 </p>
@@ -451,7 +489,7 @@ export default function ScannerPanel({
                   </button>
                   {!readiness.ready &&
                     (stats.stablePointCount || 0) >= 300 && (
-                      <button disabled={busy} onClick={() => finish(true)}>
+                      <button disabled={busy} onClick={preparePartialReview}>
                         Review partial capture
                       </button>
                     )}
@@ -464,6 +502,12 @@ export default function ScannerPanel({
                     {partial.coverage}% of the view sweep. The missing room
                     outline has not been guessed.
                   </p>
+                  <p>
+                    Horizontal camera-position spread: {Math.round(
+                      (partial.cameraBaseline || 0) * 100,
+                    )} cm. Move sideways, not only in place, before trying
+                    completion again.
+                  </p>
                   <p className="ss-partial-reason">{partial.reason}</p>
                   <div className="ss-actions">
                     <button
@@ -475,6 +519,13 @@ export default function ScannerPanel({
                       Keep scanning
                     </button>
                     <button onClick={cancelScan}>Cancel scan</button>
+                    <button
+                      className="ss-primary"
+                      disabled={busy}
+                      onClick={() => finish(true)}
+                    >
+                      Review open sector anyway
+                    </button>
                   </div>
                 </section>
               )}
@@ -519,6 +570,12 @@ export default function ScannerPanel({
               viewSweep: `${stats.coverage || 0}%`,
               observedPlanes: stats.planes || 0,
               fusionKeyframes: stats.fusionKeyframes || 0,
+              acceptedDepthFrames: stats.acceptedDepthFrames || 0,
+              rejectedDepthFrames: stats.rejectedDepthFrames || 0,
+              frameQuality: stats.frameQuality || "waiting",
+              validDepthCoverage: `${Math.round((stats.validDepthRatio || 0) * 100)}%`,
+              horizontalCameraBaseline: `${Math.round((stats.cameraBaseline || 0) * 100)} cm`,
+              cameraTravel: `${Math.round((stats.cameraTravel || 0) * 100)} cm`,
               fusionOptimizations: stats.fusionKeyframeCompactions || 0,
               fusedTriangles: stats.fusion?.triangles || 0,
               fusionVoxelSize: stats.fusion?.voxelSize
