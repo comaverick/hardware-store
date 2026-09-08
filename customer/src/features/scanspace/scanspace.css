@@ -291,6 +291,32 @@
   border-color: #b8d7cc;
   background: #dfece7;
 }
+.ss-surface-modebar {
+  position: absolute;
+  z-index: 3;
+  top: 52px;
+  left: 14px;
+  display: flex;
+  padding: 3px;
+  border-radius: 8px;
+  background: #f9fcfae8;
+  backdrop-filter: blur(6px);
+}
+.ss-surface-modebar button {
+  min-height: 30px;
+  padding: 4px 9px;
+  border-color: transparent;
+  background: transparent;
+  font-size: 10px;
+}
+.ss-surface-modebar button.is-active {
+  border-color: #b8d7cc;
+  background: #dfece7;
+}
+.ss-inference-notice {
+  border-color: #c9ddd5;
+  background: #eef6f2;
+}
 .ss-partial-legend {
   position: absolute;
   top: 14px;
@@ -310,6 +336,10 @@
   height: 9px;
   border: 2px solid #52b999;
   border-radius: 2px;
+}
+.ss-partial-legend i.is-inferred {
+  border-color: #5c97b4;
+  background: #c9e0e8;
 }
 .ss-partial-scene .ss-joystick small {
   color: #eff8f3;

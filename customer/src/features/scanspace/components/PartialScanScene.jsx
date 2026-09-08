@@ -120,11 +120,13 @@ function ScanControls({ cloud, mode, input, view, reset }) {
 export default function PartialScanScene({ scan }) {
   const [mode, setMode] = useState("orbit");
   const [low, setLow] = useState(false);
+  const [surfaceMode, setSurfaceMode] = useState("captured");
   const [reset, setReset] = useState(0);
   const [knob, setKnob] = useState({ x: 0, y: 0 });
   const input = useRef({ x: 0, y: 0, keys: {} });
   const mesh = scan.mesh;
   const cloud = scan.cloud;
+  const repair = scan.structuralRepair;
   const visual = mesh || cloud;
   const view = useMemo(() => {
     if (!visual)
@@ -191,6 +193,9 @@ export default function PartialScanScene({ scan }) {
         ) : (
           <ScanPointCloud cloud={cloud} low={low} />
         )}
+        {surfaceMode === "repaired" && repair && (
+          <ScanMesh mesh={repair} low={low} />
+        )}
         <ScanControls
           cloud={visual}
           mode={mode}
@@ -218,6 +223,28 @@ export default function PartialScanScene({ scan }) {
           Reset
         </button>
       </div>
+      {repair && (
+        <div
+          className="ss-surface-modebar"
+          role="group"
+          aria-label="Surface source"
+        >
+          <button
+            className={surfaceMode === "captured" ? "is-active" : ""}
+            aria-pressed={surfaceMode === "captured"}
+            onClick={() => setSurfaceMode("captured")}
+          >
+            Captured
+          </button>
+          <button
+            className={surfaceMode === "repaired" ? "is-active" : ""}
+            aria-pressed={surfaceMode === "repaired"}
+            onClick={() => setSurfaceMode("repaired")}
+          >
+            Clean walls
+          </button>
+        </div>
+      )}
       {mode === "first" && (
         <div
           className="ss-joystick"
@@ -243,8 +270,10 @@ export default function PartialScanScene({ scan }) {
           : "Drag to orbit · Pinch to zoom"}
       </span>
       <span className="ss-partial-legend">
-        <i />{" "}
-        {mesh?.kind === "measured-depth-surface"
+        <i className={surfaceMode === "repaired" ? "is-inferred" : ""} />{" "}
+        {surfaceMode === "repaired" && repair
+          ? "Measured + inferred wall repair"
+          : mesh?.kind === "measured-depth-surface"
           ? "Single-view measured RGB-D surface"
           : mesh
             ? "Reconstructed RGB-D surface"

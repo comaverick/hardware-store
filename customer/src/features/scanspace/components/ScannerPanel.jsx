@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { RoomScanner } from "../xr/RoomScanner";
 import { surfaceTextures } from "../core/reconstruction";
 import { buildScanCloud } from "../core/scanCloud";
+import { buildStructuralRepair } from "../core/structuralRepair";
 import { captureDebugEnabled, snapshotDepthCapture, downloadDepthCapture } from "../core/captureDebug";
 import { scanReadiness } from "../core/readiness";
 
@@ -266,11 +267,16 @@ export default function ScannerPanel({
           }
           finished.current = true;
           await scanner.current.stop();
+          const structuralRepair = buildStructuralRepair(
+            result.partial.walls,
+            scanCloud,
+          );
           onPartial(
             {
               ...result.partial,
               cloud: scanCloud,
               mesh: scanMesh,
+              structuralRepair,
               fusionReason:
                 !scanMesh || raw.stats.fusion?.fallback
                   ? raw.stats.fusion?.reason

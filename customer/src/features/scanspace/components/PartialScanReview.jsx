@@ -24,6 +24,18 @@ export default function PartialScanReview({ scan, onRescan, onDone }) {
           </p>
         )}
       <PartialScanScene scan={scan} />
+      {scan.structuralRepair && (
+        <p className="ss-notice ss-inference-notice">
+          Clean walls adds {scan.structuralRepair.repairedCellCount} neutral
+          patches only to small enclosed gaps on confidently measured wall
+          planes
+          {scan.structuralRepair.inferredWindowCount
+            ? ` and marks ${scan.structuralRepair.inferredWindowCount} enclosed rectangular dropout as a probable window panel`
+            : ""}
+          . Captured pixels are unchanged. Irregular large gaps, outer edges,
+          and floor-connected doorway gaps remain open.
+        </p>
+      )}
       <div className="ss-partial-facts">
         <span>
           <strong>
