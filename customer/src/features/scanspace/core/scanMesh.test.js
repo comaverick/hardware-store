@@ -10,6 +10,7 @@ import {
   meshOutsideRectangularRoomModel,
   meshWallStructureDiagnostics,
   measuredSurfaceQualityDiagnostics,
+  measuredSurfaceGapWarning,
   measuredWallSectorQualityDiagnostics,
   wallConsensusKeyframes,
   projectWorld,
@@ -280,6 +281,7 @@ test("surface quality identifies multiple wall directions without rejecting the 
   expect(single.assessed).toBe(true);
   expect(single.dominantOrientationRatio).toBeGreaterThan(0.95);
   expect(single.dominantLayerRatio).toBeGreaterThan(0.95);
+  expect(measuredSurfaceGapWarning(single)).toBeNull();
 
   const corner = measuredSurfaceQualityDiagnostics(
     joinedWallPlanes([0, 0], true),
@@ -361,6 +363,12 @@ test("surface quality detects a large enclosed unmeasured wall gap", () => {
   });
   expect(quality.assessed).toBe(true);
   expect(quality.interiorMissingRatio).toBeGreaterThan(0.18);
+  expect(measuredSurfaceGapWarning(quality)).toEqual(
+    expect.objectContaining({
+      message: expect.stringMatching(/remain open/),
+      interiorMissingRatio: quality.interiorMissingRatio,
+    }),
+  );
 });
 
 test.each([

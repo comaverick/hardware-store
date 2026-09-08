@@ -154,6 +154,7 @@ export default function ScannerPanel({
     worker = useRef(),
     fusionWorker = useRef(),
     debugCapture = useRef(null),
+    pendingSurface = useRef(null),
     finished = useRef(false),
     [active, setActive] = useState(false),
     [busy, setBusy] = useState(false),
@@ -180,6 +181,7 @@ export default function ScannerPanel({
   );
   async function start() {
     debugCapture.current = null;
+    pendingSurface.current = null;
     setError("");
     setPartial(null);
     setBusy(true);
@@ -205,6 +207,7 @@ export default function ScannerPanel({
     }
   }
   async function cancelScan() {
+    pendingSurface.current = null;
     finished.current = true;
     await scanner.current?.stop();
     onCancel();
@@ -431,9 +434,7 @@ export default function ScannerPanel({
         observer: raw.observer,
         voxelSize: raw.stats.cloudCellSize,
       });
-      finished.current = true;
-      await scanner.current.stop();
-      onSurface({
+      const surfaceResult = {
         version: 2,
         kind: "validated-measured-surface",
         name: "Measured surface scan",
@@ -449,7 +450,23 @@ export default function ScannerPanel({
         captureQuality: captureQualitySummary(raw.stats),
         debugCapture: debugCapture.current,
         fusionDiagnostics: fused.diagnostics,
-      });
+        measuredGapWarning: fused.diagnostics?.measuredGapWarning || null,
+      };
+      if (surfaceResult.measuredGapWarning) {
+        pendingSurface.current = surfaceResult;
+        setPartial({
+          reason: surfaceResult.measuredGapWarning.message,
+          pointCount: acceptedPoints.length,
+          coverage: raw.stats.coverage || 0,
+          cameraBaseline: raw.stats.cameraBaseline || 0,
+          rejectedDepthFrames: raw.stats.rejectedDepthFrames || 0,
+          canAcceptMeasuredGaps: true,
+        });
+        return;
+      }
+      finished.current = true;
+      await scanner.current.stop();
+      onSurface(surfaceResult);
     } catch (surfaceError) {
       setError(surfaceError.message);
       if (scanner.current) scanner.current.paused = false;
@@ -457,6 +474,23 @@ export default function ScannerPanel({
       fusionWorker.current?.terminate();
       fusionWorker.current = null;
       setFusion(null);
+      setBusy(false);
+    }
+  }
+  async function acceptMeasuredGaps() {
+    const surfaceResult = pendingSurface.current;
+    if (!surfaceResult) return;
+    setBusy(true);
+    setError("");
+    try {
+      finished.current = true;
+      await scanner.current.stop();
+      pendingSurface.current = null;
+      onSurface(surfaceResult);
+    } catch (surfaceError) {
+      finished.current = false;
+      setError(surfaceError.message);
+    } finally {
       setBusy(false);
     }
   }
@@ -604,11 +638,17 @@ export default function ScannerPanel({
                 </div>
               ) : (
                 <section className="ss-partial-capture" role="status">
-                  <strong>Scan is not ready to finish</strong>
+                  <strong>
+                    {partial.canAcceptMeasuredGaps
+                      ? "Some measured areas remain open"
+                      : "Scan is not ready to finish"}
+                  </strong>
                   <p>
                     {partial.pointCount.toLocaleString()} points across{" "}
-                    {partial.coverage}% of the view sweep. No result was created
-                    because the measured geometry did not pass validation.
+                    {partial.coverage}% of the view sweep.{" "}
+                    {partial.canAcceptMeasuredGaps
+                      ? "The measured geometry passed structural validation, but some regions have no reliable depth."
+                      : "No result was created because the measured geometry did not pass validation."}
                   </p>
                   <p>
                     Horizontal camera-position spread: {Math.round(
@@ -619,14 +659,27 @@ export default function ScannerPanel({
                   <p className="ss-partial-reason">{partial.reason}</p>
                   <div className="ss-actions">
                     <button
+                      disabled={busy}
                       onClick={() => {
+                        pendingSurface.current = null;
                         setPartial(null);
                         scanner.current.togglePause();
                       }}
                     >
                       Keep scanning
                     </button>
-                    <button onClick={cancelScan}>Cancel scan</button>
+                    {partial.canAcceptMeasuredGaps && (
+                      <button
+                        className="ss-primary"
+                        disabled={busy}
+                        onClick={acceptMeasuredGaps}
+                      >
+                        Finish with measured gaps
+                      </button>
+                    )}
+                    <button disabled={busy} onClick={cancelScan}>
+                      Cancel scan
+                    </button>
                   </div>
                 </section>
               )}

@@ -1810,6 +1810,21 @@ export function measuredWallSectorQualityDiagnostics(mesh) {
   };
 }
 
+export function measuredSurfaceGapWarning(quality) {
+  if (
+    !quality?.assessed ||
+    (quality.gridCoverage >= 0.42 && quality.interiorMissingRatio <= 0.18)
+  )
+    return null;
+  return {
+    message:
+      "Some wall regions have no reliable measured depth. They can remain open in the captured-surface result.",
+    gridCoverage: quality.gridCoverage,
+    interiorMissingRatio: quality.interiorMissingRatio,
+    wallCount: quality.wallCount,
+  };
+}
+
 export function wallConsensusKeyframes(frames, quality) {
   const walls = quality?.walls || [];
   if (!walls.length) return null;
@@ -2332,7 +2347,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     options.maxKeyframes || 40,
   );
   const stages = {
-    algorithmVersion: 16,
+    algorithmVersion: 17,
     completionMode: options.completionMode === "surface" ? "surface" : "room",
     supportMode: "translated-camera-viewpoints",
     depthSampling: "continuous-inverse-depth",
@@ -2420,6 +2435,9 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       ? measuredWallSectorQualityDiagnostics(surface)
       : null;
   stages.measuredSurfaceQuality = measuredSurfaceQuality;
+  stages.measuredGapWarning = measuredSurfaceGapWarning(
+    measuredSurfaceQuality,
+  );
   stages.rectangularRoomModelCompatible =
     !meshOutsideRectangularRoomModel(wallStructure);
   if (measuredSurfaceQuality && !measuredSurfaceQuality.assessed)
@@ -2470,20 +2488,6 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       },
     );
   }
-  if (
-    measuredSurfaceQuality &&
-    (measuredSurfaceQuality.gridCoverage < 0.42 ||
-      measuredSurfaceQuality.interiorMissingRatio > 0.18)
-  )
-    return failure(
-      "The measured wall still has large internal depth gaps. Revisit the dark regions from another angle; reflective or hidden areas may need to be uncovered.",
-      {
-        ...stages,
-        confirmedVoxels,
-        voxelSize: volume.voxelSize,
-        rejectedUnsafeFusion: true,
-      },
-    );
   if (!stages.rectangularRoomModelCompatible)
     return failure("The measured views create curled or overlapping wall layers. Keep scanning the affected wall from overlapping sideways positions.", {
       ...stages,
