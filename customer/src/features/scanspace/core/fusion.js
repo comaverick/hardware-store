@@ -453,7 +453,8 @@ function compareFrameDepths(first, second) {
     if (!projected) continue;
     const target = gridIndex(second, projected.u, projected.v);
     if (!second.measuredMask[target]) continue;
-    const measured = second.filteredDepth[target];
+    const measured = sampleProjectiveDepth(second, projected.u, projected.v);
+    if (!measured) continue;
     const error = Math.abs(measured - projected.depth);
     errors.push(error);
     if (error <= Math.max(0.06, measured * 0.025)) agreeing++;
@@ -463,6 +464,7 @@ function compareFrameDepths(first, second) {
     compared: errors.length,
     agreeing,
     medianErrorMeters: errors.length ? errors[Math.floor(errors.length / 2)] : null,
+    upperErrorMeters: errors.length ? errors[Math.floor((errors.length - 1) * 0.75)] : null,
   };
 }
 
@@ -531,14 +533,27 @@ function validateFrameOverlap(frames, diagnostics = {}) {
         const backward = compareFrameDepths(frames[right], frames[left]);
         const compared = forward.compared + backward.compared;
         const agreeing = forward.agreeing + backward.agreeing;
-        const accepted = agreeing >= 12 && agreeing / Math.max(1, compared) >= 0.2;
+        const agreementRatio = agreeing / Math.max(1, compared);
+        const medianError = Math.min(
+          forward.medianErrorMeters ?? Infinity,
+          backward.medianErrorMeters ?? Infinity,
+        );
+        const upperError = Math.min(
+          forward.upperErrorMeters ?? Infinity,
+          backward.upperErrorMeters ?? Infinity,
+        );
+        const accepted = agreeing >= 12 && agreementRatio >= 0.4 &&
+          medianError <= 0.075 && upperError <= 0.14;
         diagnostics.pairs.push({
           firstFrame: frames[left].frameId,
           secondFrame: frames[right].frameId,
           compared,
           agreeing,
+          agreementRatio,
           forwardMedianErrorMeters: forward.medianErrorMeters,
           backwardMedianErrorMeters: backward.medianErrorMeters,
+          forwardUpperErrorMeters: forward.upperErrorMeters,
+          backwardUpperErrorMeters: backward.upperErrorMeters,
           accepted,
         });
         if (!accepted) continue;
@@ -1886,31 +1901,151 @@ function meshBounds(positions, floorY) {
   return bounds;
 }
 
-// When conservative multi-view fusion cannot close enough TSDF cells, retain a
-// continuous surface from the strongest measured RGB-D view. This is deliberately
-// a single-view fallback: combining unregistered frame meshes is what previously
-// produced layered shards. Depth discontinuities stay open, so this does not
-// bridge doors, furniture edges, or unscanned areas.
-function measuredDepthFallback(frames, options, failureReason, details = {}) {
-  if (frames.length < 2) return null;
-  const frame = [...frames].sort((left, right) => {
-    const score = (value) => {
-      const depths = [];
-      const stride = Math.max(1, Math.ceil(value.filteredCount / 320));
-      let cursor = 0;
-      value.filteredDepth.forEach((depth) => {
-        if (depth && cursor++ % stride === 0) depths.push(depth);
+function measuredFrameScore(value) {
+  const depths = [];
+  const stride = Math.max(1, Math.ceil(value.filteredCount / 320));
+  let cursor = 0;
+  value.filteredDepth.forEach((depth) => {
+    if (depth && cursor++ % stride === 0) depths.push(depth);
+  });
+  depths.sort((a, b) => a - b);
+  const medianDepth = depths[Math.floor(depths.length / 2)] || 1;
+  const colorCoverage =
+    (value.coloredCount || 0) / Math.max(1, value.validCount);
+  // At equal pixel coverage, a farther frame observes more physical wall area
+  // and is a better reference than a narrow close-up.
+  return value.filteredCount * medianDepth * medianDepth * (1 + colorCoverage);
+}
+
+// Reproject real measurements from other accepted frames into one stable
+// reference view. Only missing reference pixels are considered. A broad gap
+// needs the same depth from translated cameras; a lone measurement is accepted
+// only beside a continuous measured boundary. No depth value is synthesized.
+function measuredCompositeFrame(frames) {
+  const reference = [...frames].sort(
+    (left, right) => measuredFrameScore(right) - measuredFrameScore(left),
+  )[0];
+  if (!reference || frames.length < 2)
+    return { frame: reference, recoveredMeasuredPixels: 0 };
+  const candidates = Array.from(
+    { length: reference.filteredDepth.length },
+    () => null,
+  );
+  frames.forEach((frame) => {
+    if (frame === reference) return;
+    for (let index = 0; index < frame.filteredDepth.length; index++) {
+      if (!frame.measuredMask[index] || frame.depthConfidence[index] < 96)
+        continue;
+      const offset = index * 3;
+      const projected = projectWorld(
+        reference,
+        frame.positions[offset],
+        frame.positions[offset + 1],
+        frame.positions[offset + 2],
+      );
+      if (!projected) continue;
+      const target = gridIndex(reference, projected.u, projected.v);
+      if (reference.filteredDepth[target]) continue;
+      (candidates[target] ||= []).push({
+        depth: projected.depth,
+        confidence: frame.depthConfidence[index],
+        camera: frame.camera,
       });
-      depths.sort((a, b) => a - b);
-      const medianDepth = depths[Math.floor(depths.length / 2)] || 1;
-      const colorCoverage =
-        (value.coloredCount || 0) / Math.max(1, value.validCount);
-      // At equal pixel coverage, a farther frame observes more physical wall
-      // area and is a better room fallback than a narrow close-up.
-      return value.filteredCount * medianDepth * medianDepth * (1 + colorCoverage);
-    };
-    return score(right) - score(left);
-  })[0];
+    }
+  });
+  const filteredDepth = new Float32Array(reference.filteredDepth);
+  const positions = new Float32Array(reference.positions);
+  const measuredMask = new Uint8Array(reference.measuredMask);
+  const depthConfidence = new Uint8Array(reference.depthConfidence);
+  const freeSpaceMask = new Uint8Array(reference.freeSpaceMask);
+  let recoveredMeasuredPixels = 0;
+  candidates.forEach((values, index) => {
+    if (!values?.length) return;
+    values.sort((left, right) => left.depth - right.depth);
+    const clusters = [];
+    values.forEach((value) => {
+      const cluster = clusters[clusters.length - 1];
+      if (
+        !cluster ||
+        value.depth - cluster[0].depth >
+          Math.max(0.075, cluster[0].depth * 0.035)
+      )
+        clusters.push([value]);
+      else cluster.push(value);
+    });
+    const cluster = clusters.sort((left, right) => right.length - left.length)[0];
+    const neighborDepths = [];
+    const x = index % reference.columns;
+    const y = Math.floor(index / reference.columns);
+    for (let dy = -2; dy <= 2; dy++)
+      for (let dx = -2; dx <= 2; dx++) {
+        if (!dx && !dy) continue;
+        const nextX = x + dx, nextY = y + dy;
+        if (
+          nextX < 0 || nextY < 0 ||
+          nextX >= reference.columns || nextY >= reference.rows
+        )
+          continue;
+        const depth = reference.filteredDepth[nextY * reference.columns + nextX];
+        if (depth) neighborDepths.push(depth);
+      }
+    neighborDepths.sort((left, right) => left - right);
+    const depth = cluster[Math.floor(cluster.length / 2)].depth;
+    const neighborMedian = neighborDepths.length
+      ? neighborDepths[Math.floor(neighborDepths.length / 2)]
+      : null;
+    let translatedSupport = false;
+    for (let first = 0; first < cluster.length && !translatedSupport; first++)
+      for (let second = first + 1; second < cluster.length; second++)
+        if (
+          Math.hypot(
+            cluster[first].camera[0] - cluster[second].camera[0],
+            cluster[first].camera[1] - cluster[second].camera[1],
+            cluster[first].camera[2] - cluster[second].camera[2],
+          ) >= MIN_INDEPENDENT_VIEW_METERS
+        ) {
+          translatedSupport = true;
+          break;
+        }
+    if (!translatedSupport && neighborDepths.length < 5) return;
+    if (
+      neighborMedian !== null &&
+      Math.abs(depth - neighborMedian) > Math.max(0.1, neighborMedian * 0.05)
+    )
+      return;
+    const point = depthPosition(reference, index, depth);
+    if (!point?.every(Number.isFinite)) return;
+    filteredDepth[index] = depth;
+    positions.set(point, index * 3);
+    measuredMask[index] = 1;
+    depthConfidence[index] = Math.min(
+      220,
+      Math.max(...cluster.map((value) => value.confidence)),
+    );
+    freeSpaceMask[index] = 0;
+    recoveredMeasuredPixels++;
+  });
+  return {
+    frame: {
+      ...reference,
+      positions,
+      filteredDepth,
+      measuredMask,
+      depthConfidence,
+      freeSpaceMask,
+      filteredCount: reference.filteredCount + recoveredMeasuredPixels,
+    },
+    recoveredMeasuredPixels,
+  };
+}
+
+// When room-wide fusion is unsafe, retain a continuous registered surface made
+// only from captured RGB-D measurements. A single reference topology prevents
+// overlapping sheets; discontinuities remain open instead of becoming walls.
+function measuredDepthFallback(frames, options, failureReason, details = {}) {
+  if (!frames.length) return null;
+  const composite = measuredCompositeFrame(frames);
+  const frame = composite.frame;
   const vertexMap = new Int32Array(frame.columns * frame.rows).fill(-1);
   const positions = [];
   const colors = [];
@@ -1990,11 +2125,14 @@ function measuredDepthFallback(frames, options, failureReason, details = {}) {
   };
   return {
     mesh,
-    observations: buildAcceptedObservations([frame]),
+    observations: buildAcceptedObservations(frames),
     diagnostics: {
       ...details,
       reason: `A continuous measured depth surface was used because ${failureReason}`,
-      fallback: "strongest-measured-view",
+      fallback: composite.recoveredMeasuredPixels
+        ? "registered-measured-composite"
+        : "strongest-measured-view",
+      recoveredMeasuredPixels: composite.recoveredMeasuredPixels,
       keyframes: frames.length,
       triangles: mesh.triangleCount,
       surfaceArea: surface.surfaceArea,
@@ -2024,7 +2162,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     options.maxKeyframes || 40,
   );
   const stages = {
-    algorithmVersion: 10,
+    algorithmVersion: 11,
     supportMode: "translated-camera-viewpoints",
     depthSampling: "continuous-inverse-depth",
     coordinateMode: "view-aligned-v1",
@@ -2056,6 +2194,19 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     return failure(
       "This older diagnostic capture used ambiguous depth-buffer coordinates. Record a fresh scan with the repaired view-aligned geometry format.",
     );
+  if (
+    Number.isFinite(options.headingCoverage) &&
+    options.headingCoverage < 50
+  )
+    return measuredDepthFallback(
+      usable.length ? usable : prepared,
+      options,
+      "a one-wall capture is safer as one registered measured surface than as a room-wide volume.",
+      { ...stages, oneWallMode: true, overlappingKeyframes: usable.length },
+    ) || failure("No continuous measured wall surface could be recovered.", {
+      keyframes: usable.length,
+      oneWallMode: true,
+    });
   if (usable.length < 2)
     return measuredDepthFallback(
       prepared,
@@ -2104,6 +2255,24 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   stages.wallStructure = wallStructure;
   stages.rectangularRoomModelCompatible =
     !meshOutsideRectangularRoomModel(wallStructure);
+  if (!stages.rectangularRoomModelCompatible)
+    return measuredDepthFallback(
+      usable,
+      options,
+      "the multi-view result contained curled or contradictory wall layers.",
+      {
+        ...stages,
+        confirmedVoxels,
+        voxelSize: volume.voxelSize,
+        fusedSurfaceArea: surface.surfaceArea,
+        fusedTriangles: surface.indices.length / 3,
+        rejectedUnsafeFusion: true,
+      },
+    ) || failure("The multi-view wall geometry was structurally inconsistent.", {
+      ...stages,
+      confirmedVoxels,
+      rejectedUnsafeFusion: true,
+    });
   const surfaceFailureReason = highlyFragmented
     ? "multi-view fusion only produced disconnected fragments."
     : "multi-view fusion did not produce enough reliable surface area.";

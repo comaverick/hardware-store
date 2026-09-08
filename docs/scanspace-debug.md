@@ -25,7 +25,7 @@ Check `coordinateMode`, `inputDepthSamples`, `filteredDepthSamples`,
 `roundTrip`, `alignment.pairs`, `alignment.rejectedFrameIds`, `cellRejections`,
 `wallStructure`, `rectangularRoomModelCompatible`, and the triangle counts
 before and after cleanup. Pair errors are in metres. Automatic pose mutation is
-disabled; incompatible frames are still rejected. `algorithmVersion: 10`
+disabled; incompatible frames are still rejected. `algorithmVersion: 11`
 uses continuous inverse-depth sampling on supported surfaces. `frameSamples`
 reports input, retained measured, and repaired sample counts for every prepared
 frame. This distinguishes sensor gaps from filter and frame-selection losses.
@@ -33,6 +33,12 @@ frame. This distinguishes sensor gaps from filter and frame-selection losses.
 Algorithm 10 requires at least 4 cm of camera translation before two samples
 can count as independent support for the same fused voxel. Turning in place can
 capture another direction, but it cannot reinforce a bowed depth surface.
+
+Algorithm 11 uses a registered measured composite for captures below 50%
+heading coverage. Missing reference pixels can be recovered only from actual
+accepted depth samples in other frames. It never creates a plane or wall.
+The same measured fallback replaces a room-wide mesh when wall diagnostics
+detect curled or contradictory layers.
 
 Capture requires a genuinely new camera viewpoint for every retained keyframe.
 Waiting at one pose cannot add duplicate support to a warped depth observation.

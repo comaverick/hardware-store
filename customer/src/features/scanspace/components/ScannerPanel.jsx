@@ -253,7 +253,11 @@ export default function ScannerPanel({
       fusionWorker.current.postMessage(
         {
           keyframes: raw.keyframes,
-          options: { floorY: raw.floorY, observer: raw.observer },
+          options: {
+            floorY: raw.floorY,
+            observer: raw.observer,
+            headingCoverage: raw.stats.coverage || 0,
+          },
         },
         transfer,
       );

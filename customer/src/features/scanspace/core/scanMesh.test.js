@@ -376,9 +376,15 @@ test("a wall viewed obliquely from different camera poses remains planar", () =>
   expect(Math.sqrt(squaredError / checked)).toBeLessThan(0.015);
 });
 
-test("does not fabricate a mesh from an unconfirmed single camera view", () => {
+test("returns the real measured surface when only one camera view is usable", () => {
   const keyframe = planeKeyframe(0, false);
-  expect(fuseRgbdKeyframes([keyframe], { floorY: 0 }).mesh).toBeNull();
+  const result = fuseRgbdKeyframes([keyframe], {
+    floorY: 0,
+    headingCoverage: 25,
+  });
+  expect(result.mesh?.kind).toBe("measured-depth-surface");
+  expect(result.mesh?.triangleCount).toBeGreaterThan(100);
+  expect(result.diagnostics.fallback).toBe("strongest-measured-view");
 });
 
 test("rejects a drifted pose without losing the consistent wall", () => {
@@ -558,6 +564,21 @@ test("rejects a 14cm pose error that passes the spatial-neighbor overlap check",
   expect(result.mesh.bounds.max.z).toBeLessThan(-1.95);
 });
 
+test("rejects a frame when only one quarter of its wall depth agrees", () => {
+  const mostlyShifted = planeKeyframe(0.04);
+  for (let y = 0; y < mostlyShifted.rows; y++)
+    for (let x = 4; x < mostlyShifted.columns; x++)
+      mostlyShifted.depths[y * mostlyShifted.columns + x] = 2.14;
+  const result = fuseRgbdKeyframes([
+    planeKeyframe(0),
+    mostlyShifted,
+    planeKeyframe(0.08),
+    planeKeyframe(-0.08),
+  ]);
+  expect(result.mesh?.kind).toBe("projective-tsdf-surface-net");
+  expect(result.diagnostics.alignment.rejectedFrameIds).toContain(1);
+});
+
 test("does not mutate accepted poses without explicit validated refinement", () => {
   const drifted = planeKeyframe(0.04);
   const angle = 0.025;
@@ -627,6 +648,20 @@ test("a repaired depth dropout has a matching 3D vertex in the measured-view fal
   // produce a position as well; retaining the raw NaN left a hole in fallback.
   expect(result.mesh.triangleCount).toBe(450);
   expect(Array.from(result.mesh.positions).every(Number.isFinite)).toBe(true);
+});
+
+test("one-wall mode recovers only registered depth measured by other views", () => {
+  const reference = planeKeyframe(0, true, true);
+  const result = fuseRgbdKeyframes([
+    reference,
+    planeKeyframe(0.08, false),
+    planeKeyframe(-0.08, false),
+  ], { floorY: 0, headingCoverage: 25 });
+  expect(result.mesh?.kind).toBe("measured-depth-surface");
+  expect(result.diagnostics.oneWallMode).toBe(true);
+  expect(result.diagnostics.fallback).toBe("registered-measured-composite");
+  expect(result.diagnostics.recoveredMeasuredPixels).toBeGreaterThan(0);
+  expect(result.mesh.triangleCount).toBeGreaterThan(430);
 });
 
 test("uses one measured view instead of dots when captured poses cannot be aligned", () => {

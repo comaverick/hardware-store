@@ -245,7 +245,7 @@ export default function PartialScanScene({ scan }) {
       <span className="ss-partial-legend">
         <i />{" "}
         {mesh?.kind === "measured-depth-surface"
-          ? "Single-view measured RGB-D surface"
+          ? "Registered measured RGB-D surface"
           : mesh
             ? "Reconstructed RGB-D surface"
             : "Captured RGB-D points"}
