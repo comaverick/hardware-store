@@ -97,6 +97,8 @@ export function createRgbdKeyframe(points, options = {}) {
       cameraCoordinate("y", 13),
       cameraCoordinate("z", 14),
     ]),
+    linearSpeed: Number(options.linearSpeed) || 0,
+    angularSpeed: Number(options.angularSpeed) || 0,
     timestamp: options.timestamp || 0,
     tracking: true,
     validCount,
@@ -1721,6 +1723,7 @@ export function measuredSurfaceQualityDiagnostics(mesh, gridSize = 20) {
     dominantOrientationRatio,
     dominantLayerRatio,
     wallOffset,
+    bounds,
     width,
     height,
     gridCoverage: occupiedCells / occupied.length,
@@ -1988,32 +1991,122 @@ function stabilizeDominantWalls(mesh, voxelSize, maxPlanes = 3) {
   return { ...mesh, positions, stabilizedPlaneCount: planes.length };
 }
 
-function smoothPositions(mesh, passes = 2) {
+// Straighten only vertices already measured close to a strongly supported wall
+// sector. The fitted plane never creates vertices, bridges openings, or pulls
+// foreground objects that sit outside the wall layer tolerance.
+export function stabilizeMeasuredWallSectors(mesh, walls = [], voxelSize = 0.03) {
+  const supported = walls.filter(
+    (wall) =>
+      wall?.dominantNormal &&
+      Number.isFinite(wall.wallOffset) &&
+      wall.bounds &&
+      wall.dominantOrientationRatio >= 0.45 &&
+      wall.dominantLayerRatio >= 0.5,
+  );
+  if (!supported.length)
+    return { ...mesh, stabilizedPlaneCount: 0, stabilizedVertexCount: 0 };
+  const positions = new Float32Array(mesh.positions);
+  const normals = computeNormals(mesh);
+  const distanceLimit = Math.max(0.035, voxelSize * 1.7);
+  const extentMargin = Math.max(0.025, voxelSize * 1.2);
+  let stabilizedVertexCount = 0;
+  for (let vertex = 0; vertex < positions.length / 3; vertex++) {
+    const offset = vertex * 3;
+    if (Math.abs(normals[offset + 1]) > 0.42) continue;
+    let best = null;
+    supported.forEach((wall) => {
+      const normal = wall.dominantNormal;
+      const alignment = Math.abs(
+        normals[offset] * normal.x + normals[offset + 2] * normal.z,
+      );
+      if (alignment < 0.82) return;
+      const distance =
+        positions[offset] * normal.x +
+        positions[offset + 2] * normal.z -
+        wall.wallOffset;
+      if (Math.abs(distance) > distanceLimit) return;
+      const tangentX = -normal.z;
+      const tangentZ = normal.x;
+      const tangent =
+        positions[offset] * tangentX + positions[offset + 2] * tangentZ;
+      if (
+        tangent < wall.bounds.minX - extentMargin ||
+        tangent > wall.bounds.maxX + extentMargin ||
+        positions[offset + 1] < wall.bounds.minY - extentMargin ||
+        positions[offset + 1] > wall.bounds.maxY + extentMargin
+      )
+        return;
+      if (!best || Math.abs(distance) < Math.abs(best.distance))
+        best = { normal, distance };
+    });
+    if (!best) continue;
+    positions[offset] -= best.normal.x * best.distance * 0.88;
+    positions[offset + 2] -= best.normal.z * best.distance * 0.88;
+    stabilizedVertexCount++;
+  }
+  return {
+    ...mesh,
+    positions,
+    stabilizedPlaneCount: supported.length,
+    stabilizedVertexCount,
+  };
+}
+
+export function smoothPositions(mesh, passes = 2, voxelSize = 0.03) {
   const count = mesh.positions.length / 3;
   const neighbors = Array.from({ length: count }, () => new Set());
+  const edgeUse = new Map();
   for (let index = 0; index < mesh.indices.length; index += 3) {
     const triangle = [mesh.indices[index], mesh.indices[index + 1], mesh.indices[index + 2]];
     triangle.forEach((vertex, corner) => {
-      neighbors[vertex].add(triangle[(corner + 1) % 3]);
+      const next = triangle[(corner + 1) % 3];
+      neighbors[vertex].add(next);
       neighbors[vertex].add(triangle[(corner + 2) % 3]);
+      const key = vertex < next ? `${vertex},${next}` : `${next},${vertex}`;
+      edgeUse.set(key, (edgeUse.get(key) || 0) + 1);
     });
   }
+  const boundary = new Uint8Array(count);
+  edgeUse.forEach((uses, key) => {
+    if (uses !== 1) return;
+    key.split(",").forEach((vertex) => {
+      boundary[Number(vertex)] = 1;
+    });
+  });
+  const referenceNormals = computeNormals(mesh);
+  const maximumEdge = Math.max(0.06, voxelSize * 3.4);
   let positions = new Float32Array(mesh.positions);
   const move = (source, factor) => {
     const target = new Float32Array(source);
     neighbors.forEach((adjacent, vertex) => {
-      if (adjacent.size < 5) return;
+      if (adjacent.size < 5 || boundary[vertex]) return;
+      const accepted = [];
+      adjacent.forEach((next) => {
+        if (boundary[next]) return;
+        const dx = source[next * 3] - source[vertex * 3];
+        const dy = source[next * 3 + 1] - source[vertex * 3 + 1];
+        const dz = source[next * 3 + 2] - source[vertex * 3 + 2];
+        if (Math.hypot(dx, dy, dz) > maximumEdge) return;
+        const alignment =
+          referenceNormals[vertex * 3] * referenceNormals[next * 3] +
+          referenceNormals[vertex * 3 + 1] * referenceNormals[next * 3 + 1] +
+          referenceNormals[vertex * 3 + 2] * referenceNormals[next * 3 + 2];
+        if (alignment >= 0.86) accepted.push(next);
+      });
+      if (accepted.length < 3) return;
       for (let axis = 0; axis < 3; axis++) {
         let average = 0;
-        adjacent.forEach((next) => { average += source[next * 3 + axis] / adjacent.size; });
+        accepted.forEach((next) => {
+          average += source[next * 3 + axis] / accepted.length;
+        });
         target[vertex * 3 + axis] += (average - source[vertex * 3 + axis]) * factor;
       }
     });
     return target;
   };
   for (let pass = 0; pass < passes; pass++) {
-    positions = move(positions, 0.34);
-    positions = move(positions, -0.35);
+    positions = move(positions, 0.24);
+    positions = move(positions, -0.245);
   }
   return { ...mesh, positions };
 }
@@ -2048,9 +2141,51 @@ function imageLuminance(frame) {
   return count ? sum / count : 128;
 }
 
+export function imageSharpness(frame) {
+  if (
+    !frame?.colorImage?.length ||
+    frame.colorWidth < 3 ||
+    frame.colorHeight < 3
+  )
+    return 0;
+  const channels = frame.colorChannels || 4;
+  const luminanceAt = (x, y) => {
+    const offset = (y * frame.colorWidth + x) * channels;
+    return (
+      frame.colorImage[offset] * 0.2126 +
+      frame.colorImage[offset + 1] * 0.7152 +
+      frame.colorImage[offset + 2] * 0.0722
+    );
+  };
+  const step = Math.max(1, Math.floor(Math.min(frame.colorWidth, frame.colorHeight) / 120));
+  let detail = 0;
+  let clipped = 0;
+  let samples = 0;
+  for (let y = 1; y < frame.colorHeight - 1; y += step)
+    for (let x = 1; x < frame.colorWidth - 1; x += step) {
+      const center = luminanceAt(x, y);
+      detail +=
+        Math.abs(luminanceAt(x + 1, y) - center) +
+        Math.abs(luminanceAt(x, y + 1) - center);
+      if (center < 5 || center > 250) clipped++;
+      samples++;
+    }
+  if (!samples) return 0;
+  const clippingPenalty = 1 - Math.min(0.75, clipped / samples);
+  return (detail / samples) * clippingPenalty;
+}
+
 function buildAtlas(frames) {
   const images = frames.filter((frame) => frame.colorImage?.length && frame.colorWidth && frame.colorHeight);
   if (!images.length) return null;
+  images.forEach((frame) => {
+    frame.textureSharpness = imageSharpness(frame);
+  });
+  const rankedSharpness = images
+    .map((frame) => frame.textureSharpness)
+    .sort((left, right) => left - right);
+  const referenceSharpness =
+    rankedSharpness[Math.floor(rankedSharpness.length / 2)] || 1;
   // Normalize differently sized/oriented keyframe copies into equal atlas
   // tiles. UVs remain normalized per frame, so this resampling preserves
   // correspondence while keeping atlas addressing uniform.
@@ -2104,6 +2239,7 @@ function buildAtlas(frames) {
     padding,
     columns,
     frames: images,
+    referenceSharpness,
   };
 }
 
@@ -2226,10 +2362,26 @@ function texturedMesh(mesh, frames) {
       const dz = frame.transformMatrix[14] - center.z;
       const distance = Math.hypot(dx, dy, dz) || 1;
       const facing = Math.abs((normal.x * dx + normal.y * dy + normal.z * dz) / distance);
+      const sharpness = clamp(
+        frame.textureSharpness / atlas.referenceSharpness,
+        0.35,
+        1.65,
+      );
+      const motionPenalty = clamp(
+        (frame.linearSpeed || 0) / 0.75 +
+          (frame.angularSpeed || 0) / 0.8,
+        0,
+        1.5,
+      );
       candidates.push({
         frame,
         projections: colorProjections,
-        score: facing * 2 + 1 / distance,
+        score:
+          facing * 2 +
+          1 / distance +
+          sharpness * 0.65 -
+          closestAgreement * 5 -
+          motionPenalty * 0.4,
       });
     });
     candidates.sort((left, right) => right.score - left.score);
@@ -2347,7 +2499,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     options.maxKeyframes || 40,
   );
   const stages = {
-    algorithmVersion: 19,
+    algorithmVersion: 20,
     completionMode: options.completionMode === "surface" ? "surface" : "room",
     reconstructionProfile: options.reconstructionProfile || "quality",
     supportMode: "translated-camera-viewpoints",
@@ -2548,22 +2700,24 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
         issues: measuredSurfaceWarnings,
       }
     : null;
-  const shouldStabilize =
-    stages.rectangularRoomModelCompatible &&
-    (!surfaceCompletion || measuredSurfaceQuality?.assessed);
-  surface = shouldStabilize
-    ? stabilizeDominantWalls(
+  if (surfaceCompletion && measuredSurfaceQuality?.assessed)
+    surface = stabilizeMeasuredWallSectors(
+      surface,
+      measuredSurfaceQuality.walls,
+      volumeVoxelSize,
+    );
+  else if (stages.rectangularRoomModelCompatible)
+    surface = stabilizeDominantWalls(
         surface,
         volumeVoxelSize,
-        options.completionMode === "surface"
-          ? Math.max(1, measuredSurfaceQuality?.wallCount || 1)
-          : 3,
-      )
-    : { ...surface, stabilizedPlaneCount: 0 };
+        3,
+      );
+  else surface = { ...surface, stabilizedPlaneCount: 0 };
   surface = smoothPositions(
     surface,
     options.smoothingPasses ??
       (options.completionMode === "surface" ? 2 : 3),
+    volumeVoxelSize,
   );
   report?.("texturing", 88);
   const textured = texturedMesh(surface, usable);
@@ -2594,6 +2748,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       triangles: mesh.triangleCount,
       surfaceArea: surface.surfaceArea,
       stabilizedPlanes: surface.stabilizedPlaneCount || 0,
+      stabilizedVertices: surface.stabilizedVertexCount || 0,
       components: surface.componentCount || 1,
       keptComponents: surface.keptComponentCount || 1,
       dominantAreaRatio: surface.dominantAreaRatio ?? 1,

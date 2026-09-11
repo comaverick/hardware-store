@@ -35,6 +35,7 @@ export default function ScanMesh({ mesh, low = false }) {
       texture.generateMipmaps = true;
       texture.minFilter = THREE.LinearMipmapLinearFilter;
       texture.magFilter = THREE.LinearFilter;
+      texture.anisotropy = 8;
       texture.needsUpdate = true;
     }
     return { geometry: value, texture };

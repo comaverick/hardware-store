@@ -42,3 +42,18 @@ test("stationary unsaved frames cannot turn the preview green", () => {
   expect(scanner.keyframes).toHaveLength(2);
   expect(scanner.stats.errors).toEqual([]);
 });
+
+test("higher-resolution texture snapshots stay bounded without dropping depth frames", () => {
+  const scanner = new RoomScanner({ onUpdate: () => {} });
+  scanner.keyframes = Array.from({ length: 25 }, (_, index) => ({
+    frameId: index,
+    depths: new Float32Array([2]),
+    colorImage: new Uint8Array([index, index, index, 255]),
+  }));
+  scanner.compactTextureKeyframes();
+  expect(scanner.keyframes).toHaveLength(25);
+  expect(scanner.keyframes.every((frame) => frame.depths[0] === 2)).toBe(true);
+  expect(scanner.stats.textureKeyframes).toBe(18);
+  expect(scanner.keyframes[0].colorImage).not.toBeNull();
+  expect(scanner.keyframes[24].colorImage).not.toBeNull();
+});

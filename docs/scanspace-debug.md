@@ -25,7 +25,7 @@ Check `coordinateMode`, `inputDepthSamples`, `filteredDepthSamples`,
 `roundTrip`, `alignment.pairs`, `alignment.rejectedFrameIds`, `cellRejections`,
 `wallStructure`, `rectangularRoomModelCompatible`, and the triangle counts
 before and after cleanup. Pair errors are in metres. Automatic pose mutation is
-disabled; incompatible frames are still rejected. `algorithmVersion: 19`
+disabled; incompatible frames are still rejected. `algorithmVersion: 20`
 uses continuous inverse-depth sampling on supported surfaces. `frameSamples`
 reports input, retained measured, and repaired sample counts for every prepared
 frame. This distinguishes sensor gaps from filter and frame-selection losses.
@@ -34,7 +34,7 @@ Algorithm 10 requires at least 4 cm of camera translation before two samples
 can count as independent support for the same fused voxel. Turning in place can
 capture another direction, but it cannot reinforce a bowed depth surface.
 
-Algorithm 19 has no single-view or registered-composite fallback. Room captures below
+Algorithm 20 has no single-view or registered-composite fallback. Room captures below
 75% heading coverage, captures without overlapping translated viewpoints, and
 full-room surfaces with fragmented, curled, or contradictory wall layers return
 no mesh. The scanner remains open and reports what must be rescanned. Only a
@@ -67,6 +67,14 @@ grid and at most 28 evenly selected keyframes. Diagnostics record
 `reconstructionProfile: "mobile-safe-retry"` and `workerRecovery`. Automatic
 layer repair also releases its first dense volume before rebuilding. These
 memory safeguards reduce resolution only; they never create replacement walls.
+
+Algorithm 20 straightens existing vertices only inside robustly measured wall
+sectors. It does not add vertices or bridge missing regions. Boundary-aware,
+normal-aware smoothing avoids rounding corners and depth discontinuities. Color
+snapshots use a 512-pixel long edge and are bounded to an evenly distributed
+set; texture selection favors sharp, low-motion, depth-consistent camera views.
+Diagnostics report `stabilizedVertices` and the scanner reports
+`textureKeyframes`.
 
 Capture requires a genuinely new camera viewpoint for every retained keyframe.
 Waiting at one pose cannot add duplicate support to a warped depth observation.

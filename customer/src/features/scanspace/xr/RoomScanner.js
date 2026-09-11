@@ -47,6 +47,7 @@ export class RoomScanner {
       currentDirection: 0,
       fusionKeyframes: 0,
       fusionKeyframeCompactions: 0,
+      textureKeyframes: 0,
       acceptedDepthFrames: 0,
       rejectedDepthFrames: 0,
       frameQuality: "waiting",
@@ -289,6 +290,7 @@ export class RoomScanner {
                   colorAt,
                   keyframePose,
                   depth,
+                  motion,
                 );
               // Feedback counts only views actually retained for fusion, with
               // the full image grid as denominator (including missing depth).
@@ -424,6 +426,7 @@ export class RoomScanner {
     colorAt,
     pose = this.keyframePose(view),
     depth = null,
+    motion = {},
   ) {
     const keyframe = createRgbdKeyframe(points, {
       columns,
@@ -441,6 +444,8 @@ export class RoomScanner {
       camera: pose.position,
       timestamp,
       colorImage: colorAt?.snapshot?.(),
+      linearSpeed: motion.linearSpeed,
+      angularSpeed: motion.angularSpeed,
     });
     if (!keyframe) return;
     const capturedPositions = (this.keyframePositions ||= []);
@@ -469,6 +474,7 @@ export class RoomScanner {
       this.stats.fusionKeyframeCompactions++;
     }
     this.keyframes.push(keyframe);
+    this.compactTextureKeyframes();
     if (compacted) {
       // Previously the preview kept observations whose keyframes had been
       // discarded, falsely displaying coverage that fusion could never use.
@@ -477,6 +483,29 @@ export class RoomScanner {
     } else this.addSavedPreview(keyframe, this.keyframes.length - 1);
     this.lastMeshPose = pose;
     this.stats.fusionKeyframes = this.keyframes.length;
+  }
+  compactTextureKeyframes(maximum = 24, retained = 18) {
+    const textured = this.keyframes
+      .map((frame, index) => (frame.colorImage?.length ? index : -1))
+      .filter((index) => index >= 0);
+    if (textured.length > maximum) {
+      const keep = new Set(
+        Array.from({ length: retained }, (_, index) =>
+          textured[
+            Math.round(
+              (index / Math.max(1, retained - 1)) * (textured.length - 1),
+            )
+          ],
+        ),
+      );
+      textured.forEach((index) => {
+        if (!keep.has(index)) this.keyframes[index].colorImage = null;
+      });
+    }
+    this.stats.textureKeyframes = this.keyframes.reduce(
+      (count, frame) => count + (frame.colorImage?.length ? 1 : 0),
+      0,
+    );
   }
   addSavedPreview(frame, frameId) {
     const filtered = filterDepth(frame);

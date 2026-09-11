@@ -5,6 +5,7 @@ import {
   fillSmallMeshHoles,
   fuseRgbdKeyframes,
   gridIndex,
+  imageSharpness,
   sampleProjectiveDepth,
   meshFragmentationIsUnacceptable,
   meshOutsideRectangularRoomModel,
@@ -12,6 +13,7 @@ import {
   measuredSurfaceQualityDiagnostics,
   measuredSurfaceGapWarning,
   measuredWallSectorQualityDiagnostics,
+  stabilizeMeasuredWallSectors,
   wallConsensusKeyframes,
   projectWorld,
 } from "./fusion";
@@ -302,6 +304,55 @@ test("surface quality detects competing parallel wall layers", () => {
   expect(duplicated.assessed).toBe(true);
   expect(duplicated.dominantLayerRatio).toBeLessThan(0.58);
   expect(duplicated.duplicateLayerLikely).toBe(true);
+});
+
+test("straightens only existing vertices on a supported measured wall", () => {
+  const mesh = {
+    positions: new Float32Array([
+      -1, 0, -1.97, 0, 0, -2.03, 1, 0, -1.97,
+      -1, 1, -1.97, 0, 1, -2.03, 1, 1, -1.97,
+      -1, 2, -1.97, 0, 2, -2.03, 1, 2, -1.97,
+    ]),
+    indices: new Uint32Array([
+      0, 1, 4, 0, 4, 3, 1, 2, 5, 1, 5, 4,
+      3, 4, 7, 3, 7, 6, 4, 5, 8, 4, 8, 7,
+    ]),
+  };
+  const originalIndices = new Uint32Array(mesh.indices);
+  const result = stabilizeMeasuredWallSectors(
+    mesh,
+    [{
+      dominantNormal: { x: 0, z: 1 },
+      wallOffset: -2,
+      dominantOrientationRatio: 0.95,
+      dominantLayerRatio: 0.95,
+      bounds: { minX: -1, maxX: 1, minY: 0, maxY: 2 },
+    }],
+    0.025,
+  );
+  expect(result.indices).toEqual(originalIndices);
+  expect(result.positions).toHaveLength(mesh.positions.length);
+  expect(result.stabilizedVertexCount).toBeGreaterThan(0);
+  expect(Math.abs(result.positions[2] + 2)).toBeLessThan(
+    Math.abs(mesh.positions[2] + 2),
+  );
+});
+
+test("texture sharpness favors detailed camera frames over flat or clipped ones", () => {
+  const frame = (pixels) => ({
+    colorImage: new Uint8Array(pixels),
+    colorWidth: 4,
+    colorHeight: 4,
+    colorChannels: 4,
+  });
+  const flat = frame(Array(16).fill([120, 120, 120, 255]).flat());
+  const checker = frame(
+    Array.from({ length: 16 }, (_, index) => {
+      const value = (index + Math.floor(index / 4)) % 2 ? 40 : 210;
+      return [value, value, value, 255];
+    }).flat(),
+  );
+  expect(imageSharpness(checker)).toBeGreaterThan(imageSharpness(flat));
 });
 
 test("surface quality keeps a localized parallel furniture front", () => {

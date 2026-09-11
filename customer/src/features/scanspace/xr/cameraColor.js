@@ -62,12 +62,23 @@ export function createCameraColorReader(gl) {
       const sourceWidth = Number(camera.width) || 1;
       const sourceHeight = Number(camera.height) || 1;
       const landscape = sourceWidth >= sourceHeight;
+      // Preserve enough camera detail for wall labels, trim, and straight
+      // edges. Fusion still bounds the number of retained keyframes, and the
+      // worker has a lower-memory retry profile for constrained phones.
+      const textureLongEdge = 512;
+      const textureShortEdge = 256;
       const nextWidth = landscape
-        ? 320
-        : Math.max(160, Math.round((320 * sourceWidth) / sourceHeight));
+        ? textureLongEdge
+        : Math.max(
+            textureShortEdge,
+            Math.round((textureLongEdge * sourceWidth) / sourceHeight),
+          );
       const nextHeight = landscape
-        ? Math.max(160, Math.round((320 * sourceHeight) / sourceWidth))
-        : 320;
+        ? Math.max(
+            textureShortEdge,
+            Math.round((textureLongEdge * sourceHeight) / sourceWidth),
+          )
+        : textureLongEdge;
       if (width !== nextWidth || height !== nextHeight) {
         width = nextWidth;
         height = nextHeight;
