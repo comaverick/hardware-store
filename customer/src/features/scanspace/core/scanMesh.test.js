@@ -845,6 +845,38 @@ test("partial-surface consistency removes a smaller pose drift before fusion", (
   ).toContain(1);
 });
 
+test("suppresses a minority reflective strip before surface fusion", () => {
+  const shifted = [-0.12, -0.08].map((cameraX) => {
+    const frame = planeKeyframe(cameraX);
+    for (let y = 2; y < frame.rows - 2; y++)
+      for (let x = 7; x <= 9; x++)
+        frame.depths[y * frame.columns + x] = 1.82;
+    return frame;
+  });
+  const result = fuseRgbdKeyframes(
+    [
+      ...shifted,
+      ...[-0.04, 0, 0.04, 0.08, 0.12, 0.16].map((cameraX) =>
+        planeKeyframe(cameraX),
+      ),
+    ],
+    { completionMode: "surface" },
+  );
+  expect(result.mesh?.kind).toBe("projective-tsdf-surface-net");
+  expect(
+    result.diagnostics.alignment.localLayerConsensus.rejectedSamples,
+  ).toBeGreaterThan(0);
+  let protrudingVertices = 0;
+  for (let index = 0; index < result.mesh.positions.length; index += 3)
+    if (
+      result.mesh.positions[index + 2] > -1.9 &&
+      Math.abs(result.mesh.positions[index]) < 0.5 &&
+      Math.abs(result.mesh.positions[index + 1]) < 1.6
+    )
+      protrudingVertices++;
+  expect(protrudingVertices).toBe(0);
+});
+
 test("rejects a frame when only one quarter of its wall depth agrees", () => {
   const mostlyShifted = planeKeyframe(0.04);
   for (let y = 0; y < mostlyShifted.rows; y++)

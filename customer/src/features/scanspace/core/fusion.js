@@ -601,6 +601,119 @@ function validateFrameOverlap(frames, diagnostics = {}, limits = {}) {
   return strongest.sort((left, right) => left - right).map((index) => frames[index]);
 }
 
+// Remove only a clearly outvoted front depth layer before TSDF fusion. A
+// sample is kept when another independent view supports it, when too few views
+// cover it, or when other views merely contain a foreground occluder. This
+// preserves ordinary one/two-view coverage and back walls behind furniture,
+// while suppressing isolated reflective strips that several views prove were
+// empty space in front of the dominant wall.
+export function suppressMinorityFrontLayers(frames) {
+  const diagnostics = {
+    examinedSamples: 0,
+    rejectedSamples: 0,
+    unsupportedRejectedSamples: 0,
+    weakMinorityRejectedSamples: 0,
+    frameRejections: [],
+  };
+  if (frames.length < 4) return { frames, diagnostics };
+  const rejectedByFrame = frames.map(() => []);
+  const viewDirections = frames.map((frame) => {
+    const direction = [
+      frame.transformMatrix[8],
+      frame.transformMatrix[9],
+      frame.transformMatrix[10],
+    ];
+    const length = Math.hypot(...direction) || 1;
+    return direction.map((value) => value / length);
+  });
+  frames.forEach((frame, frameIndex) => {
+    for (let index = 0; index < frame.filteredDepth.length; index++) {
+      if (!frame.filteredDepth[index] || !frame.measuredMask[index]) continue;
+      const offset = index * 3;
+      const point = [
+        frame.positions[offset],
+        frame.positions[offset + 1],
+        frame.positions[offset + 2],
+      ];
+      if (!point.every(Number.isFinite)) continue;
+      let agreeing = 0;
+      let freeSpaceContradictions = 0;
+      frames.forEach((other, otherIndex) => {
+        if (otherIndex === frameIndex) return;
+        const directionAgreement =
+          viewDirections[frameIndex][0] * viewDirections[otherIndex][0] +
+          viewDirections[frameIndex][1] * viewDirections[otherIndex][1] +
+          viewDirections[frameIndex][2] * viewDirections[otherIndex][2];
+        // Different wall directions are not votes about the same local depth
+        // layer, even when their frustums happen to overlap at a room corner.
+        if (directionAgreement < Math.cos((35 * Math.PI) / 180)) return;
+        if (
+          Math.hypot(
+            frame.camera[0] - other.camera[0],
+            frame.camera[1] - other.camera[1],
+            frame.camera[2] - other.camera[2],
+          ) < MIN_INDEPENDENT_VIEW_METERS
+        )
+          return;
+        const projected = projectWorld(other, ...point);
+        if (!projected) return;
+        const measured = sampleProjectiveDepth(
+          other,
+          projected.u,
+          projected.v,
+        );
+        if (!measured) return;
+        const difference = measured - projected.depth;
+        const agreementLimit = Math.max(0.05, measured * 0.024);
+        const separatedLayer = Math.max(0.075, measured * 0.035);
+        if (Math.abs(difference) <= agreementLimit) agreeing++;
+        else if (difference >= separatedLayer) freeSpaceContradictions++;
+      });
+      diagnostics.examinedSamples++;
+      // Three independent views and no supporting view are strong evidence of
+      // an isolated phantom. One supporting view is overruled only by at least
+      // five contradictory views, which avoids deleting legitimate two-view
+      // wall edges and ordinary foreground objects.
+      const unsupportedMinority =
+        agreeing === 0 && freeSpaceContradictions >= 3;
+      const weakMinority =
+        agreeing === 1 && freeSpaceContradictions >= 5;
+      if (!unsupportedMinority && !weakMinority) continue;
+      rejectedByFrame[frameIndex].push(index);
+      diagnostics.rejectedSamples++;
+      if (unsupportedMinority) diagnostics.unsupportedRejectedSamples++;
+      else diagnostics.weakMinorityRejectedSamples++;
+    }
+  });
+  const filteredFrames = frames.map((frame, frameIndex) => {
+    const rejected = rejectedByFrame[frameIndex];
+    diagnostics.frameRejections.push({
+      frameId: frame.frameId,
+      rejectedSamples: rejected.length,
+    });
+    if (!rejected.length) return frame;
+    const filteredDepth = new Float32Array(frame.filteredDepth);
+    const measuredMask = new Uint8Array(frame.measuredMask);
+    const freeSpaceMask = new Uint8Array(frame.freeSpaceMask);
+    const depthConfidence = new Uint8Array(frame.depthConfidence);
+    rejected.forEach((index) => {
+      filteredDepth[index] = 0;
+      measuredMask[index] = 0;
+      freeSpaceMask[index] = 0;
+      depthConfidence[index] = 0;
+    });
+    return {
+      ...frame,
+      filteredDepth,
+      measuredMask,
+      freeSpaceMask,
+      depthConfidence,
+      filteredCount: Math.max(0, frame.filteredCount - rejected.length),
+    };
+  });
+  return { frames: filteredFrames, diagnostics };
+}
+
 function percentile(values, fraction) {
   return values[Math.round((values.length - 1) * fraction)];
 }
@@ -2881,12 +2994,19 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     if (enoughConsistentFrames) overlapping = consistent;
   }
   alignment.poseRefinement = "disabled-until-independently-validated";
-  const usable = selectEvenly(
+  const selected = selectEvenly(
     overlapping,
     options.maxKeyframes || 40,
   );
+  const localLayerConsensus =
+    options.completionMode === "surface"
+      ? suppressMinorityFrontLayers(selected)
+      : { frames: selected, diagnostics: null };
+  const usable = localLayerConsensus.frames;
+  if (localLayerConsensus.diagnostics)
+    alignment.localLayerConsensus = localLayerConsensus.diagnostics;
   const stages = {
-    algorithmVersion: 22,
+    algorithmVersion: 23,
     completionMode: options.completionMode === "surface" ? "surface" : "room",
     reconstructionProfile: options.reconstructionProfile || "quality",
     supportMode: "translated-camera-viewpoints",
@@ -2897,6 +3017,10 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     preparedKeyframes: prepared.length,
     inputDepthSamples: keyframes.reduce((sum, frame) => sum + (frame?.validCount || 0), 0),
     filteredDepthSamples: prepared.reduce((sum, frame) => sum + frame.filteredCount, 0),
+    layerFilteredDepthSamples: usable.reduce(
+      (sum, frame) => sum + frame.filteredCount,
+      0,
+    ),
     frameSamples: prepared.map((frame) => ({
       frameId: frame.frameId,
       input: frame.validCount,
