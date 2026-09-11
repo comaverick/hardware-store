@@ -14,6 +14,7 @@ import {
   measuredSurfaceQualityDiagnostics,
   measuredSurfaceGapWarning,
   measuredWallSectorQualityDiagnostics,
+  stabilizeMeasuredHorizontalSurfaces,
   stabilizeMeasuredWallSectors,
   wallConsensusKeyframes,
   projectWorld,
@@ -339,6 +340,41 @@ test("straightens only existing vertices on a supported measured wall", () => {
   );
 });
 
+test("flattens measured shelf planes without adding geometry", () => {
+  const positions = [];
+  const indices = [];
+  for (let z = 0; z < 3; z++)
+    for (let x = 0; x < 3; x++)
+      positions.push(x * 0.5, 1 + ((x + z) % 2 ? 0.018 : -0.018), z * 0.5);
+  for (let z = 0; z < 2; z++)
+    for (let x = 0; x < 2; x++) {
+      const first = z * 3 + x;
+      indices.push(
+        first,
+        first + 3,
+        first + 1,
+        first + 1,
+        first + 3,
+        first + 4,
+      );
+    }
+  const mesh = {
+    positions: new Float32Array(positions),
+    indices: new Uint32Array(indices),
+  };
+  const originalIndices = new Uint32Array(mesh.indices);
+  const before = positions.filter((_, index) => index % 3 === 1);
+  const result = stabilizeMeasuredHorizontalSurfaces(mesh, 0.025);
+  const after = [...result.positions].filter((_, index) => index % 3 === 1);
+  expect(result.indices).toEqual(originalIndices);
+  expect(result.positions).toHaveLength(mesh.positions.length);
+  expect(result.stabilizedHorizontalPlaneCount).toBe(1);
+  expect(result.stabilizedHorizontalVertexCount).toBeGreaterThan(0);
+  expect(Math.max(...after) - Math.min(...after)).toBeLessThan(
+    Math.max(...before) - Math.min(...before),
+  );
+});
+
 test("texture sharpness favors detailed camera frames over flat or clipped ones", () => {
   const frame = (pixels) => ({
     colorImage: new Uint8Array(pixels),
@@ -402,6 +438,31 @@ test("automatic layer repair prunes frames outside the consensus wall", () => {
     [frame(0, 0), frame(1, 0), frame(2, 0), frame(3, 0), frame(4, 0.3), frame(5, 0.3)],
     {
       walls: [{ dominantNormal: { x: 0, z: 1 }, wallOffset: 0 }],
+    },
+  );
+  expect(repair.keptFrameIds).toEqual([0, 1, 2, 3]);
+  expect(repair.removedFrameIds).toEqual([4, 5]);
+});
+
+test("strict wall consensus removes shallow shifted depth layers", () => {
+  const frame = (frameId, z) => ({
+    frameId,
+    filteredCount: 12,
+    filteredDepth: new Float32Array(12).fill(2),
+    measuredMask: new Uint8Array(12).fill(1),
+    positions: new Float32Array(
+      Array.from({ length: 12 }, (_, index) => [index / 12, 0, z]).flat(),
+    ),
+  });
+  const repair = wallConsensusKeyframes(
+    [frame(0, 0), frame(1, 0), frame(2, 0), frame(3, 0), frame(4, 0.07), frame(5, 0.07)],
+    {
+      walls: [{ dominantNormal: { x: 0, z: 1 }, wallOffset: 0 }],
+    },
+    {
+      distanceTolerance: 0.055,
+      minimumRelativeRatio: 0.68,
+      minimumFramesRatio: 0.5,
     },
   );
   expect(repair.keptFrameIds).toEqual([0, 1, 2, 3]);

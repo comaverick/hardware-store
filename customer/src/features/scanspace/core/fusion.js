@@ -956,7 +956,7 @@ function cellIndex(width, height, x, y, z) {
   return x + y * width + z * width * height;
 }
 
-function extractSurfaceNet(volume, report) {
+function extractSurfaceNet(volume, report, options = {}) {
   const [width, height, depth] = volume.dimensions;
   const cellWidth = width - 1;
   const cellHeight = height - 1;
@@ -964,7 +964,12 @@ function extractSurfaceNet(volume, report) {
   const cellVertices = new Int32Array(cellWidth * cellHeight * cellDepth).fill(-1);
   const positions = [];
   const colors = [];
-  const rejectionCounts = { insufficientSupport: 0, unstable: 0, freeSpace: 0 };
+  const rejectionCounts = {
+    insufficientSupport: 0,
+    unstable: 0,
+    highVariance: 0,
+    freeSpace: 0,
+  };
   for (let z = 0; z < cellDepth; z++)
     for (let y = 0; y < cellHeight; y++)
       for (let x = 0; x < cellWidth; x++) {
@@ -978,10 +983,20 @@ function extractSurfaceNet(volume, report) {
         }
         const reliable = (corner) => {
           const closeRange = corner.meanDepth < 0.9;
-          const requiredViews = closeRange ? 4 : 2;
-          const varianceLimit = closeRange
-            ? Math.max(0.032, volume.voxelSize * 0.8)
-            : Math.max(0.055, volume.voxelSize * 1.35);
+          const requiredViews = options.surfaceMode
+            ? (closeRange ? 4 : 3)
+            : (closeRange ? 4 : 2);
+          // Partial measured surfaces must not average incompatible depth
+          // layers into a smooth-looking but physically bent sheet. The
+          // tighter limits are applied only when independent viewpoints exist;
+          // uncertain reflective measurements remain open instead.
+          const varianceLimit = options.surfaceMode
+            ? closeRange
+              ? Math.max(0.024, volume.voxelSize * 0.62)
+              : Math.max(0.04, volume.voxelSize * 1.05)
+            : closeRange
+              ? Math.max(0.032, volume.voxelSize * 0.8)
+              : Math.max(0.055, volume.voxelSize * 1.35);
           const contradictedByFreeSpace =
             corner.freeSpaceVotes >= Math.max(3, corner.weight * 1.25);
           return (
@@ -1000,7 +1015,20 @@ function extractSurfaceNet(volume, report) {
         if (confirmed < 4) {
           const contradicted = known.some((corner) =>
             corner.freeSpaceVotes >= Math.max(3, corner.weight * 1.25));
-          rejectionCounts[contradicted ? "freeSpace" : "unstable"]++;
+          const highVariance = known.some((corner) => {
+            const closeRange = corner.meanDepth < 0.9;
+            const varianceLimit = options.surfaceMode
+              ? closeRange
+                ? Math.max(0.024, volume.voxelSize * 0.62)
+                : Math.max(0.04, volume.voxelSize * 1.05)
+              : closeRange
+                ? Math.max(0.032, volume.voxelSize * 0.8)
+                : Math.max(0.055, volume.voxelSize * 1.35);
+            return corner.viewpoints >= 2 && corner.variance > varianceLimit;
+          });
+          rejectionCounts[
+            contradicted ? "freeSpace" : highVariance ? "highVariance" : "unstable"
+          ]++;
           continue;
         }
         const negative = known.some((corner) => corner.value < 0);
@@ -1011,6 +1039,7 @@ function extractSurfaceNet(volume, report) {
           const first = corners[firstIndex];
           const second = corners[secondIndex];
           if (first.weight < 1 || second.weight < 1) return;
+          if (options.surfaceMode && (!reliable(first) || !reliable(second))) return;
           if ((first.value < 0) === (second.value < 0)) return;
           const amount = clamp(first.value / (first.value - second.value), 0, 1);
           intersections.push({
@@ -1831,7 +1860,7 @@ export function measuredSurfaceGapWarning(quality) {
   };
 }
 
-export function wallConsensusKeyframes(frames, quality) {
+export function wallConsensusKeyframes(frames, quality, options = {}) {
   const walls = quality?.walls || [];
   if (!walls.length) return null;
   const scored = frames.map((frame) => {
@@ -1853,7 +1882,7 @@ export function wallConsensusKeyframes(frames, quality) {
               x * wall.dominantNormal.x +
                 z * wall.dominantNormal.z -
                 wall.wallOffset,
-            ) <= 0.09,
+            ) <= (options.distanceTolerance || 0.09),
         )
       )
         consensus++;
@@ -1867,11 +1896,17 @@ export function wallConsensusKeyframes(frames, quality) {
   });
   const ratios = scored.map((entry) => entry.ratio).sort((a, b) => a - b);
   const medianRatio = ratios[Math.floor(ratios.length / 2)] || 0;
-  const minimumRatio = Math.max(0.04, medianRatio * 0.45);
+  const minimumRatio = Math.max(
+    options.minimumAbsoluteRatio || 0.04,
+    medianRatio * (options.minimumRelativeRatio || 0.45),
+  );
   const kept = scored.filter(
     (entry) => entry.consensus >= 8 && entry.ratio >= minimumRatio,
   );
-  const minimumFrames = Math.max(3, Math.ceil(frames.length * 0.45));
+  const minimumFrames = Math.max(
+    3,
+    Math.ceil(frames.length * (options.minimumFramesRatio || 0.45)),
+  );
   if (kept.length < minimumFrames || kept.length === frames.length) return null;
   const keptIds = new Set(kept.map((entry) => entry.frame.frameId));
   return {
@@ -2052,6 +2087,104 @@ export function stabilizeMeasuredWallSectors(mesh, walls = [], voxelSize = 0.03)
     positions,
     stabilizedPlaneCount: supported.length,
     stabilizedVertexCount,
+  };
+}
+
+// Flatten only horizontal triangles that already form a substantial measured
+// plane. This corrects bowed shelf/floor measurements without extending their
+// boundary or adding a single triangle across an unmeasured opening.
+export function stabilizeMeasuredHorizontalSurfaces(
+  mesh,
+  voxelSize = 0.03,
+  maxPlanes = 5,
+) {
+  const samples = [];
+  let horizontalArea = 0;
+  for (let index = 0; index < mesh.indices.length; index += 3) {
+    const a = mesh.indices[index] * 3;
+    const b = mesh.indices[index + 1] * 3;
+    const c = mesh.indices[index + 2] * 3;
+    const ab = [
+      mesh.positions[b] - mesh.positions[a],
+      mesh.positions[b + 1] - mesh.positions[a + 1],
+      mesh.positions[b + 2] - mesh.positions[a + 2],
+    ];
+    const ac = [
+      mesh.positions[c] - mesh.positions[a],
+      mesh.positions[c + 1] - mesh.positions[a + 1],
+      mesh.positions[c + 2] - mesh.positions[a + 2],
+    ];
+    const nx = ab[1] * ac[2] - ab[2] * ac[1];
+    const ny = ab[2] * ac[0] - ab[0] * ac[2];
+    const nz = ab[0] * ac[1] - ab[1] * ac[0];
+    const twiceArea = Math.hypot(nx, ny, nz);
+    if (twiceArea < 0.00001 || Math.abs(ny / twiceArea) < 0.88) continue;
+    const area = twiceArea * 0.5;
+    const height =
+      (mesh.positions[a + 1] + mesh.positions[b + 1] + mesh.positions[c + 1]) /
+      3;
+    samples.push({ height, area });
+    horizontalArea += area;
+  }
+  if (!samples.length)
+    return {
+      ...mesh,
+      stabilizedHorizontalPlaneCount: 0,
+      stabilizedHorizontalVertexCount: 0,
+    };
+
+  samples.sort((left, right) => left.height - right.height);
+  const clusters = [];
+  const clusterDistance = Math.max(0.045, voxelSize * 1.8);
+  samples.forEach((sample) => {
+    const cluster = clusters[clusters.length - 1];
+    if (!cluster || Math.abs(sample.height - cluster.height) > clusterDistance) {
+      clusters.push({
+        height: sample.height,
+        weightedHeight: sample.height * sample.area,
+        area: sample.area,
+      });
+      return;
+    }
+    cluster.area += sample.area;
+    cluster.weightedHeight += sample.height * sample.area;
+    cluster.height = cluster.weightedHeight / cluster.area;
+  });
+  const planes = clusters
+    .filter((cluster) => cluster.area >= Math.max(0.055, horizontalArea * 0.035))
+    .sort((left, right) => right.area - left.area)
+    .slice(0, maxPlanes)
+    .map((cluster) => cluster.height);
+  if (!planes.length)
+    return {
+      ...mesh,
+      stabilizedHorizontalPlaneCount: 0,
+      stabilizedHorizontalVertexCount: 0,
+    };
+
+  const positions = new Float32Array(mesh.positions);
+  const normals = computeNormals(mesh);
+  const distanceLimit = Math.max(0.035, voxelSize * 1.55);
+  let stabilizedHorizontalVertexCount = 0;
+  for (let vertex = 0; vertex < positions.length / 3; vertex++) {
+    const offset = vertex * 3;
+    if (Math.abs(normals[offset + 1]) < 0.78) continue;
+    let closest = null;
+    planes.forEach((height) => {
+      const distance = positions[offset + 1] - height;
+      if (Math.abs(distance) > distanceLimit) return;
+      if (closest === null || Math.abs(distance) < Math.abs(closest))
+        closest = distance;
+    });
+    if (closest === null) continue;
+    positions[offset + 1] -= closest * 0.92;
+    stabilizedHorizontalVertexCount++;
+  }
+  return {
+    ...mesh,
+    positions,
+    stabilizedHorizontalPlaneCount: planes.length,
+    stabilizedHorizontalVertexCount,
   };
 }
 
@@ -2354,6 +2487,51 @@ function projectColorWorld(frame, x, y, z) {
   );
 }
 
+function projectedTexturePenalty(frame, projections) {
+  if (
+    !frame.colorImage ||
+    !frame.colorWidth ||
+    !frame.colorHeight ||
+    !frame.colorChannels
+  )
+    return 0;
+  let overexposed = 0;
+  let underexposed = 0;
+  let coloredHighlight = 0;
+  let sampled = 0;
+  projections.forEach((projection) => {
+    if (!projection) return;
+    const x = clamp(
+      Math.round(projection.u * (frame.colorWidth - 1)),
+      0,
+      frame.colorWidth - 1,
+    );
+    const y = clamp(
+      Math.round(projection.v * (frame.colorHeight - 1)),
+      0,
+      frame.colorHeight - 1,
+    );
+    const offset = (y * frame.colorWidth + x) * frame.colorChannels;
+    const red = frame.colorImage[offset];
+    const green = frame.colorImage[offset + 1];
+    const blue = frame.colorImage[offset + 2];
+    if (![red, green, blue].every(Number.isFinite)) return;
+    const minimum = Math.min(red, green, blue);
+    const maximum = Math.max(red, green, blue);
+    const luminance = red * 0.2126 + green * 0.7152 + blue * 0.0722;
+    if (luminance >= 246 && minimum >= 218) overexposed++;
+    if (luminance <= 7) underexposed++;
+    if (maximum >= 235 && maximum - minimum >= 105) coloredHighlight++;
+    sampled++;
+  });
+  if (!sampled) return 0;
+  return (
+    overexposed / sampled +
+    (underexposed / sampled) * 0.45 +
+    (coloredHighlight / sampled) * 0.35
+  );
+}
+
 function texturedMesh(mesh, frames) {
   const atlas = buildAtlas(frames);
   const sharedNormals = computeNormals(mesh);
@@ -2376,6 +2554,29 @@ function texturedMesh(mesh, frames) {
       y: value.y + sharedNormals[vertex * 3 + 1] / 3,
       z: value.z + sharedNormals[vertex * 3 + 2] / 3,
     }), { x: 0, y: 0, z: 0 });
+    const first = triangle[0] * 3;
+    const second = triangle[1] * 3;
+    const third = triangle[2] * 3;
+    const ab = [
+      mesh.positions[second] - mesh.positions[first],
+      mesh.positions[second + 1] - mesh.positions[first + 1],
+      mesh.positions[second + 2] - mesh.positions[first + 2],
+    ];
+    const ac = [
+      mesh.positions[third] - mesh.positions[first],
+      mesh.positions[third + 1] - mesh.positions[first + 1],
+      mesh.positions[third + 2] - mesh.positions[first + 2],
+    ];
+    const faceNormal = {
+      x: ab[1] * ac[2] - ab[2] * ac[1],
+      y: ab[2] * ac[0] - ab[0] * ac[2],
+      z: ab[0] * ac[1] - ab[1] * ac[0],
+    };
+    const faceNormalLength =
+      Math.hypot(faceNormal.x, faceNormal.y, faceNormal.z) || 1;
+    faceNormal.x /= faceNormalLength;
+    faceNormal.y /= faceNormalLength;
+    faceNormal.z /= faceNormalLength;
     const candidates = [];
     atlas.frames.forEach((frame) => {
       const colorProjection = projectColorWorld(
@@ -2460,6 +2661,10 @@ function texturedMesh(mesh, frames) {
         0,
         1.5,
       );
+      const texturePenalty = projectedTexturePenalty(frame, [
+        colorProjection,
+        ...colorProjections,
+      ]);
       candidates.push({
         frame,
         projections: colorProjections,
@@ -2468,11 +2673,17 @@ function texturedMesh(mesh, frames) {
           1 / distance +
           sharpness * 0.65 -
           closestAgreement * 5 -
-          motionPenalty * 0.4,
+          motionPenalty * 0.4 -
+          texturePenalty * 0.85,
       });
     });
     candidates.sort((left, right) => right.score - left.score);
-    const record = { triangle, candidates: candidates.slice(0, 3), selected: 0 };
+    const record = {
+      triangle,
+      faceNormal,
+      candidates: candidates.slice(0, 3),
+      selected: 0,
+    };
     const recordIndex = records.length;
     records.push(record);
     triangle.forEach((vertex) => vertexTriangles[vertex].push(recordIndex));
@@ -2505,6 +2716,65 @@ function texturedMesh(mesh, frames) {
       });
       record.selected = selected;
     });
+  // Select texture cameras coherently across connected, similarly oriented
+  // measured patches. A camera still has to be one of each triangle's valid
+  // depth-tested candidates, so this reduces color seams without painting
+  // through occluders or inventing texture for missing geometry.
+  const visitedRecords = new Uint8Array(records.length);
+  let texturePatchCount = 0;
+  for (let start = 0; start < records.length; start++) {
+    if (visitedRecords[start]) continue;
+    const component = [];
+    const queue = [start];
+    visitedRecords[start] = 1;
+    for (let cursor = 0; cursor < queue.length; cursor++) {
+      const currentIndex = queue[cursor];
+      const current = records[currentIndex];
+      component.push(currentIndex);
+      current.triangle.forEach((vertex) =>
+        vertexTriangles[vertex].forEach((neighborIndex) => {
+          if (visitedRecords[neighborIndex]) return;
+          const neighbor = records[neighborIndex];
+          const alignment = Math.abs(
+            current.faceNormal.x * neighbor.faceNormal.x +
+              current.faceNormal.y * neighbor.faceNormal.y +
+              current.faceNormal.z * neighbor.faceNormal.z,
+          );
+          if (alignment < 0.94) return;
+          visitedRecords[neighborIndex] = 1;
+          queue.push(neighborIndex);
+        }),
+      );
+    }
+    if (component.length < 4) continue;
+    texturePatchCount++;
+    const frameCoverage = new Map();
+    component.forEach((recordIndex) =>
+      records[recordIndex].candidates.forEach((candidate) => {
+        const textureId = candidate.frame.textureId;
+        frameCoverage.set(textureId, (frameCoverage.get(textureId) || 0) + 1);
+      }),
+    );
+    component.forEach((recordIndex) => {
+      const record = records[recordIndex];
+      if (record.candidates.length < 2) return;
+      const bestLocalScore = record.candidates[0].score;
+      let selected = record.selected;
+      let selectedScore = -Infinity;
+      record.candidates.forEach((candidate, candidateIndex) => {
+        if (candidate.score < bestLocalScore - 0.65) return;
+        const coverage =
+          (frameCoverage.get(candidate.frame.textureId) || 0) /
+          component.length;
+        const score = candidate.score + Math.min(1, coverage) * 0.95;
+        if (score > selectedScore) {
+          selected = candidateIndex;
+          selectedScore = score;
+        }
+      });
+      record.selected = selected;
+    });
+  }
   const positions = [];
   const normals = [];
   const colors = [];
@@ -2549,6 +2819,7 @@ function texturedMesh(mesh, frames) {
     indices: new Uint32Array(indices),
     texture: { data: atlas.data, width: atlas.width, height: atlas.height },
     textureCoverage: mesh.indices.length ? Math.round(texturedTriangles / (mesh.indices.length / 3) * 100) : 0,
+    texturePatchCount,
     photometricNormalization: atlas.photometricNormalization,
   };
 }
@@ -2607,7 +2878,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     options.maxKeyframes || 40,
   );
   const stages = {
-    algorithmVersion: 21,
+    algorithmVersion: 22,
     completionMode: options.completionMode === "surface" ? "surface" : "room",
     reconstructionProfile: options.reconstructionProfile || "quality",
     supportMode: "translated-camera-viewpoints",
@@ -2677,7 +2948,8 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   regularizeVolume(volume);
   propagateSurfaceColors(volume);
   report?.("meshing", 68);
-  let surface = extractSurfaceNet(volume, report);
+  const surfaceCompletion = options.completionMode === "surface";
+  let surface = extractSurfaceNet(volume, report, { surfaceMode: surfaceCompletion });
   stages.cellRejections = surface.rejectionCounts;
   stages.trianglesBeforeCleanup = surface.indices.length / 3;
   surface = removeSmallComponents(surface);
@@ -2686,8 +2958,14 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   stages.keptComponentCount = surface.keptComponentCount;
   stages.dominantAreaRatio = surface.dominantAreaRatio;
   surface = fillSmallMeshHoles(surface, {
-    maxDiameter: clamp(volume.voxelSize * 9, 0.3, 0.45),
-    maxPlanarity: Math.max(0.04, volume.voxelSize * 1.2),
+    // A partial measured result may close only tiny meshing cracks. Broad
+    // unmeasured regions remain open and never become replacement walls.
+    maxDiameter: surfaceCompletion
+      ? clamp(volume.voxelSize * 3, 0.08, 0.12)
+      : clamp(volume.voxelSize * 9, 0.3, 0.45),
+    maxPlanarity: surfaceCompletion
+      ? Math.max(0.025, volume.voxelSize * 0.8)
+      : Math.max(0.04, volume.voxelSize * 1.2),
   });
   stages.filledHoleCount = surface.filledHoleCount;
   stages.filledHoleTriangles = surface.filledHoleTriangles;
@@ -2704,7 +2982,41 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   );
   stages.rectangularRoomModelCompatible =
     !meshOutsideRectangularRoomModel(wallStructure);
-  const surfaceCompletion = options.completionMode === "surface";
+  if (surfaceCompletion && options.globalSurfaceConsensus !== false) {
+    const repair = wallConsensusKeyframes(usable, measuredSurfaceQuality, {
+      distanceTolerance: 0.055,
+      minimumAbsoluteRatio: 0.06,
+      minimumRelativeRatio: 0.68,
+      minimumFramesRatio: 0.5,
+    });
+    if (repair?.keptFrameIds.length >= 3) {
+      const keptIds = new Set(repair.keptFrameIds);
+      volume = null;
+      const repaired = fuseRgbdKeyframes(
+        keyframes.filter((_, index) => keptIds.has(index)),
+        { ...options, globalSurfaceConsensus: false },
+        report,
+      );
+      const globalSurfaceConsensus = {
+        attempted: true,
+        succeeded: !!repaired.mesh,
+        removedFrameIds: repair.removedFrameIds,
+        keptFrameIds: repair.keptFrameIds,
+        medianConsensusRatio: repair.medianConsensusRatio,
+        minimumConsensusRatio: repair.minimumConsensusRatio,
+        frameScores: repair.frameScores,
+      };
+      repaired.diagnostics.globalSurfaceConsensus = globalSurfaceConsensus;
+      if (repaired.mesh) return repaired;
+      stages.globalSurfaceConsensus = globalSurfaceConsensus;
+    } else {
+      stages.globalSurfaceConsensus = {
+        attempted: false,
+        succeeded: false,
+        removedFrameIds: repair?.removedFrameIds || [],
+      };
+    }
+  }
   const measuredSurfaceWarnings = [];
   if (stages.measuredGapWarning)
     measuredSurfaceWarnings.push({
@@ -2827,6 +3139,12 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       (options.completionMode === "surface" ? 2 : 3),
     volumeVoxelSize,
   );
+  if (surfaceCompletion)
+    surface = stabilizeMeasuredHorizontalSurfaces(
+      surface,
+      volumeVoxelSize,
+      5,
+    );
   report?.("texturing", 88);
   const textured = texturedMesh(surface, usable);
   const floorY = Number.isFinite(options.floorY) ? options.floorY : 0;
@@ -2855,8 +3173,14 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       cells: volumeCells,
       triangles: mesh.triangleCount,
       surfaceArea: surface.surfaceArea,
-      stabilizedPlanes: surface.stabilizedPlaneCount || 0,
+      stabilizedPlanes:
+        (surface.stabilizedPlaneCount || 0) +
+        (surface.stabilizedHorizontalPlaneCount || 0),
       stabilizedVertices: surface.stabilizedVertexCount || 0,
+      stabilizedHorizontalPlanes:
+        surface.stabilizedHorizontalPlaneCount || 0,
+      stabilizedHorizontalVertices:
+        surface.stabilizedHorizontalVertexCount || 0,
       components: surface.componentCount || 1,
       keptComponents: surface.keptComponentCount || 1,
       dominantAreaRatio: surface.dominantAreaRatio ?? 1,
@@ -2865,6 +3189,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       filledHoleCount: surface.filledHoleCount || 0,
       filledHoleTriangles: surface.filledHoleTriangles || 0,
       textureCoverage: mesh.textureCoverage,
+      texturePatchCount: mesh.texturePatchCount || 0,
       photometricNormalization: mesh.photometricNormalization || "none",
     },
   };
