@@ -5,6 +5,7 @@ import {
   fillSmallMeshHoles,
   fuseRgbdKeyframes,
   gridIndex,
+  imageColorStatistics,
   imageSharpness,
   sampleProjectiveDepth,
   meshFragmentationIsUnacceptable,
@@ -355,6 +356,24 @@ test("texture sharpness favors detailed camera frames over flat or clipped ones"
   expect(imageSharpness(checker)).toBeGreaterThan(imageSharpness(flat));
 });
 
+test("texture color statistics ignore clipped glare and retain channel balance", () => {
+  const pixels = new Uint8Array([
+    255, 255, 255, 255,
+    160, 100, 80, 255,
+    160, 100, 80, 255,
+    0, 0, 0, 255,
+  ]);
+  const statistics = imageColorStatistics({
+    colorImage: pixels,
+    colorWidth: 2,
+    colorHeight: 2,
+    colorChannels: 4,
+  });
+  expect(statistics.samples).toBe(2);
+  expect(statistics.channels[0]).toBeGreaterThan(statistics.channels[1]);
+  expect(statistics.channels[1]).toBeGreaterThan(statistics.channels[2]);
+});
+
 test("surface quality keeps a localized parallel furniture front", () => {
   const mesh = {
     positions: new Float32Array([
@@ -565,6 +584,7 @@ test("allows validated multi-view surface fusion without a room heading sweep", 
   expect(result.diagnostics.measuredSurfaceQuality.assessed).toBe(true);
   expect(result.diagnostics.measuredSurfaceQuality.gridCoverage).toBeGreaterThan(0.42);
   expect(result.diagnostics.measuredReviewWarning).toBeNull();
+  expect(result.diagnostics.alignment.surfaceConsistency.applied).toBe(true);
   expect(result.diagnostics.fallback).toBeUndefined();
 });
 
@@ -743,6 +763,25 @@ test("rejects a 14cm pose error that passes the spatial-neighbor overlap check",
   expect(result.diagnostics.alignment.pairs.some((pair) =>
     (pair.firstFrame === 1 || pair.secondFrame === 1) && !pair.accepted)).toBe(true);
   expect(result.mesh.bounds.max.z).toBeLessThan(-1.95);
+});
+
+test("partial-surface consistency removes a smaller pose drift before fusion", () => {
+  const shifted = planeKeyframe(0.04);
+  shifted.transformMatrix[14] = 0.06;
+  const result = fuseRgbdKeyframes(
+    [
+      planeKeyframe(0),
+      shifted,
+      planeKeyframe(0.08),
+      planeKeyframe(-0.08),
+    ],
+    { completionMode: "surface" },
+  );
+  expect(result.mesh?.kind).toBe("projective-tsdf-surface-net");
+  expect(result.diagnostics.alignment.surfaceConsistency.applied).toBe(true);
+  expect(
+    result.diagnostics.alignment.surfaceConsistency.rejectedFrameIds,
+  ).toContain(1);
 });
 
 test("rejects a frame when only one quarter of its wall depth agrees", () => {

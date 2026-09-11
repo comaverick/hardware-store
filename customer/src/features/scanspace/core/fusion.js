@@ -470,7 +470,7 @@ function compareFrameDepths(first, second) {
   };
 }
 
-function validateFrameOverlap(frames, diagnostics = {}) {
+function validateFrameOverlap(frames, diagnostics = {}, limits = {}) {
   diagnostics.pairs = [];
   diagnostics.poseCorrectionApplied = false;
   if (frames.length < 2) return frames;
@@ -544,8 +544,11 @@ function validateFrameOverlap(frames, diagnostics = {}) {
           forward.upperErrorMeters ?? Infinity,
           backward.upperErrorMeters ?? Infinity,
         );
-        const accepted = agreeing >= 12 && agreementRatio >= 0.4 &&
-          medianError <= 0.075 && upperError <= 0.14;
+        const accepted =
+          agreeing >= (limits.minimumAgreeing || 12) &&
+          agreementRatio >= (limits.minimumAgreementRatio || 0.4) &&
+          medianError <= (limits.maximumMedianError || 0.075) &&
+          upperError <= (limits.maximumUpperError || 0.14);
         diagnostics.pairs.push({
           firstFrame: frames[left].frameId,
           secondFrame: frames[right].frameId,
@@ -2141,6 +2144,41 @@ function imageLuminance(frame) {
   return count ? sum / count : 128;
 }
 
+export function imageColorStatistics(frame) {
+  if (!frame?.colorImage?.length) return null;
+  const channels = frame.colorChannels || 4;
+  const sums = [0, 0, 0];
+  let luminance = 0;
+  let count = 0;
+  const pixelCount = frame.colorImage.length / channels;
+  const baseStride = Math.max(1, Math.floor(pixelCount / 4096));
+  const sampleStride = baseStride % 2 ? baseStride : baseStride + 1;
+  for (
+    let index = 0;
+    index < frame.colorImage.length;
+    index += channels * sampleStride
+  ) {
+    const red = frame.colorImage[index];
+    const green = frame.colorImage[index + 1];
+    const blue = frame.colorImage[index + 2];
+    const value = red * 0.2126 + green * 0.7152 + blue * 0.0722;
+    // Ignore nearly black and clipped pixels; they are commonly unmeasured
+    // borders, deep shadows, or glare and destabilize exposure calibration.
+    if (value < 8 || value > 247) continue;
+    sums[0] += red;
+    sums[1] += green;
+    sums[2] += blue;
+    luminance += value;
+    count++;
+  }
+  if (!count) return null;
+  return {
+    channels: sums.map((sum) => sum / count),
+    luminance: luminance / count,
+    samples: count,
+  };
+}
+
 export function imageSharpness(frame) {
   if (
     !frame?.colorImage?.length ||
@@ -2180,6 +2218,7 @@ function buildAtlas(frames) {
   if (!images.length) return null;
   images.forEach((frame) => {
     frame.textureSharpness = imageSharpness(frame);
+    frame.textureColorStatistics = imageColorStatistics(frame);
   });
   const rankedSharpness = images
     .map((frame) => frame.textureSharpness)
@@ -2199,9 +2238,43 @@ function buildAtlas(frames) {
   const width = columns * strideX;
   const height = rows * strideY;
   const data = new Uint8Array(width * height * 4).fill(255);
-  const globalLuminance = images.reduce((sum, frame) => sum + imageLuminance(frame), 0) / images.length;
+  const validStatistics = images
+    .map((frame) => frame.textureColorStatistics)
+    .filter(Boolean);
+  const globalLuminance = validStatistics.length
+    ? validStatistics.reduce((sum, stats) => sum + stats.luminance, 0) /
+      validStatistics.length
+    : images.reduce((sum, frame) => sum + imageLuminance(frame), 0) /
+      images.length;
+  const globalChannels = [0, 1, 2].map((channel) =>
+    validStatistics.length
+      ? validStatistics.reduce(
+          (sum, stats) => sum + stats.channels[channel],
+          0,
+        ) / validStatistics.length
+      : globalLuminance,
+  );
   images.forEach((frame, tile) => {
-    const scale = clamp(globalLuminance / Math.max(24, imageLuminance(frame)), 0.78, 1.25);
+    const statistics = frame.textureColorStatistics;
+    const frameLuminance = statistics?.luminance || imageLuminance(frame);
+    const exposure = clamp(
+      globalLuminance / Math.max(24, frameLuminance),
+      0.8,
+      1.22,
+    );
+    const channelScales = [0, 1, 2].map((channel) => {
+      if (!statistics) return exposure;
+      const globalChromaticity =
+        globalChannels[channel] / Math.max(1, globalLuminance);
+      const frameChromaticity =
+        statistics.channels[channel] / Math.max(1, frameLuminance);
+      const whiteBalance = clamp(
+        globalChromaticity / Math.max(0.01, frameChromaticity),
+        0.9,
+        1.1,
+      );
+      return clamp(exposure * whiteBalance, 0.78, 1.25);
+    });
     const tileX = tile % columns;
     const tileY = Math.floor(tile / columns);
     // Duplicate edge pixels through a gutter so mipmapping never blends one
@@ -2221,9 +2294,21 @@ function buildAtlas(frames) {
         const source =
           (sourceY * frame.colorWidth + sourceX) * frame.colorChannels;
         const target = ((tileY * strideY + y + padding) * width + tileX * strideX + x + padding) * 4;
-        data[target] = clamp(Math.round(frame.colorImage[source] * scale), 0, 255);
-        data[target + 1] = clamp(Math.round(frame.colorImage[source + 1] * scale), 0, 255);
-        data[target + 2] = clamp(Math.round(frame.colorImage[source + 2] * scale), 0, 255);
+        data[target] = clamp(
+          Math.round(frame.colorImage[source] * channelScales[0]),
+          0,
+          255,
+        );
+        data[target + 1] = clamp(
+          Math.round(frame.colorImage[source + 1] * channelScales[1]),
+          0,
+          255,
+        );
+        data[target + 2] = clamp(
+          Math.round(frame.colorImage[source + 2] * channelScales[2]),
+          0,
+          255,
+        );
         data[target + 3] = 255;
       }
     frame.atlasTile = tile;
@@ -2240,6 +2325,7 @@ function buildAtlas(frames) {
     columns,
     frames: images,
     referenceSharpness,
+    photometricNormalization: "bounded-exposure-white-balance",
   };
 }
 
@@ -2341,6 +2427,7 @@ function texturedMesh(mesh, frames) {
       // declaring that otherwise visible triangle untextured.
       for (let offsetY = -1; offsetY <= 1; offsetY++)
         for (let offsetX = -1; offsetX <= 1; offsetX++) {
+          if (Math.abs(offsetX) + Math.abs(offsetY) > 1) continue;
           const x = centerX + offsetX;
           const y = centerY + offsetY;
           if (x < 0 || y < 0 || x >= frame.columns || y >= frame.rows) continue;
@@ -2354,7 +2441,7 @@ function texturedMesh(mesh, frames) {
         }
       if (
         !closestDepth ||
-        closestAgreement > Math.max(0.2, closestDepth * 0.09)
+        closestAgreement > Math.max(0.055, closestDepth * 0.03)
       )
         return;
       const dx = frame.transformMatrix[12] - center.x;
@@ -2391,9 +2478,9 @@ function texturedMesh(mesh, frames) {
     triangle.forEach((vertex) => vertexTriangles[vertex].push(recordIndex));
   }
   // Neighboring triangles prefer the same one of their valid top-three
-  // camera views. Two passes remove most per-triangle exposure seams without
+  // camera views. Four passes remove most per-triangle exposure seams without
   // ever selecting a frame that failed the depth/visibility checks.
-  for (let pass = 0; pass < 2; pass++)
+  for (let pass = 0; pass < 4; pass++)
     records.forEach((record, recordIndex) => {
       if (record.candidates.length < 2) return;
       const votes = new Map();
@@ -2408,7 +2495,9 @@ function texturedMesh(mesh, frames) {
       let selected = 0;
       let selectedScore = -Infinity;
       record.candidates.forEach((candidate, candidateIndex) => {
-        const score = candidate.score + (votes.get(candidate.frame.textureId) || 0) * 0.32;
+        const score =
+          candidate.score +
+          (votes.get(candidate.frame.textureId) || 0) * 0.68;
         if (score > selectedScore) {
           selected = candidateIndex;
           selectedScore = score;
@@ -2460,6 +2549,7 @@ function texturedMesh(mesh, frames) {
     indices: new Uint32Array(indices),
     texture: { data: atlas.data, width: atlas.width, height: atlas.height },
     textureCoverage: mesh.indices.length ? Math.round(texturedTriangles / (mesh.indices.length / 3) * 100) : 0,
+    photometricNormalization: atlas.photometricNormalization,
   };
 }
 
@@ -2492,14 +2582,32 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     .map(({ frame, frameId }) => prepareFrame(frame, frameId))
     .filter(Boolean);
   const alignment = {};
-  const overlapping = validateFrameOverlap(prepared, alignment);
+  let overlapping = validateFrameOverlap(prepared, alignment);
+  if (options.completionMode === "surface" && overlapping.length >= 3) {
+    const strictDiagnostics = {};
+    const consistent = validateFrameOverlap(overlapping, strictDiagnostics, {
+      minimumAgreeing: 16,
+      minimumAgreementRatio: 0.5,
+      maximumMedianError: 0.045,
+      maximumUpperError: 0.09,
+    });
+    const enoughConsistentFrames =
+      consistent.length >= 3 &&
+      consistent.length >= Math.ceil(overlapping.length * 0.4);
+    alignment.surfaceConsistency = {
+      ...strictDiagnostics,
+      applied: enoughConsistentFrames,
+      fallbackToGeneralOverlap: !enoughConsistentFrames,
+    };
+    if (enoughConsistentFrames) overlapping = consistent;
+  }
   alignment.poseRefinement = "disabled-until-independently-validated";
   const usable = selectEvenly(
     overlapping,
     options.maxKeyframes || 40,
   );
   const stages = {
-    algorithmVersion: 20,
+    algorithmVersion: 21,
     completionMode: options.completionMode === "surface" ? "surface" : "room",
     reconstructionProfile: options.reconstructionProfile || "quality",
     supportMode: "translated-camera-viewpoints",
@@ -2757,6 +2865,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       filledHoleCount: surface.filledHoleCount || 0,
       filledHoleTriangles: surface.filledHoleTriangles || 0,
       textureCoverage: mesh.textureCoverage,
+      photometricNormalization: mesh.photometricNormalization || "none",
     },
   };
 }
