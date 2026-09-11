@@ -504,16 +504,20 @@ export default function ScannerPanel({
         debugCapture: debugCapture.current,
         fusionDiagnostics: fused.diagnostics,
         measuredGapWarning: fused.diagnostics?.measuredGapWarning || null,
+        measuredReviewWarning:
+          fused.diagnostics?.measuredReviewWarning || null,
       };
-      if (surfaceResult.measuredGapWarning) {
+      const reviewWarning =
+        surfaceResult.measuredReviewWarning || surfaceResult.measuredGapWarning;
+      if (reviewWarning) {
         pendingSurface.current = surfaceResult;
         setPartial({
-          reason: surfaceResult.measuredGapWarning.message,
+          reason: reviewWarning.message,
           pointCount: acceptedPoints.length,
           coverage: raw.stats.coverage || 0,
           cameraBaseline: raw.stats.cameraBaseline || 0,
           rejectedDepthFrames: raw.stats.rejectedDepthFrames || 0,
-          canAcceptMeasuredGaps: true,
+          canFinishMeasuredSurface: true,
         });
         return;
       }
@@ -692,15 +696,15 @@ export default function ScannerPanel({
               ) : (
                 <section className="ss-partial-capture" role="status">
                   <strong>
-                    {partial.canAcceptMeasuredGaps
-                      ? "Some measured areas remain open"
+                    {partial.canFinishMeasuredSurface
+                      ? "Measured result needs review"
                       : "Scan is not ready to finish"}
                   </strong>
                   <p>
                     {partial.pointCount.toLocaleString()} points across{" "}
                     {partial.coverage}% of the view sweep.{" "}
-                    {partial.canAcceptMeasuredGaps
-                      ? "The measured geometry passed structural validation, but some regions have no reliable depth."
+                    {partial.canFinishMeasuredSurface
+                      ? "A real measured mesh was reconstructed. Automatic checks found possible gaps or alignment issues, so review the result before accepting it."
                       : "No result was created because the measured geometry did not pass validation."}
                   </p>
                   <p>
@@ -721,13 +725,13 @@ export default function ScannerPanel({
                     >
                       Keep scanning
                     </button>
-                    {partial.canAcceptMeasuredGaps && (
+                    {partial.canFinishMeasuredSurface && (
                       <button
                         className="ss-primary"
                         disabled={busy}
                         onClick={acceptMeasuredGaps}
                       >
-                        Finish with measured gaps
+                        Review measured result
                       </button>
                     )}
                     <button disabled={busy} onClick={cancelScan}>

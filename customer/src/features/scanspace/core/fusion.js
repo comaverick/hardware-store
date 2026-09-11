@@ -2347,7 +2347,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     options.maxKeyframes || 40,
   );
   const stages = {
-    algorithmVersion: 18,
+    algorithmVersion: 19,
     completionMode: options.completionMode === "surface" ? "surface" : "room",
     reconstructionProfile: options.reconstructionProfile || "quality",
     supportMode: "translated-camera-viewpoints",
@@ -2403,6 +2403,9 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     });
   const bounds = sampleBounds(samples);
   let volume = makeVolume(bounds, options);
+  const volumeVoxelSize = volume.voxelSize;
+  const volumeDimensions = volume.dimensions;
+  const volumeCells = volume.values.length;
   report?.("fusing", 16, { voxelSize: volume.voxelSize, dimensions: volume.dimensions });
   const confirmedVoxels = integrateProjective(volume, usable, report);
   if (confirmedVoxels < 120)
@@ -2441,16 +2444,18 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   );
   stages.rectangularRoomModelCompatible =
     !meshOutsideRectangularRoomModel(wallStructure);
+  const surfaceCompletion = options.completionMode === "surface";
+  const measuredSurfaceWarnings = [];
+  if (stages.measuredGapWarning)
+    measuredSurfaceWarnings.push({
+      code: "missing-depth",
+      message: stages.measuredGapWarning.message,
+    });
   if (measuredSurfaceQuality && !measuredSurfaceQuality.assessed)
-    return failure(
-      `${measuredSurfaceQuality.reason} Keep one wall centered and rescan it from overlapping sideways positions.`,
-      {
-        ...stages,
-        confirmedVoxels,
-        voxelSize: volume.voxelSize,
-        rejectedUnsafeFusion: true,
-      },
-    );
+    measuredSurfaceWarnings.push({
+      code: "limited-wall-evidence",
+      message: `${measuredSurfaceQuality.reason} The available measured geometry can still be reviewed.`,
+    });
   if (measuredSurfaceQuality?.duplicateLayerLikely) {
     const repair =
       options.autoLayerRepair === false
@@ -2476,31 +2481,40 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
         minimumConsensusRatio: repair.minimumConsensusRatio,
         frameScores: repair.frameScores,
       };
-      return repaired;
+      if (repaired.mesh) return repaired;
+      measuredSurfaceWarnings.push({
+        code: "possible-overlapping-layers",
+        message:
+          "Automatic layer repair could not isolate one wall layer. The measured result may contain overlapping depth surfaces.",
+      });
+      stages.autoLayerRepair = repaired.diagnostics.autoLayerRepair;
+    } else {
+      measuredSurfaceWarnings.push({
+        code: "possible-overlapping-layers",
+        message:
+          "The depth views may contain overlapping wall layers. Review the measured result before accepting it.",
+      });
+      stages.autoLayerRepair = {
+        attempted: options.autoLayerRepair !== false,
+        succeeded: false,
+        removedFrameIds: repair?.removedFrameIds || [],
+      };
     }
-    return failure(
-      "A large part of the same wall appears in conflicting depth layers, and automatic frame repair could not isolate a reliable layer. Hold on a confirmed area and rescan slowly.",
-      {
-        ...stages,
-        confirmedVoxels,
-        voxelSize: volume.voxelSize,
-        rejectedUnsafeFusion: true,
-        autoLayerRepair: {
-          attempted: options.autoLayerRepair !== false,
-          succeeded: false,
-          removedFrameIds: repair?.removedFrameIds || [],
-        },
-      },
-    );
   }
-  if (!stages.rectangularRoomModelCompatible)
+  if (!stages.rectangularRoomModelCompatible && !surfaceCompletion)
     return failure("The measured views create curled or overlapping wall layers. Keep scanning the affected wall from overlapping sideways positions.", {
       ...stages,
       confirmedVoxels,
-      voxelSize: volume.voxelSize,
+      voxelSize: volumeVoxelSize,
       fusedSurfaceArea: surface.surfaceArea,
       fusedTriangles: surface.indices.length / 3,
       rejectedUnsafeFusion: true,
+    });
+  if (!stages.rectangularRoomModelCompatible)
+    measuredSurfaceWarnings.push({
+      code: "possible-curved-or-overlapping-surface",
+      message:
+        "Room-shape analysis marked parts of this measured surface as curved or overlapping. This can be a false positive for a partial wall; inspect the result before accepting it.",
     });
   const surfaceFailureReason = highlyFragmented
     ? "multi-view fusion only produced disconnected fragments."
@@ -2508,22 +2522,39 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   if (
     !surface.indices.length ||
     surface.surfaceArea < 0.04 ||
-    highlyFragmented
+    (highlyFragmented && !surfaceCompletion)
   )
     return failure(`${surfaceFailureReason} Keep scanning until the missing sections have repeated depth overlap.`, {
       keyframes: usable.length,
       confirmedVoxels,
-      voxelSize: volume.voxelSize,
+      voxelSize: volumeVoxelSize,
       fusedSurfaceArea: surface.surfaceArea,
       fusedTriangles: surface.indices.length / 3,
       fragmented: highlyFragmented,
       rectangularRoomModelCompatible:
         stages.rectangularRoomModelCompatible,
     });
-  surface = stages.rectangularRoomModelCompatible
+  if (highlyFragmented)
+    measuredSurfaceWarnings.push({
+      code: "fragmented-measured-surface",
+      message:
+        "The reconstruction contains disconnected measured pieces. Missing space remains open; inspect the result before accepting it.",
+    });
+  stages.measuredSurfaceWarnings = measuredSurfaceWarnings;
+  stages.measuredReviewWarning = measuredSurfaceWarnings.length
+    ? {
+        message:
+          "The measured mesh was reconstructed, but automatic review found possible gaps or alignment issues. You can inspect and finish it without generating replacement walls.",
+        issues: measuredSurfaceWarnings,
+      }
+    : null;
+  const shouldStabilize =
+    stages.rectangularRoomModelCompatible &&
+    (!surfaceCompletion || measuredSurfaceQuality?.assessed);
+  surface = shouldStabilize
     ? stabilizeDominantWalls(
         surface,
-        volume.voxelSize,
+        volumeVoxelSize,
         options.completionMode === "surface"
           ? Math.max(1, measuredSurfaceQuality?.wallCount || 1)
           : 3,
@@ -2557,9 +2588,9 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       rejectedKeyframes: prepared.length - usable.length,
       samples: samples.length,
       confirmedVoxels,
-      voxelSize: volume.voxelSize,
-      dimensions: volume.dimensions,
-      cells: volume.values.length,
+      voxelSize: volumeVoxelSize,
+      dimensions: volumeDimensions,
+      cells: volumeCells,
       triangles: mesh.triangleCount,
       surfaceArea: surface.surfaceArea,
       stabilizedPlanes: surface.stabilizedPlaneCount || 0,

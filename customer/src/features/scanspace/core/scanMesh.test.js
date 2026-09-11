@@ -513,6 +513,7 @@ test("allows validated multi-view surface fusion without a room heading sweep", 
   expect(result.diagnostics.completionMode).toBe("surface");
   expect(result.diagnostics.measuredSurfaceQuality.assessed).toBe(true);
   expect(result.diagnostics.measuredSurfaceQuality.gridCoverage).toBeGreaterThan(0.42);
+  expect(result.diagnostics.measuredReviewWarning).toBeNull();
   expect(result.diagnostics.fallback).toBeUndefined();
 });
 

@@ -29,12 +29,25 @@ export default function PartialScanReview({ scan, onRescan, onDone }) {
             For the next scan, move sideways while keeping each wall in view.
           </p>
         )}
-      {scan.measuredGapWarning && (
+      {scan.measuredReviewWarning ? (
+        <div className="ss-notice">
+          <strong>Automatic checks found possible scan issues.</strong>
+          <p>
+            This is still the real measured mesh. Inspect it before accepting;
+            ScanSpace did not add replacement wall geometry.
+          </p>
+          <ul>
+            {scan.measuredReviewWarning.issues?.map((issue) => (
+              <li key={issue.code}>{issue.message}</li>
+            ))}
+          </ul>
+        </div>
+      ) : scan.measuredGapWarning ? (
         <p className="ss-notice">
           Some regions did not provide reliable depth and remain open in this
           result. ScanSpace did not generate replacement wall geometry.
         </p>
-      )}
+      ) : null}
       <PartialScanScene scan={scan} />
       <div className="ss-partial-facts">
         <span>
