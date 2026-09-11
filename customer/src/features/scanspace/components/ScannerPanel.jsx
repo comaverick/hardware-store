@@ -154,7 +154,6 @@ export default function ScannerPanel({
     worker = useRef(),
     fusionWorker = useRef(),
     debugCapture = useRef(null),
-    pendingSurface = useRef(null),
     finished = useRef(false),
     [active, setActive] = useState(false),
     [busy, setBusy] = useState(false),
@@ -181,7 +180,6 @@ export default function ScannerPanel({
   );
   async function start() {
     debugCapture.current = null;
-    pendingSurface.current = null;
     setError("");
     setPartial(null);
     setBusy(true);
@@ -207,7 +205,6 @@ export default function ScannerPanel({
     }
   }
   async function cancelScan() {
-    pendingSurface.current = null;
     finished.current = true;
     await scanner.current?.stop();
     onCancel();
@@ -507,20 +504,6 @@ export default function ScannerPanel({
         measuredReviewWarning:
           fused.diagnostics?.measuredReviewWarning || null,
       };
-      const reviewWarning =
-        surfaceResult.measuredReviewWarning || surfaceResult.measuredGapWarning;
-      if (reviewWarning) {
-        pendingSurface.current = surfaceResult;
-        setPartial({
-          reason: reviewWarning.message,
-          pointCount: acceptedPoints.length,
-          coverage: raw.stats.coverage || 0,
-          cameraBaseline: raw.stats.cameraBaseline || 0,
-          rejectedDepthFrames: raw.stats.rejectedDepthFrames || 0,
-          canFinishMeasuredSurface: true,
-        });
-        return;
-      }
       finished.current = true;
       await scanner.current.stop();
       onSurface(surfaceResult);
@@ -531,23 +514,6 @@ export default function ScannerPanel({
       fusionWorker.current?.terminate();
       fusionWorker.current = null;
       setFusion(null);
-      setBusy(false);
-    }
-  }
-  async function acceptMeasuredGaps() {
-    const surfaceResult = pendingSurface.current;
-    if (!surfaceResult) return;
-    setBusy(true);
-    setError("");
-    try {
-      finished.current = true;
-      await scanner.current.stop();
-      pendingSurface.current = null;
-      onSurface(surfaceResult);
-    } catch (surfaceError) {
-      finished.current = false;
-      setError(surfaceError.message);
-    } finally {
       setBusy(false);
     }
   }
@@ -695,17 +661,11 @@ export default function ScannerPanel({
                 </div>
               ) : (
                 <section className="ss-partial-capture" role="status">
-                  <strong>
-                    {partial.canFinishMeasuredSurface
-                      ? "Measured result needs review"
-                      : "Scan is not ready to finish"}
-                  </strong>
+                  <strong>Scan is not ready to finish</strong>
                   <p>
                     {partial.pointCount.toLocaleString()} points across{" "}
-                    {partial.coverage}% of the view sweep.{" "}
-                    {partial.canFinishMeasuredSurface
-                      ? "A real measured mesh was reconstructed. Automatic checks found possible gaps or alignment issues, so review the result before accepting it."
-                      : "No result was created because the measured geometry did not pass validation."}
+                    {partial.coverage}% of the view sweep. No result was created
+                    because the measured geometry did not pass validation.
                   </p>
                   <p>
                     Horizontal camera-position spread: {Math.round(
@@ -718,22 +678,12 @@ export default function ScannerPanel({
                     <button
                       disabled={busy}
                       onClick={() => {
-                        pendingSurface.current = null;
                         setPartial(null);
                         scanner.current.togglePause();
                       }}
                     >
                       Keep scanning
                     </button>
-                    {partial.canFinishMeasuredSurface && (
-                      <button
-                        className="ss-primary"
-                        disabled={busy}
-                        onClick={acceptMeasuredGaps}
-                      >
-                        Review measured result
-                      </button>
-                    )}
                     <button disabled={busy} onClick={cancelScan}>
                       Cancel scan
                     </button>
