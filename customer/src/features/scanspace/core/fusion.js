@@ -969,6 +969,7 @@ function extractSurfaceNet(volume, report, options = {}) {
     unstable: 0,
     highVariance: 0,
     freeSpace: 0,
+    coherentRecovery: 0,
   };
   for (let z = 0; z < cellDepth; z++)
     for (let y = 0; y < cellHeight; y++)
@@ -1014,10 +1015,37 @@ function extractSurfaceNet(volume, report, options = {}) {
         const confirmed = corners.filter(
           reliable,
         ).length;
+        // A partial wall is often intentionally captured from only one or two
+        // translated viewpoints. Recover that measured cell when its known
+        // corners agree on one local depth layer. This does not bridge an
+        // unknown cell: four measured corners, a zero-crossing, and no free
+        // space contradiction are still required below.
+        const measuredDepths = known
+          .map((corner) => corner.meanDepth)
+          .filter(Number.isFinite);
+        const measuredDepthSpan = measuredDepths.length
+          ? Math.max(...measuredDepths) - Math.min(...measuredDepths)
+          : Infinity;
+        const repeatedContradiction = known.some((corner) => {
+          const closeRange = corner.meanDepth < 0.9;
+          const varianceLimit = closeRange
+            ? Math.max(0.028, volume.voxelSize * 0.72)
+            : Math.max(0.05, volume.voxelSize * 1.2);
+          return corner.viewpoints >= 3 && corner.variance > varianceLimit;
+        });
+        const coherentRecovery =
+          options.surfaceMode &&
+          known.length >= 4 &&
+          measuredDepths.length === known.length &&
+          measuredDepthSpan <= Math.max(0.12, volume.voxelSize * 5) &&
+          !repeatedContradiction &&
+          !known.some((corner) =>
+            corner.freeSpaceVotes >= Math.max(3, corner.weight * 1.25),
+          );
         // Four independently reliable corners are sufficient to retain a
         // boundary cell. Edge intersections below still require measured
         // endpoints, so this cannot span a genuinely unknown opening.
-        if (confirmed < 4) {
+        if (confirmed < 4 && !coherentRecovery) {
           const contradicted = known.some((corner) =>
             corner.freeSpaceVotes >= Math.max(3, corner.weight * 1.25));
           const highVariance = known.some((corner) => {
@@ -1036,6 +1064,7 @@ function extractSurfaceNet(volume, report, options = {}) {
           ]++;
           continue;
         }
+        if (confirmed < 4) rejectionCounts.coherentRecovery++;
         const negative = known.some((corner) => corner.value < 0);
         const positive = known.some((corner) => corner.value >= 0);
         if (!negative || !positive) continue;
@@ -2648,11 +2677,14 @@ function texturedMesh(mesh, frames) {
             closestDepth = measured;
           }
         }
-      if (
-        !closestDepth ||
-        closestAgreement > Math.max(0.055, closestDepth * 0.03)
-      )
+      const strictTextureLimit = Math.max(0.055, closestDepth * 0.03);
+      // TSDF smoothing can move a valid triangle a few centimeters away from
+      // the source depth pixel. Permit a bounded soft match only when no
+      // strict camera exists; large disagreements still receive no texture.
+      const softTextureLimit = Math.max(0.09, closestDepth * 0.05);
+      if (!closestDepth || closestAgreement > softTextureLimit)
         return;
+      const softVisibility = closestAgreement > strictTextureLimit;
       const dx = frame.transformMatrix[12] - center.x;
       const dy = frame.transformMatrix[13] - center.y;
       const dz = frame.transformMatrix[14] - center.z;
@@ -2682,14 +2714,22 @@ function texturedMesh(mesh, frames) {
           sharpness * 0.65 -
           closestAgreement * 5 -
           motionPenalty * 0.4 -
-          texturePenalty * 0.85,
+          texturePenalty * 0.85 -
+          (softVisibility ? 1.15 : 0),
+        softVisibility,
       });
     });
-    candidates.sort((left, right) => right.score - left.score);
+    const strictCandidates = candidates.filter(
+      (candidate) => !candidate.softVisibility,
+    );
+    const acceptedCandidates = strictCandidates.length
+      ? strictCandidates
+      : candidates;
+    acceptedCandidates.sort((left, right) => right.score - left.score);
     const record = {
       triangle,
       faceNormal,
-      candidates: candidates.slice(0, 3),
+      candidates: acceptedCandidates.slice(0, 3),
       selected: 0,
     };
     const recordIndex = records.length;
@@ -2789,10 +2829,14 @@ function texturedMesh(mesh, frames) {
   const uvs = [];
   const indices = [];
   let texturedTriangles = 0;
+  let textureFallbackTriangles = 0;
   records.forEach((record) => {
     const triangle = record.triangle;
     const best = record.candidates[record.selected] || null;
-    if (best) texturedTriangles++;
+    if (best) {
+      texturedTriangles++;
+      if (best.softVisibility) textureFallbackTriangles++;
+    }
     triangle.forEach((vertex, corner) => {
       const target = positions.length / 3;
       positions.push(mesh.positions[vertex * 3], mesh.positions[vertex * 3 + 1], mesh.positions[vertex * 3 + 2]);
@@ -2827,6 +2871,7 @@ function texturedMesh(mesh, frames) {
     indices: new Uint32Array(indices),
     texture: { data: atlas.data, width: atlas.width, height: atlas.height },
     textureCoverage: mesh.indices.length ? Math.round(texturedTriangles / (mesh.indices.length / 3) * 100) : 0,
+    textureFallbackTriangles,
     texturePatchCount,
     photometricNormalization: atlas.photometricNormalization,
   };
@@ -3187,6 +3232,8 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       voxelSize: volumeVoxelSize,
       dimensions: volumeDimensions,
       cells: volumeCells,
+      coherentRecoveryCells: surface.rejectionCounts?.coherentRecovery || 0,
+      highVarianceRejectedCells: surface.rejectionCounts?.highVariance || 0,
       triangles: mesh.triangleCount,
       surfaceArea: surface.surfaceArea,
       stabilizedPlanes:
@@ -3205,6 +3252,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       filledHoleCount: surface.filledHoleCount || 0,
       filledHoleTriangles: surface.filledHoleTriangles || 0,
       textureCoverage: mesh.textureCoverage,
+      textureFallbackTriangles: mesh.textureFallbackTriangles || 0,
       texturePatchCount: mesh.texturePatchCount || 0,
       photometricNormalization: mesh.photometricNormalization || "none",
     },
