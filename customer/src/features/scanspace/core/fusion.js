@@ -984,7 +984,10 @@ function extractSurfaceNet(volume, report, options = {}) {
         const reliable = (corner) => {
           const closeRange = corner.meanDepth < 0.9;
           const requiredViews = options.surfaceMode
-            ? (closeRange ? 4 : 3)
+            // Most real walls have only two useful translated depth views.
+            // Requiring a third far-range view discarded large valid regions
+            // when the user scanned a wall from one side to the other.
+            ? (closeRange ? 4 : 2)
             : (closeRange ? 4 : 2);
           // Partial measured surfaces must not average incompatible depth
           // layers into a smooth-looking but physically bent sheet. The
@@ -992,17 +995,19 @@ function extractSurfaceNet(volume, report, options = {}) {
           // uncertain reflective measurements remain open instead.
           const varianceLimit = options.surfaceMode
             ? closeRange
-              ? Math.max(0.024, volume.voxelSize * 0.62)
-              : Math.max(0.04, volume.voxelSize * 1.05)
+              ? Math.max(0.028, volume.voxelSize * 0.72)
+              : Math.max(0.05, volume.voxelSize * 1.2)
             : closeRange
               ? Math.max(0.032, volume.voxelSize * 0.8)
               : Math.max(0.055, volume.voxelSize * 1.35);
           const contradictedByFreeSpace =
             corner.freeSpaceVotes >= Math.max(3, corner.weight * 1.25);
+          const repeatedVariance =
+            corner.viewpoints >= (options.surfaceMode ? 3 : 2);
           return (
             corner.weight >= requiredViews &&
             corner.viewpoints >= 2 &&
-            corner.variance <= varianceLimit &&
+            (!repeatedVariance || corner.variance <= varianceLimit) &&
             !contradictedByFreeSpace
           );
         };
@@ -1019,12 +1024,12 @@ function extractSurfaceNet(volume, report, options = {}) {
             const closeRange = corner.meanDepth < 0.9;
             const varianceLimit = options.surfaceMode
               ? closeRange
-                ? Math.max(0.024, volume.voxelSize * 0.62)
-                : Math.max(0.04, volume.voxelSize * 1.05)
+                ? Math.max(0.028, volume.voxelSize * 0.72)
+                : Math.max(0.05, volume.voxelSize * 1.2)
               : closeRange
                 ? Math.max(0.032, volume.voxelSize * 0.8)
                 : Math.max(0.055, volume.voxelSize * 1.35);
-            return corner.viewpoints >= 2 && corner.variance > varianceLimit;
+            return corner.viewpoints >= 3 && corner.variance > varianceLimit;
           });
           rejectionCounts[
             contradicted ? "freeSpace" : highVariance ? "highVariance" : "unstable"
@@ -1039,7 +1044,10 @@ function extractSurfaceNet(volume, report, options = {}) {
           const first = corners[firstIndex];
           const second = corners[secondIndex];
           if (first.weight < 1 || second.weight < 1) return;
-          if (options.surfaceMode && (!reliable(first) || !reliable(second))) return;
+          // The cell already has four independently reliable corners. Do not
+          // require both edge endpoints to pass the multi-view test: that
+          // erased valid boundary triangles when one camera saw an edge or a
+          // reflective patch only once.
           if ((first.value < 0) === (second.value < 0)) return;
           const amount = clamp(first.value / (first.value - second.value), 0, 1);
           intersections.push({
@@ -2982,7 +2990,15 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   );
   stages.rectangularRoomModelCompatible =
     !meshOutsideRectangularRoomModel(wallStructure);
-  if (surfaceCompletion && options.globalSurfaceConsensus !== false) {
+  // A wall-ratio consensus pass is useful for a detected duplicate layer,
+  // but it is unsafe as a general coverage filter: legitimate side-to-side
+  // views often see different portions of one wall. Keep those views unless
+  // the measured result actually reports competing layers.
+  if (
+    surfaceCompletion &&
+    options.globalSurfaceConsensus !== false &&
+    measuredSurfaceQuality?.duplicateLayerLikely
+  ) {
     const repair = wallConsensusKeyframes(usable, measuredSurfaceQuality, {
       distanceTolerance: 0.055,
       minimumAbsoluteRatio: 0.06,
