@@ -8,6 +8,7 @@ import {
   imageColorStatistics,
   imageSharpness,
   sampleProjectiveDepth,
+  sampleLooksLikeVerticalPatch,
   meshFragmentationIsUnacceptable,
   meshOutsideRectangularRoomModel,
   meshWallStructureDiagnostics,
@@ -408,6 +409,28 @@ test("texture color statistics ignore clipped glare and retain channel balance",
   expect(statistics.samples).toBe(2);
   expect(statistics.channels[0]).toBeGreaterThan(statistics.channels[1]);
   expect(statistics.channels[1]).toBeGreaterThan(statistics.channels[2]);
+});
+
+test("minority-layer filtering is limited to locally vertical surfaces", () => {
+  const preparedPatch = (horizontal) => {
+    const positions = [];
+    for (let y = 0; y < 3; y++)
+      for (let x = 0; x < 3; x++)
+        positions.push(
+          x - 1,
+          horizontal ? 1 : 1 - y,
+          horizontal ? y - 1 : -2,
+        );
+    return {
+      columns: 3,
+      rows: 3,
+      filteredDepth: new Float32Array(9).fill(2),
+      measuredMask: new Uint8Array(9).fill(1),
+      positions: new Float32Array(positions),
+    };
+  };
+  expect(sampleLooksLikeVerticalPatch(preparedPatch(false), 4)).toBe(true);
+  expect(sampleLooksLikeVerticalPatch(preparedPatch(true), 4)).toBe(false);
 });
 
 test("surface quality keeps a localized parallel furniture front", () => {

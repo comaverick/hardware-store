@@ -601,6 +601,56 @@ function validateFrameOverlap(frames, diagnostics = {}, limits = {}) {
   return strongest.sort((left, right) => left - right).map((index) => frames[index]);
 }
 
+export function sampleLooksLikeVerticalPatch(frame, index) {
+  const x = index % frame.columns;
+  const y = Math.floor(index / frame.columns);
+  if (!x || !y || x === frame.columns - 1 || y === frame.rows - 1)
+    return false;
+  const neighbors = [
+    index - 1,
+    index + 1,
+    index - frame.columns,
+    index + frame.columns,
+  ];
+  const centerDepth = frame.filteredDepth[index];
+  const depthLimit = Math.max(0.065, centerDepth * 0.035);
+  if (
+    !centerDepth ||
+    neighbors.some(
+      (neighbor) =>
+        !frame.measuredMask[neighbor] ||
+        !frame.filteredDepth[neighbor] ||
+        Math.abs(frame.filteredDepth[neighbor] - centerDepth) > depthLimit,
+    )
+  )
+    return false;
+  const point = (sample) => {
+    const offset = sample * 3;
+    return [
+      frame.positions[offset],
+      frame.positions[offset + 1],
+      frame.positions[offset + 2],
+    ];
+  };
+  const left = point(index - 1);
+  const right = point(index + 1);
+  const up = point(index - frame.columns);
+  const down = point(index + frame.columns);
+  if (![...left, ...right, ...up, ...down].every(Number.isFinite)) return false;
+  const horizontal = right.map((value, axis) => value - left[axis]);
+  const vertical = down.map((value, axis) => value - up[axis]);
+  const normal = [
+    horizontal[1] * vertical[2] - horizontal[2] * vertical[1],
+    horizontal[2] * vertical[0] - horizontal[0] * vertical[2],
+    horizontal[0] * vertical[1] - horizontal[1] * vertical[0],
+  ];
+  const normalLength = Math.hypot(...normal);
+  if (normalLength < 1e-6) return false;
+  // A wall normal is mostly horizontal. This prevents an outvoted shelf,
+  // tabletop, floor, or ceiling measurement from being mistaken for glare.
+  return Math.abs(normal[1] / normalLength) <= 0.5;
+}
+
 // Remove only a clearly outvoted front depth layer before TSDF fusion. A
 // sample is kept when another independent view supports it, when too few views
 // cover it, or when other views merely contain a foreground occluder. This
@@ -613,6 +663,7 @@ export function suppressMinorityFrontLayers(frames) {
     rejectedSamples: 0,
     unsupportedRejectedSamples: 0,
     weakMinorityRejectedSamples: 0,
+    cappedFrames: 0,
     frameRejections: [],
   };
   if (frames.length < 4) return { frames, diagnostics };
@@ -629,6 +680,7 @@ export function suppressMinorityFrontLayers(frames) {
   frames.forEach((frame, frameIndex) => {
     for (let index = 0; index < frame.filteredDepth.length; index++) {
       if (!frame.filteredDepth[index] || !frame.measuredMask[index]) continue;
+      if (!sampleLooksLikeVerticalPatch(frame, index)) continue;
       const offset = index * 3;
       const point = [
         frame.positions[offset],
@@ -679,24 +731,41 @@ export function suppressMinorityFrontLayers(frames) {
       const weakMinority =
         agreeing === 1 && freeSpaceContradictions >= 5;
       if (!unsupportedMinority && !weakMinority) continue;
-      rejectedByFrame[frameIndex].push(index);
-      diagnostics.rejectedSamples++;
-      if (unsupportedMinority) diagnostics.unsupportedRejectedSamples++;
-      else diagnostics.weakMinorityRejectedSamples++;
+      rejectedByFrame[frameIndex].push({ index, unsupportedMinority });
     }
   });
   const filteredFrames = frames.map((frame, frameIndex) => {
-    const rejected = rejectedByFrame[frameIndex];
+    let rejected = rejectedByFrame[frameIndex];
+    const measuredSamples = frame.measuredMask.reduce(
+      (sum, measured) => sum + measured,
+      0,
+    );
+    const rejectionLimit = Math.max(16, Math.floor(measuredSamples * 0.12));
+    const capped = rejected.length > rejectionLimit;
+    // Layer voting is a small-artifact filter, not a frame eraser. If its
+    // verdict would remove a meaningful portion of a capture, retain that
+    // capture and let the normal multi-view fusion checks resolve it.
+    if (capped) {
+      diagnostics.cappedFrames++;
+      rejected = [];
+    }
+    rejected.forEach(({ unsupportedMinority }) => {
+      diagnostics.rejectedSamples++;
+      if (unsupportedMinority) diagnostics.unsupportedRejectedSamples++;
+      else diagnostics.weakMinorityRejectedSamples++;
+    });
     diagnostics.frameRejections.push({
       frameId: frame.frameId,
       rejectedSamples: rejected.length,
+      candidateSamples: rejectedByFrame[frameIndex].length,
+      capped,
     });
     if (!rejected.length) return frame;
     const filteredDepth = new Float32Array(frame.filteredDepth);
     const measuredMask = new Uint8Array(frame.measuredMask);
     const freeSpaceMask = new Uint8Array(frame.freeSpaceMask);
     const depthConfidence = new Uint8Array(frame.depthConfidence);
-    rejected.forEach((index) => {
+    rejected.forEach(({ index }) => {
       filteredDepth[index] = 0;
       measuredMask[index] = 0;
       freeSpaceMask[index] = 0;
@@ -2495,17 +2564,17 @@ function buildAtlas(frames) {
   const validStatistics = images
     .map((frame) => frame.textureColorStatistics)
     .filter(Boolean);
+  const median = (values) => {
+    const ranked = [...values].sort((left, right) => left - right);
+    return ranked[Math.floor(ranked.length / 2)];
+  };
   const globalLuminance = validStatistics.length
-    ? validStatistics.reduce((sum, stats) => sum + stats.luminance, 0) /
-      validStatistics.length
+    ? median(validStatistics.map((stats) => stats.luminance))
     : images.reduce((sum, frame) => sum + imageLuminance(frame), 0) /
       images.length;
   const globalChannels = [0, 1, 2].map((channel) =>
     validStatistics.length
-      ? validStatistics.reduce(
-          (sum, stats) => sum + stats.channels[channel],
-          0,
-        ) / validStatistics.length
+      ? median(validStatistics.map((stats) => stats.channels[channel]))
       : globalLuminance,
   );
   images.forEach((frame, tile) => {
@@ -2513,8 +2582,8 @@ function buildAtlas(frames) {
     const frameLuminance = statistics?.luminance || imageLuminance(frame);
     const exposure = clamp(
       globalLuminance / Math.max(24, frameLuminance),
-      0.8,
-      1.22,
+      0.86,
+      1.16,
     );
     const channelScales = [0, 1, 2].map((channel) => {
       if (!statistics) return exposure;
@@ -2524,10 +2593,10 @@ function buildAtlas(frames) {
         statistics.channels[channel] / Math.max(1, frameLuminance);
       const whiteBalance = clamp(
         globalChromaticity / Math.max(0.01, frameChromaticity),
-        0.9,
-        1.1,
+        0.94,
+        1.06,
       );
-      return clamp(exposure * whiteBalance, 0.78, 1.25);
+      return clamp(exposure * whiteBalance, 0.84, 1.18);
     });
     const tileX = tile % columns;
     const tileY = Math.floor(tile / columns);
@@ -2579,7 +2648,7 @@ function buildAtlas(frames) {
     columns,
     frames: images,
     referenceSharpness,
-    photometricNormalization: "bounded-exposure-white-balance",
+    photometricNormalization: "median-bounded-exposure-white-balance",
   };
 }
 
@@ -2792,9 +2861,9 @@ function texturedMesh(mesh, frames) {
         score:
           facing * 2 +
           1 / distance +
-          sharpness * 0.65 -
+          sharpness * 0.85 -
           closestAgreement * 5 -
-          motionPenalty * 0.4 -
+          motionPenalty * 0.55 -
           texturePenalty * 0.85,
       });
     });
@@ -2802,7 +2871,7 @@ function texturedMesh(mesh, frames) {
     const record = {
       triangle,
       faceNormal,
-      candidates: candidates.slice(0, 3),
+      candidates: candidates.slice(0, 4),
       selected: 0,
     };
     const recordIndex = records.length;
@@ -2861,7 +2930,7 @@ function texturedMesh(mesh, frames) {
               current.faceNormal.y * neighbor.faceNormal.y +
               current.faceNormal.z * neighbor.faceNormal.z,
           );
-          if (alignment < 0.94) return;
+          if (alignment < 0.9) return;
           visitedRecords[neighborIndex] = 1;
           queue.push(neighborIndex);
         }),
@@ -2883,11 +2952,11 @@ function texturedMesh(mesh, frames) {
       let selected = record.selected;
       let selectedScore = -Infinity;
       record.candidates.forEach((candidate, candidateIndex) => {
-        if (candidate.score < bestLocalScore - 0.65) return;
+        if (candidate.score < bestLocalScore - 0.72) return;
         const coverage =
           (frameCoverage.get(candidate.frame.textureId) || 0) /
           component.length;
-        const score = candidate.score + Math.min(1, coverage) * 0.95;
+        const score = candidate.score + Math.min(1, coverage) * 1.2;
         if (score > selectedScore) {
           selected = candidateIndex;
           selectedScore = score;
@@ -2896,6 +2965,35 @@ function texturedMesh(mesh, frames) {
       record.selected = selected;
     });
   }
+  // Patch selection can leave a few isolated triangles on a different valid
+  // camera. Two final local passes remove those visible stripes while keeping
+  // every choice inside the original depth-tested candidate set.
+  for (let pass = 0; pass < 2; pass++)
+    records.forEach((record, recordIndex) => {
+      if (record.candidates.length < 2) return;
+      const votes = new Map();
+      record.triangle.forEach((vertex) =>
+        vertexTriangles[vertex].forEach((neighborIndex) => {
+          if (neighborIndex === recordIndex) return;
+          const neighbor = records[neighborIndex];
+          const frame = neighbor.candidates[neighbor.selected]?.frame;
+          if (frame)
+            votes.set(frame.textureId, (votes.get(frame.textureId) || 0) + 1);
+        }),
+      );
+      let selected = record.selected;
+      let selectedScore = -Infinity;
+      record.candidates.forEach((candidate, candidateIndex) => {
+        const score =
+          candidate.score +
+          (votes.get(candidate.frame.textureId) || 0) * 0.82;
+        if (score > selectedScore) {
+          selected = candidateIndex;
+          selectedScore = score;
+        }
+      });
+      record.selected = selected;
+    });
   const positions = [];
   const normals = [];
   const colors = [];
@@ -3006,7 +3104,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   if (localLayerConsensus.diagnostics)
     alignment.localLayerConsensus = localLayerConsensus.diagnostics;
   const stages = {
-    algorithmVersion: 23,
+    algorithmVersion: 24,
     completionMode: options.completionMode === "surface" ? "surface" : "room",
     reconstructionProfile: options.reconstructionProfile || "quality",
     supportMode: "translated-camera-viewpoints",
@@ -3260,13 +3358,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
         issues: measuredSurfaceWarnings,
       }
     : null;
-  if (surfaceCompletion && measuredSurfaceQuality?.assessed)
-    surface = stabilizeMeasuredWallSectors(
-      surface,
-      measuredSurfaceQuality.walls,
-      volumeVoxelSize,
-    );
-  else if (stages.rectangularRoomModelCompatible)
+  if (!surfaceCompletion && stages.rectangularRoomModelCompatible)
     surface = stabilizeDominantWalls(
         surface,
         volumeVoxelSize,
@@ -3279,6 +3371,15 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       (options.completionMode === "surface" ? 2 : 3),
     volumeVoxelSize,
   );
+  // Smooth first, then return supported wall vertices to their measured plane.
+  // The previous order allowed the smoothing pass to reintroduce bowed trim
+  // and wall lines immediately after they had been straightened.
+  if (surfaceCompletion && measuredSurfaceQuality?.assessed)
+    surface = stabilizeMeasuredWallSectors(
+      surface,
+      measuredSurfaceQuality.walls,
+      volumeVoxelSize,
+    );
   if (surfaceCompletion)
     surface = stabilizeMeasuredHorizontalSurfaces(
       surface,
