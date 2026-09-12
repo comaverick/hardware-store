@@ -1,5 +1,5 @@
 import { PerspectiveCamera, Matrix4 } from "three";
-import { RoomScanner } from "./RoomScanner";
+import { coveragePreviewSize, RoomScanner } from "./RoomScanner";
 
 test("stationary unsaved frames cannot turn the preview green", () => {
   const scanner = new RoomScanner({ onUpdate: () => {} });
@@ -41,6 +41,12 @@ test("stationary unsaved frames cannot turn the preview green", () => {
   scanner.frame(5000, frame);
   expect(scanner.keyframes).toHaveLength(2);
   expect(scanner.stats.errors).toEqual([]);
+});
+
+test("confirmed coverage splats overlap a normal preview voxel without becoming huge", () => {
+  expect(coveragePreviewSize(0.08)).toBeGreaterThan(0.08);
+  expect(coveragePreviewSize(0.08)).toBeLessThanOrEqual(0.12);
+  expect(coveragePreviewSize(0.18)).toBeLessThanOrEqual(0.22);
 });
 
 test("higher-resolution texture snapshots stay bounded without dropping depth frames", () => {

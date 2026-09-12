@@ -9,19 +9,26 @@ import {
 import { depthFrameQuality } from "../core/readiness";
 import { createCameraColorReader } from "./cameraColor";
 
-function roundPointTexture() {
+function coverageSplatTexture() {
   const canvas = document.createElement("canvas");
-  canvas.width = 32;
-  canvas.height = 32;
+  canvas.width = 64;
+  canvas.height = 64;
   const context = canvas.getContext("2d");
-  context.clearRect(0, 0, 32, 32);
-  context.beginPath();
-  context.arc(16, 16, 13, 0, Math.PI * 2);
-  context.fillStyle = "#fff";
-  context.fill();
+  context.clearRect(0, 0, 64, 64);
+  const gradient = context.createRadialGradient(32, 32, 12, 32, 32, 32);
+  gradient.addColorStop(0, "rgba(255,255,255,1)");
+  gradient.addColorStop(0.72, "rgba(255,255,255,0.96)");
+  gradient.addColorStop(0.9, "rgba(255,255,255,0.64)");
+  gradient.addColorStop(1, "rgba(255,255,255,0)");
+  context.fillStyle = gradient;
+  context.fillRect(0, 0, 64, 64);
   const texture = new THREE.CanvasTexture(canvas);
   texture.needsUpdate = true;
   return texture;
+}
+
+export function coveragePreviewSize(voxelSize = 0.08) {
+  return Math.max(0.09, Math.min(0.22, voxelSize * 1.5));
 }
 
 export class RoomScanner {
@@ -154,19 +161,19 @@ export class RoomScanner {
         new THREE.BufferAttribute(this.colors, 3),
       );
       this.pointGeometry.setDrawRange(0, 0);
-      this.pointTexture = roundPointTexture();
-      const points = new THREE.Points(
-        this.pointGeometry,
-        new THREE.PointsMaterial({
-          size: 0.018,
-          vertexColors: true,
-          map: this.pointTexture,
-          alphaTest: 0.35,
-          transparent: true,
-          opacity: 0.94,
-          depthWrite: false,
-        }),
-      );
+      this.pointTexture = coverageSplatTexture();
+      this.coverageMaterial = new THREE.PointsMaterial({
+        size: coveragePreviewSize(this.cloud.size),
+        sizeAttenuation: true,
+        vertexColors: true,
+        map: this.pointTexture,
+        alphaTest: 0.01,
+        transparent: true,
+        opacity: 0.22,
+        depthWrite: false,
+        toneMapped: false,
+      });
+      const points = new THREE.Points(this.pointGeometry, this.coverageMaterial);
       points.frustumCulled = false;
       this.scene.add(points);
       if (typeof window.XRWebGLBinding === "function")
@@ -350,7 +357,9 @@ export class RoomScanner {
   updatePreview() {
     const allPoints = this.cloud.values();
     const points = allPoints.filter((point) => point.hits >= 2);
-    const stride = Math.max(1, Math.ceil(points.length / 9000));
+    const stride = Math.max(1, Math.ceil(points.length / 12000));
+    if (this.coverageMaterial)
+      this.coverageMaterial.size = coveragePreviewSize(this.cloud.size);
     let count = 0;
     for (let i = 0; i < points.length; i += stride) {
       const p = points[i];

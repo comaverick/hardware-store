@@ -123,17 +123,17 @@ function captureTargetState(stats, busy = false) {
       label: "Move slowly sideways",
       hint: "Keep this surface in view as you move",
     };
-  if ((stats.currentConfirmedRatio || 0) >= 0.7)
+  if ((stats.currentConfirmedRatio || 0) >= 0.85)
     return {
       tone: "complete",
-      label: "Depth overlap saved",
-      hint: "Revisit clear patches from another position",
+      label: "Area confirmed",
+      hint: "Move to any untinted gap",
     };
   if ((stats.currentConfirmedRatio || 0) >= 0.2)
     return {
       tone: "active",
-      label: "Building coverage",
-      hint: "Keep moving slowly sideways",
+      label: "Coverage filling",
+      hint: "Tint the remaining clear areas",
     };
   return {
     tone: "pending",
@@ -563,9 +563,9 @@ export default function ScannerPanel({
             <div className="ss-scan-live">
               <div>
                 <strong>
-                  {(stats.stablePointCount || 0).toLocaleString()}
+                  {Math.round((stats.currentConfirmedRatio || 0) * 100)}%
                 </strong>
-                <span>stable surface points</span>
+                <span>current view confirmed</span>
               </div>
               <div>
                 <strong>{stats.floorAutoDetected ? "Ready" : "Finding"}</strong>
@@ -584,7 +584,7 @@ export default function ScannerPanel({
             </div>
             <div className="ss-scan-area-key" aria-label="Scanned area legend">
               <span>
-                <i className="is-observed" /> Bright circles = saved depth overlap
+                <i className="is-observed" /> Translucent mint = confirmed depth overlap
               </span>
             </div>
             <div
@@ -616,8 +616,9 @@ export default function ScannerPanel({
                 {partial
                   ? "The existing capture is still available; no wall was generated."
                   : captureGuidance(stats, busy)}{" "}
-                Mint circles mark repeated depth
-                in saved views. Reconstruction still checks their agreement.
+                Mint coverage marks areas confirmed from multiple saved views.
+                Keep moving until the visible surface is evenly tinted; clear
+                gaps still need another angle.
               </p>
               {!busy && !partial && !readiness.ready && (
                 <p className="ss-scan-hint">
