@@ -807,17 +807,17 @@ function makeVolume(bounds, options) {
   const maxRange = Math.max(...ranges);
   const surfaceMode = options.completionMode === "surface";
   const maxDimension = clamp(
-    options.maxDimension || (surfaceMode ? 144 : 96),
+    options.maxDimension || (surfaceMode ? 156 : 96),
     64,
     surfaceMode ? 160 : 112,
   );
   let voxelSize = Math.max(
-    options.minVoxelSize || (surfaceMode ? 0.025 : 0.04),
+    options.minVoxelSize || (surfaceMode ? 0.022 : 0.04),
     maxRange / (maxDimension - 5),
   );
   const dimensionsFor = () => ranges.map((range) => Math.max(5, Math.ceil((range + voxelSize * 4) / voxelSize) + 1));
   let dimensions = dimensionsFor();
-  const maxCells = options.maxCells || (surfaceMode ? 1200000 : 700000);
+  const maxCells = options.maxCells || (surfaceMode ? 1450000 : 700000);
   const cellCount = () => dimensions[0] * dimensions[1] * dimensions[2];
   if (cellCount() > maxCells) {
     voxelSize *= Math.cbrt(cellCount() / maxCells) * 1.01;
@@ -2981,6 +2981,14 @@ function texturedMesh(mesh, frames) {
   const atlas = buildAtlas(frames);
   const sharedNormals = computeNormals(mesh);
   if (!atlas) return { ...mesh, normals: sharedNormals, textureCoverage: 0 };
+  const projectionPositions =
+    mesh.textureProjectionPositions?.length === mesh.positions.length
+      ? mesh.textureProjectionPositions
+      : mesh.positions;
+  const textureProjectionMode =
+    projectionPositions === mesh.positions
+      ? "mesh-positions"
+      : "pre-correction-measured-positions";
   atlas.frames.forEach((frame, textureId) => { frame.textureId = textureId; });
   const records = [];
   const vertexTriangles = Array.from(
@@ -2990,9 +2998,9 @@ function texturedMesh(mesh, frames) {
   for (let index = 0; index < mesh.indices.length; index += 3) {
     const triangle = [mesh.indices[index], mesh.indices[index + 1], mesh.indices[index + 2]];
     const center = triangle.reduce((value, vertex) => ({
-      x: value.x + mesh.positions[vertex * 3] / 3,
-      y: value.y + mesh.positions[vertex * 3 + 1] / 3,
-      z: value.z + mesh.positions[vertex * 3 + 2] / 3,
+      x: value.x + projectionPositions[vertex * 3] / 3,
+      y: value.y + projectionPositions[vertex * 3 + 1] / 3,
+      z: value.z + projectionPositions[vertex * 3 + 2] / 3,
     }), { x: 0, y: 0, z: 0 });
     const normal = triangle.reduce((value, vertex) => ({
       x: value.x + sharedNormals[vertex * 3] / 3,
@@ -3051,9 +3059,9 @@ function texturedMesh(mesh, frames) {
         return;
       const colorProjections = triangle.map((vertex) => projectColorWorld(
         frame,
-        mesh.positions[vertex * 3],
-        mesh.positions[vertex * 3 + 1],
-        mesh.positions[vertex * 3 + 2],
+        projectionPositions[vertex * 3],
+        projectionPositions[vertex * 3 + 1],
+        projectionPositions[vertex * 3 + 2],
       ));
       if (colorProjections.some((value) =>
         !value || value.u < 0.01 || value.v < 0.01 || value.u > 0.99 || value.v > 0.99)) return;
@@ -3068,12 +3076,15 @@ function texturedMesh(mesh, frames) {
       const centerY = Math.floor(depthIndex / frame.columns);
       let closestAgreement = Infinity;
       let closestDepth = 0;
+      let closestRadius = Infinity;
       // Mesh vertices can land just across a depth-pixel boundary after TSDF
-      // smoothing. Check the immediate neighborhood rather than incorrectly
-      // declaring that otherwise visible triangle untextured.
-      for (let offsetY = -1; offsetY <= 1; offsetY++)
-        for (let offsetX = -1; offsetX <= 1; offsetX++) {
-          if (Math.abs(offsetX) + Math.abs(offsetY) > 1) continue;
+      // extraction. A two-pixel diamond can recover texture for an existing
+      // edge triangle, but its depth still has to agree with the triangle's
+      // original measured position. This cannot create or bridge geometry.
+      for (let offsetY = -2; offsetY <= 2; offsetY++)
+        for (let offsetX = -2; offsetX <= 2; offsetX++) {
+          const radius = Math.abs(offsetX) + Math.abs(offsetY);
+          if (radius > 2) continue;
           const x = centerX + offsetX;
           const y = centerY + offsetY;
           if (x < 0 || y < 0 || x >= frame.columns || y >= frame.rows) continue;
@@ -3083,6 +3094,7 @@ function texturedMesh(mesh, frames) {
           if (difference < closestAgreement) {
             closestAgreement = difference;
             closestDepth = measured;
+            closestRadius = radius;
           }
         }
       if (
@@ -3128,12 +3140,14 @@ function texturedMesh(mesh, frames) {
         frame,
         projections: colorProjections,
         sampledColor,
+        recoveredTexture: closestRadius > 1,
         score:
           facing * 2 +
           1 / distance +
           sharpness * 0.72 +
           localSharpness * 0.48 -
           closestAgreement * 5 -
+          Math.max(0, closestRadius - 1) * 0.18 -
           motionPenalty * 0.68 -
           texturePenalty * 1.05,
       });
@@ -3290,10 +3304,12 @@ function texturedMesh(mesh, frames) {
   const uvs = [];
   const indices = [];
   let texturedTriangles = 0;
+  let recoveredTextureTriangles = 0;
   records.forEach((record) => {
     const triangle = record.triangle;
     const best = record.candidates[record.selected] || null;
     if (best) texturedTriangles++;
+    if (best?.recoveredTexture) recoveredTextureTriangles++;
     triangle.forEach((vertex, corner) => {
       const target = positions.length / 3;
       positions.push(mesh.positions[vertex * 3], mesh.positions[vertex * 3 + 1], mesh.positions[vertex * 3 + 2]);
@@ -3328,6 +3344,8 @@ function texturedMesh(mesh, frames) {
     indices: new Uint32Array(indices),
     texture: { data: atlas.data, width: atlas.width, height: atlas.height },
     textureCoverage: mesh.indices.length ? Math.round(texturedTriangles / (mesh.indices.length / 3) * 100) : 0,
+    recoveredTextureTriangles,
+    textureProjectionMode,
     texturePatchCount,
     textureCalibrationPairs: atlas.photometricPairCount,
     photometricNormalization: atlas.photometricNormalization,
@@ -3395,7 +3413,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   if (localLayerConsensus.diagnostics)
     alignment.localLayerConsensus = localLayerConsensus.diagnostics;
   const stages = {
-    algorithmVersion: 27,
+    algorithmVersion: 28,
     completionMode: options.completionMode === "surface" ? "surface" : "room",
     reconstructionProfile: options.reconstructionProfile || "quality",
     supportMode: "translated-camera-viewpoints",
@@ -3653,6 +3671,15 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
         issues: measuredSurfaceWarnings,
       }
     : null;
+  // Texture projection must refer to the measured surface that the cameras
+  // actually saw. Geometry smoothing and supported-plane stabilization move
+  // those same vertices slightly; projecting the corrected positions back
+  // into the original frames caused valid edge triangles to lose texture and
+  // made neighboring image patches appear disconnected.
+  surface = {
+    ...surface,
+    textureProjectionPositions: new Float32Array(surface.positions),
+  };
   if (!surfaceCompletion && stages.rectangularRoomModelCompatible)
     surface = stabilizeDominantWalls(
         surface,
@@ -3725,6 +3752,8 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       filledHoleCount: surface.filledHoleCount || 0,
       filledHoleTriangles: surface.filledHoleTriangles || 0,
       textureCoverage: mesh.textureCoverage,
+      recoveredTextureTriangles: mesh.recoveredTextureTriangles || 0,
+      textureProjectionMode: mesh.textureProjectionMode || "mesh-positions",
       texturePatchCount: mesh.texturePatchCount || 0,
       textureCalibrationPairs: mesh.textureCalibrationPairs || 0,
       photometricNormalization: mesh.photometricNormalization || "none",

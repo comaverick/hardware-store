@@ -68,6 +68,18 @@ test("sample grid follows the XR view aspect rather than native depth storage", 
     .toEqual({ columns: 60, rows: 34 });
   expect(viewSampleGrid({ projectionMatrix: portrait.projectionMatrix.elements }))
     .toEqual({ columns: 34, rows: 60 });
+  expect(
+    viewSampleGrid(
+      { projectionMatrix: landscape.projectionMatrix.elements },
+      true,
+    ),
+  ).toEqual({ columns: 84, rows: 47 });
+  expect(
+    viewSampleGrid(
+      { projectionMatrix: portrait.projectionMatrix.elements },
+      true,
+    ),
+  ).toEqual({ columns: 47, rows: 84 });
 });
 test("room-depth capture keeps valid surfaces beyond the near-field guard", () => {
   const camera = new PerspectiveCamera(),

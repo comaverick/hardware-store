@@ -42,7 +42,10 @@ export function viewSampleGrid(view, withColor = false) {
     0.4,
     Math.min(2.5, Number.isFinite(projectedAspect) ? projectedAspect : 4 / 3),
   );
-  const longSide = withColor ? 72 : 60;
+  // The RGB-D path keeps a moderately denser grid so close inspection does
+  // not expose one large polygon for every coarse depth sample. Colorless
+  // fallback capture stays smaller for constrained devices.
+  const longSide = withColor ? 84 : 60;
   if (aspect >= 1)
     return {
       columns: longSide,
