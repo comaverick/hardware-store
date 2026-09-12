@@ -2868,17 +2868,18 @@ function texturedMesh(mesh, frames) {
       });
     });
     candidates.sort((left, right) => right.score - left.score);
+    const viableCandidates = candidates.slice(0, 4);
     const record = {
       triangle,
       faceNormal,
-      candidates: candidates.slice(0, 4),
+      candidates: viableCandidates,
       selected: 0,
     };
     const recordIndex = records.length;
     records.push(record);
     triangle.forEach((vertex) => vertexTriangles[vertex].push(recordIndex));
   }
-  // Neighboring triangles prefer the same one of their valid top-three
+  // Neighboring triangles prefer the same one of their valid top-four
   // camera views. Four passes remove most per-triangle exposure seams without
   // ever selecting a frame that failed the depth/visibility checks.
   for (let pass = 0; pass < 4; pass++)
@@ -2939,16 +2940,43 @@ function texturedMesh(mesh, frames) {
     if (component.length < 4) continue;
     texturePatchCount++;
     const frameCoverage = new Map();
-    component.forEach((recordIndex) =>
-      records[recordIndex].candidates.forEach((candidate) => {
+    const frameScore = new Map();
+    component.forEach((recordIndex) => {
+      const record = records[recordIndex];
+      const bestLocalScore = record.candidates[0]?.score ?? -Infinity;
+      record.candidates.forEach((candidate) => {
+        if (candidate.score < bestLocalScore - 0.9) return;
         const textureId = candidate.frame.textureId;
         frameCoverage.set(textureId, (frameCoverage.get(textureId) || 0) + 1);
-      }),
-    );
+        frameScore.set(
+          textureId,
+          (frameScore.get(textureId) || 0) + candidate.score,
+        );
+      });
+    });
+    let dominantTextureId = null;
+    let dominantFitness = -Infinity;
+    frameCoverage.forEach((coverage, textureId) => {
+      const averageScore = (frameScore.get(textureId) || 0) / coverage;
+      const fitness = (coverage / component.length) * 2 + averageScore * 0.22;
+      if (fitness > dominantFitness) {
+        dominantTextureId = textureId;
+        dominantFitness = fitness;
+      }
+    });
     component.forEach((recordIndex) => {
       const record = records[recordIndex];
       if (record.candidates.length < 2) return;
       const bestLocalScore = record.candidates[0].score;
+      const dominantIndex = record.candidates.findIndex(
+        (candidate) =>
+          candidate.frame.textureId === dominantTextureId &&
+          candidate.score >= bestLocalScore - 0.82,
+      );
+      if (dominantIndex >= 0) {
+        record.selected = dominantIndex;
+        return;
+      }
       let selected = record.selected;
       let selectedScore = -Infinity;
       record.candidates.forEach((candidate, candidateIndex) => {
@@ -3104,7 +3132,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   if (localLayerConsensus.diagnostics)
     alignment.localLayerConsensus = localLayerConsensus.diagnostics;
   const stages = {
-    algorithmVersion: 24,
+    algorithmVersion: 25,
     completionMode: options.completionMode === "surface" ? "surface" : "room",
     reconstructionProfile: options.reconstructionProfile || "quality",
     supportMode: "translated-camera-viewpoints",

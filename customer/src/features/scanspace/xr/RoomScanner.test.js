@@ -57,3 +57,27 @@ test("higher-resolution texture snapshots stay bounded without dropping depth fr
   expect(scanner.keyframes[0].colorImage).not.toBeNull();
   expect(scanner.keyframes[24].colorImage).not.toBeNull();
 });
+
+test("texture compaction keeps the sharpest low-motion frame in each scan sector", () => {
+  const scanner = new RoomScanner({ onUpdate: () => {} });
+  const flat = new Uint8Array(Array(64).fill([120, 120, 120, 255]).flat());
+  const checker = new Uint8Array(
+    Array.from({ length: 64 }, (_, index) => {
+      const value = (index + Math.floor(index / 8)) % 2 ? 30 : 225;
+      return [value, value, value, 255];
+    }).flat(),
+  );
+  scanner.keyframes = Array.from({ length: 5 }, (_, index) => ({
+    colorImage: index === 2 ? checker.slice() : flat.slice(),
+    colorWidth: 8,
+    colorHeight: 8,
+    colorChannels: 4,
+    linearSpeed: index === 1 ? 0.8 : 0.05,
+    angularSpeed: index === 1 ? 0.9 : 0.05,
+  }));
+  scanner.compactTextureKeyframes(4, 3);
+  expect(scanner.stats.textureKeyframes).toBe(3);
+  expect(scanner.keyframes[0].colorImage).not.toBeNull();
+  expect(scanner.keyframes[2].colorImage).not.toBeNull();
+  expect(scanner.keyframes[4].colorImage).not.toBeNull();
+});

@@ -1,6 +1,11 @@
 import * as THREE from "three";
 import { VoxelCloud, unprojectDepth, viewSampleGrid } from "../core/depth";
-import { createRgbdKeyframe, filterDepth, depthPosition } from "../core/fusion";
+import {
+  createRgbdKeyframe,
+  filterDepth,
+  depthPosition,
+  imageSharpness,
+} from "../core/fusion";
 import { depthFrameQuality } from "../core/readiness";
 import { createCameraColorReader } from "./cameraColor";
 
@@ -489,15 +494,46 @@ export class RoomScanner {
       .map((frame, index) => (frame.colorImage?.length ? index : -1))
       .filter((index) => index >= 0);
     if (textured.length > maximum) {
-      const keep = new Set(
-        Array.from({ length: retained }, (_, index) =>
-          textured[
-            Math.round(
-              (index / Math.max(1, retained - 1)) * (textured.length - 1),
-            )
-          ],
-        ),
-      );
+      const retentionScore = (frame) => {
+        const motion =
+          (Number(frame.linearSpeed) || 0) / 0.55 +
+          (Number(frame.angularSpeed) || 0) / 0.65;
+        return imageSharpness(frame) / (1 + motion * 0.8);
+      };
+      const keep = new Set();
+      const targetCount = Math.max(1, Math.min(retained, textured.length));
+      if (targetCount === 1) {
+        keep.add(
+          textured.reduce((best, candidate) =>
+            retentionScore(this.keyframes[candidate]) >
+            retentionScore(this.keyframes[best])
+              ? candidate
+              : best,
+          ),
+        );
+      } else {
+        // Keep the scan endpoints, then divide the path into non-overlapping
+        // temporal sectors and retain the sharpest low-motion image in each.
+        // This preserves wall coverage while avoiding arbitrary blurry frames.
+        keep.add(textured[0]);
+        keep.add(textured[textured.length - 1]);
+        const interior = textured.slice(1, -1);
+        const sectors = Math.max(0, targetCount - 2);
+        for (let sector = 0; sector < sectors; sector++) {
+          const start = Math.floor((sector * interior.length) / sectors);
+          const end = Math.floor(((sector + 1) * interior.length) / sectors);
+          const candidates = interior.slice(start, Math.max(start + 1, end));
+          if (!candidates.length) continue;
+          keep.add(
+            candidates.reduce((best, candidate) =>
+              retentionScore(this.keyframes[candidate]) >
+              retentionScore(this.keyframes[best])
+                ? candidate
+                : best,
+            ),
+          );
+        }
+      }
       textured.forEach((index) => {
         if (!keep.has(index)) this.keyframes[index].colorImage = null;
       });
