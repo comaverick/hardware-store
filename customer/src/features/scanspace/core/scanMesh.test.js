@@ -7,6 +7,7 @@ import {
   gridIndex,
   imageColorStatistics,
   imageSharpness,
+  overlapTextureColorScales,
   sampleProjectiveDepth,
   sampleLooksLikeVerticalPatch,
   meshFragmentationIsUnacceptable,
@@ -17,6 +18,7 @@ import {
   measuredWallSectorQualityDiagnostics,
   stabilizeMeasuredHorizontalSurfaces,
   stabilizeMeasuredWallSectors,
+  textureColorDifference,
   wallConsensusKeyframes,
   projectWorld,
 } from "./fusion";
@@ -409,6 +411,42 @@ test("texture color statistics ignore clipped glare and retain channel balance",
   expect(statistics.samples).toBe(2);
   expect(statistics.channels[0]).toBeGreaterThan(statistics.channels[1]);
   expect(statistics.channels[1]).toBeGreaterThan(statistics.channels[2]);
+});
+
+test("texture color comparison detects abrupt exposure and color changes", () => {
+  expect(textureColorDifference([120, 110, 100], [122, 111, 101])).toBeLessThan(
+    0.03,
+  );
+  expect(textureColorDifference([120, 110, 100], [60, 95, 170])).toBeGreaterThan(
+    0.25,
+  );
+});
+
+test("overlapping RGB-D views receive correspondence-based color scales", () => {
+  const values = [80, 120, 160];
+  const frames = values.map((value, index) => {
+    const frame = planeKeyframe((index - 1) * 0.06);
+    for (let pixel = 0; pixel < frame.colorImage.length; pixel += 4) {
+      frame.colorImage[pixel] = value;
+      frame.colorImage[pixel + 1] = value;
+      frame.colorImage[pixel + 2] = value;
+      frame.colorImage[pixel + 3] = 255;
+    }
+    const filtered = filterDepth(frame);
+    frame.filteredDepth = filtered.filtered;
+    frame.measuredMask = filtered.measuredMask;
+    frame.filteredCount = frame.filteredDepth.reduce(
+      (count, depth) => count + (depth ? 1 : 0),
+      0,
+    );
+    return frame;
+  });
+  const calibration = overlapTextureColorScales(frames);
+  const corrected = values.map(
+    (value, index) => value * calibration.scales[index][0],
+  );
+  expect(calibration.pairCount).toBeGreaterThan(0);
+  expect(Math.max(...corrected) - Math.min(...corrected)).toBeLessThan(15);
 });
 
 test("minority-layer filtering is limited to locally vertical surfaces", () => {

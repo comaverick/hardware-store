@@ -65,8 +65,8 @@ export function createCameraColorReader(gl) {
       // Preserve enough camera detail for wall labels, trim, and straight
       // edges. Fusion still bounds the number of retained keyframes, and the
       // worker has a lower-memory retry profile for constrained phones.
-      const textureLongEdge = 512;
-      const textureShortEdge = 256;
+      const textureLongEdge = 640;
+      const textureShortEdge = 320;
       const nextWidth = landscape
         ? textureLongEdge
         : Math.max(
