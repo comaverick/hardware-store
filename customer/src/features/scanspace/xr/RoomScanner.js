@@ -60,6 +60,8 @@ export class RoomScanner {
       fusionKeyframes: 0,
       fusionKeyframeCompactions: 0,
       textureKeyframes: 0,
+      colorSharpness: 0,
+      colorClippedRatio: 0,
       acceptedDepthFrames: 0,
       rejectedDepthFrames: 0,
       frameQuality: "waiting",
@@ -248,7 +250,11 @@ export class RoomScanner {
                   this.renderer.getContext(),
                 );
                 colorAt = this.colorReader.read(this.binding, view.camera);
-                if (colorAt) this.stats.colorActive = true;
+                if (colorAt) {
+                  this.stats.colorActive = true;
+                  this.stats.colorSharpness = colorAt.sharpness || 0;
+                  this.stats.colorClippedRatio = colorAt.clippedRatio || 0;
+                }
               } catch (error) {
                 this.colorFailures = (this.colorFailures || 0) + 1;
                 this.colorFailed = this.colorFailures >= 3;
@@ -427,7 +433,9 @@ export class RoomScanner {
       const turned = 2 * Math.acos(dot);
       // Slightly denser poses improve projective overlap without retaining
       // every XR frame. The global keyframe cap still bounds phone memory.
-      if (moved < 0.08 && turned < 0.18) return false;
+      // Keep nearby translated views so the fusion volume gets real overlap
+      // instead of long, sparsely supported jumps that bend wall edges.
+      if (moved < 0.055 && turned < 0.12) return false;
     }
     return true;
   }
@@ -442,6 +450,7 @@ export class RoomScanner {
     depth = null,
     motion = {},
   ) {
+    const colorSnapshot = colorAt?.snapshot?.() || null;
     const keyframe = createRgbdKeyframe(points, {
       columns,
       rows,
@@ -457,7 +466,11 @@ export class RoomScanner {
       nativeDepthUvTransform: depth?.normDepthBufferFromNormView?.matrix,
       camera: pose.position,
       timestamp,
-      colorImage: colorAt?.snapshot?.(),
+      colorImage: colorSnapshot,
+      colorSharpness:
+        Number(colorAt?.sharpness ?? colorSnapshot?.sharpness) || 0,
+      colorClippedRatio:
+        Number(colorAt?.clippedRatio ?? colorSnapshot?.clippedRatio) || 0,
       linearSpeed: motion.linearSpeed,
       angularSpeed: motion.angularSpeed,
     });
@@ -498,7 +511,10 @@ export class RoomScanner {
     this.lastMeshPose = pose;
     this.stats.fusionKeyframes = this.keyframes.length;
   }
-  compactTextureKeyframes(maximum = 24, retained = 18) {
+  // Keep the atlas below the portable-export and mobile-GPU limits. With the
+  // higher-detail 720px snapshots, twenty portrait tiles still fit while a
+  // fifth atlas row would make exports unnecessarily large.
+  compactTextureKeyframes(maximum = 20, retained = 18) {
     const textured = this.keyframes
       .map((frame, index) => (frame.colorImage?.length ? index : -1))
       .filter((index) => index >= 0);
@@ -507,7 +523,14 @@ export class RoomScanner {
         const motion =
           (Number(frame.linearSpeed) || 0) / 0.55 +
           (Number(frame.angularSpeed) || 0) / 0.65;
-        return imageSharpness(frame) / (1 + motion * 0.8);
+        const sharpness = Number.isFinite(frame.colorSharpness)
+          ? frame.colorSharpness
+          : imageSharpness(frame);
+        const clipping = Math.min(
+          0.75,
+          Math.max(0, Number(frame.colorClippedRatio) || 0),
+        );
+        return (sharpness * (1 - clipping)) / (1 + motion * 1.05);
       };
       const keep = new Set();
       const targetCount = Math.max(1, Math.min(retained, textured.length));

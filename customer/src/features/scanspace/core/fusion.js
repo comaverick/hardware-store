@@ -74,6 +74,11 @@ export function createRgbdKeyframe(points, options = {}) {
     colorWidth: image?.width || 0,
     colorHeight: image?.height || 0,
     colorChannels: image?.channels || 4,
+    // Captured with the image so texture selection can reject motion-blurred
+    // or heavily clipped views without rescanning the pixels in the worker.
+    colorSharpness: Number(options.colorSharpness) || Number(image?.sharpness) || 0,
+    colorClippedRatio:
+      Number(options.colorClippedRatio) || Number(image?.clippedRatio) || 0,
     projectionMatrix: new Float32Array(options.projectionMatrix || []),
     transformMatrix,
     // Depth geometry is used for fusion. The XR/color view is retained
@@ -844,7 +849,11 @@ function makeVolume(bounds, options) {
     depthSums: new Float32Array(count),
     freeSpaceVotes: new Uint8Array(count),
     colors: new Float32Array(count * 3),
-    colorWeights: new Uint8Array(count),
+    // Color observations can be down-weighted independently from geometry
+    // when a frame is moving or its sampled pixel is clipped. Keep fractional
+    // weights so one bad white/blurred view cannot overwrite several good
+    // observations.
+    colorWeights: new Float32Array(count),
     robustlyDownweightedSamples: 0,
     motionDownweightedSamples: 0,
   };
@@ -936,9 +945,9 @@ function integrateProjective(volume, frames, report) {
     const motionReliability = clamp(
       1 /
         (1 +
-          (Number(frame.linearSpeed) || 0) / 0.65 +
-          (Number(frame.angularSpeed) || 0) / 0.75),
-      0.35,
+          (Number(frame.linearSpeed) || 0) / 0.45 +
+          (Number(frame.angularSpeed) || 0) / 0.6),
+      0.2,
       1,
     );
     for (let z = 0; z < depth; z++) {
@@ -1032,13 +1041,32 @@ function integrateProjective(volume, frames, report) {
               : null;
             if (color) {
               const colorWeight = volume.colorWeights[index];
+              const luminance =
+                color[0] * 0.2126 + color[1] * 0.7152 + color[2] * 0.0722;
+              const minimum = Math.min(...color);
+              const clippedPixel = luminance >= 246 && minimum >= 218;
+              const darkPixel = luminance <= 7;
+              const frameClipping = clamp(
+                Number(frame.colorClippedRatio) || 0,
+                0,
+                0.8,
+              );
+              const colorSampleWeight = clamp(
+                motionReliability *
+                  (1 - frameClipping * 0.65) *
+                  (clippedPixel ? 0.16 : darkPixel ? 0.35 : 1),
+                0.08,
+                1,
+              );
+              const nextColorWeight = colorWeight + colorSampleWeight;
               const offset = index * 3;
               color.forEach((channel, channelIndex) => {
                 volume.colors[offset + channelIndex] =
-                  (volume.colors[offset + channelIndex] * colorWeight + linearByte(channel)) /
-                  (colorWeight + 1);
+                  (volume.colors[offset + channelIndex] * colorWeight +
+                    linearByte(channel) * colorSampleWeight) /
+                  nextColorWeight;
               });
-              volume.colorWeights[index] = Math.min(32, colorWeight + 1);
+              volume.colorWeights[index] = Math.min(32, nextColorWeight);
             }
           }
         }
@@ -1067,6 +1095,7 @@ function regularizeVolume(volume) {
       for (let x = 1; x < width - 1; x++) {
         const index = volumeIndex(volume, x, y, z);
         let valueSum = 0;
+        const valueSamples = [];
         let colorCount = 0;
         const colorSum = [0, 0, 0];
         let support = 0;
@@ -1074,7 +1103,9 @@ function regularizeVolume(volume) {
           const neighbor = volumeIndex(volume, x + dx, y + dy, z + dz);
           if (sourceWeights[neighbor] < 2) return;
           support++;
-          valueSum += sourceValues[neighbor];
+          const value = sourceValues[neighbor];
+          valueSum += value;
+          valueSamples.push(value);
           if (volume.colorWeights[neighbor]) {
             const offset = neighbor * 3;
             colorSum[0] += volume.colors[offset];
@@ -1084,19 +1115,36 @@ function regularizeVolume(volume) {
           }
         });
         if (sourceWeights[index] >= 2 && support >= 4) {
-          volume.values[index] = sourceValues[index] * 0.72 + valueSum / support * 0.28;
+          // Bilateral TSDF regularization: do not average across a depth
+          // transition (a shelf edge, doorway, or foreground object). The old
+          // unconditional average turned those transitions into curved,
+          // blurry sheets.
+          const centerValue = sourceValues[index];
+          const agreeing = valueSamples.filter(
+            (value) => Math.abs(value - centerValue) <= 0.24,
+          );
+          if (agreeing.length >= 4)
+            volume.values[index] =
+              centerValue * 0.84 +
+              (agreeing.reduce((sum, value) => sum + value, 0) / agreeing.length) *
+                0.16;
         } else if (!sourceWeights[index] && support >= 5) {
           // Repair only a one-voxel hole enclosed by measured neighbors. This
           // cannot bridge a doorway or a broad unscanned part of the room.
-          volume.values[index] = valueSum / support;
-          volume.weights[index] = 1;
-          volume.weightSums[index] = 0.35;
-          if (colorCount) {
-            const offset = index * 3;
-            volume.colors[offset] = colorSum[0] / colorCount;
-            volume.colors[offset + 1] = colorSum[1] / colorCount;
-            volume.colors[offset + 2] = colorSum[2] / colorCount;
-            volume.colorWeights[index] = 1;
+          const compatibleHole =
+            valueSamples.length < 5 ||
+            Math.max(...valueSamples) - Math.min(...valueSamples) <= 0.28;
+          if (compatibleHole) {
+            volume.values[index] = valueSum / support;
+            volume.weights[index] = 1;
+            volume.weightSums[index] = 0.35;
+            if (colorCount) {
+              const offset = index * 3;
+              volume.colors[offset] = colorSum[0] / colorCount;
+              volume.colors[offset + 1] = colorSum[1] / colorCount;
+              volume.colors[offset + 2] = colorSum[2] / colorCount;
+              volume.colorWeights[index] = 1;
+            }
           }
         }
       }
@@ -1111,7 +1159,7 @@ function propagateSurfaceColors(volume, passes = 2) {
         if (x || y || z) directions.push([x, y, z]);
   for (let pass = 0; pass < passes; pass++) {
     const sourceColors = new Float32Array(volume.colors);
-    const sourceWeights = new Uint8Array(volume.colorWeights);
+    const sourceWeights = new Float32Array(volume.colorWeights);
     for (let z = 1; z < depth - 1; z++)
       for (let y = 1; y < height - 1; y++)
         for (let x = 1; x < width - 1; x++) {
@@ -2802,7 +2850,10 @@ function buildAtlas(frames) {
   const images = frames.filter((frame) => frame.colorImage?.length && frame.colorWidth && frame.colorHeight);
   if (!images.length) return null;
   images.forEach((frame) => {
-    frame.textureSharpness = imageSharpness(frame);
+    frame.textureSharpness =
+      Number(frame.colorSharpness) > 0
+        ? Number(frame.colorSharpness)
+        : imageSharpness(frame);
     frame.textureColorStatistics = imageColorStatistics(frame);
   });
   const rankedSharpness = images
@@ -3122,6 +3173,11 @@ function texturedMesh(mesh, frames) {
         colorProjection,
         ...colorProjections,
       ]);
+      const frameClippingPenalty = clamp(
+        Number(frame.colorClippedRatio) || 0,
+        0,
+        0.8,
+      );
       const localSharpness = clamp(
         projectedTextureDetail(frame, colorProjection) /
           Math.max(1, atlas.referenceSharpness),
@@ -3149,7 +3205,8 @@ function texturedMesh(mesh, frames) {
           closestAgreement * 5 -
           Math.max(0, closestRadius - 1) * 0.18 -
           motionPenalty * 0.68 -
-          texturePenalty * 1.05,
+          texturePenalty * 1.05 -
+          frameClippingPenalty * 0.8,
       });
     });
     candidates.sort((left, right) => right.score - left.score);
@@ -3403,7 +3460,8 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   alignment.poseRefinement = "disabled-until-independently-validated";
   const selected = selectEvenly(
     overlapping,
-    options.maxKeyframes || 40,
+    options.maxKeyframes ||
+      (options.completionMode === "surface" ? 48 : 40),
   );
   const localLayerConsensus =
     options.completionMode === "surface"

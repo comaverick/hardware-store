@@ -1,6 +1,49 @@
-// Copy the frame-scoped opaque XR camera texture into our own small render target.
+// Copy the frame-scoped opaque XR camera texture into our own render target.
 // Never attach the opaque texture to a framebuffer or retain it past the XR frame.
-export function createCameraColorReader(gl) {
+// A little more source detail materially improves shelf edges and text while
+// staying below the portable-export limits used by ScanSpace.
+export const DEFAULT_COLOR_LONG_EDGE = 720;
+export const DEFAULT_COLOR_SHORT_EDGE = 360;
+
+export function measureColorFrameQuality(
+  pixels,
+  width,
+  height,
+  channels = 4,
+) {
+  if (!pixels?.length || width < 3 || height < 3 || channels < 3)
+    return { sharpness: 0, clippedRatio: 1, samples: 0 };
+  const luminanceAt = (x, y) => {
+    const offset = (y * width + x) * channels;
+    return (
+      pixels[offset] * 0.2126 +
+      pixels[offset + 1] * 0.7152 +
+      pixels[offset + 2] * 0.0722
+    );
+  };
+  const step = Math.max(1, Math.floor(Math.min(width, height) / 96));
+  let detail = 0;
+  let clipped = 0;
+  let samples = 0;
+  for (let y = 1; y < height - 1; y += step)
+    for (let x = 1; x < width - 1; x += step) {
+      const center = luminanceAt(x, y);
+      detail +=
+        Math.abs(luminanceAt(x - 1, y) - center) +
+        Math.abs(luminanceAt(x + 1, y) - center) +
+        Math.abs(luminanceAt(x, y - 1) - center) +
+        Math.abs(luminanceAt(x, y + 1) - center);
+      if (center < 6 || center > 249) clipped++;
+      samples++;
+    }
+  return {
+    sharpness: samples ? detail / samples : 0,
+    clippedRatio: samples ? clipped / samples : 1,
+    samples,
+  };
+}
+
+export function createCameraColorReader(gl, options = {}) {
   const compile = (type, source) => {
     const s = gl.createShader(type);
     gl.shaderSource(s, source);
@@ -65,20 +108,33 @@ export function createCameraColorReader(gl) {
       // Preserve enough camera detail for wall labels, trim, and straight
       // edges. Fusion still bounds the number of retained keyframes, and the
       // worker has a lower-memory retry profile for constrained phones.
-      const textureLongEdge = 640;
-      const textureShortEdge = 320;
+      const textureLongEdge = Math.max(
+        320,
+        Math.min(1024, Number(options.longEdge) || DEFAULT_COLOR_LONG_EDGE),
+      );
+      const textureShortEdge = Math.max(
+        160,
+        Math.min(
+          textureLongEdge,
+          Number(options.shortEdge) || DEFAULT_COLOR_SHORT_EDGE,
+        ),
+      );
+      const sourceLongEdge = Math.max(sourceWidth, sourceHeight);
+      const sourceShortEdge = Math.min(sourceWidth, sourceHeight);
+      const outputLongEdge = Math.min(textureLongEdge, sourceLongEdge);
+      const outputShortEdge = Math.min(textureShortEdge, sourceShortEdge);
       const nextWidth = landscape
-        ? textureLongEdge
+        ? outputLongEdge
         : Math.max(
-            textureShortEdge,
-            Math.round((textureLongEdge * sourceWidth) / sourceHeight),
+            outputShortEdge,
+            Math.round((outputLongEdge * sourceWidth) / sourceHeight),
           );
       const nextHeight = landscape
         ? Math.max(
-            textureShortEdge,
-            Math.round((textureLongEdge * sourceHeight) / sourceWidth),
+            outputShortEdge,
+            Math.round((outputLongEdge * sourceHeight) / sourceWidth),
           )
-        : textureLongEdge;
+        : outputLongEdge;
       if (width !== nextWidth || height !== nextHeight) {
         width = nextWidth;
         height = nextHeight;
@@ -118,6 +174,10 @@ export function createCameraColorReader(gl) {
           4;
         return [pixels[i], pixels[i + 1], pixels[i + 2]];
       };
+      const quality = measureColorFrameQuality(pixels, width, height, 4);
+      sample.quality = quality;
+      sample.sharpness = quality.sharpness;
+      sample.clippedRatio = quality.clippedRatio;
       // The XR camera texture is frame-scoped. A selected keyframe must own a
       // copy so it can be projected onto the final mesh after the session ends.
       sample.snapshot = () => ({
@@ -125,6 +185,8 @@ export function createCameraColorReader(gl) {
         width,
         height,
         channels: 4,
+        sharpness: quality.sharpness,
+        clippedRatio: quality.clippedRatio,
       });
       return sample;
     },

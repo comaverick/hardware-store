@@ -5,6 +5,12 @@ export const MIN_STABLE_POINTS = 2000;
 export const MIN_SURFACE_CAMERA_BASELINE_METERS = 0.25;
 export const MIN_SURFACE_FUSION_KEYFRAMES = 6;
 export const MIN_SURFACE_STABLE_POINTS = 800;
+// A depth sample is captured every few hundred milliseconds. At the old
+// limits a phone could translate many centimetres between samples, so the
+// resulting color frame was often motion-blurred and its geometry disagreed
+// with the neighboring pose. Keep only deliberately slow views.
+export const MAX_CAPTURE_LINEAR_SPEED = 0.45;
+export const MAX_CAPTURE_ANGULAR_SPEED = 0.6;
 
 export function depthFrameQuality({
   validSamples = 0,
@@ -14,7 +20,10 @@ export function depthFrameQuality({
   angularSpeed = 0,
 } = {}) {
   const validRatio = validSamples / Math.max(1, totalSamples);
-  if (linearSpeed > 0.75 || angularSpeed > 0.8)
+  if (
+    linearSpeed > MAX_CAPTURE_LINEAR_SPEED ||
+    angularSpeed > MAX_CAPTURE_ANGULAR_SPEED
+  )
     return { accepted: false, reason: "moving-too-fast", validRatio };
   if (validRatio < 0.2)
     return { accepted: false, reason: "sparse-depth", validRatio };

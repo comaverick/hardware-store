@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { CheckCircle, Info, WarningCircle } from "@phosphor-icons/react";
 import PartialScanScene from "./PartialScanScene";
 import { downloadDepthCapture } from "../core/captureDebug";
 import { downloadScan } from "../core/partialScanFile";
@@ -29,17 +30,26 @@ export default function PartialScanReview({
       {quality &&
         (quality.coverage < MIN_DIRECTION_COVERAGE ||
           quality.cameraBaseline < MIN_CAMERA_BASELINE_METERS) && (
-          <p className="ss-notice">
-            This scan covers {quality.coverage}% of the heading sweep with {Math.round(
-              quality.cameraBaseline * 100,
-            )} cm of horizontal camera-position spread. ScanSpace only shows
-            the surfaces you captured; curved walls can indicate unreliable depth.
-            For the next scan, move sideways while keeping each wall in view.
-          </p>
+          <div className="ss-notice ss-notice--guidance">
+            <div className="ss-notice-title">
+              <Info size={17} weight="fill" aria-hidden="true" />
+              <strong>Capture coverage</strong>
+            </div>
+            <p>
+              This scan covers {quality.coverage}% of the heading sweep with {Math.round(
+                quality.cameraBaseline * 100,
+              )} cm of horizontal camera-position spread. ScanSpace only shows
+              the surfaces you captured; curved walls can indicate unreliable depth.
+              For the next scan, move sideways while keeping each wall in view.
+            </p>
+          </div>
         )}
       {scan.measuredReviewWarning ? (
-        <div className="ss-notice">
-          <strong>Automatic checks found possible scan issues.</strong>
+        <div className="ss-notice ss-notice--warning" role="status">
+          <div className="ss-notice-title">
+            <WarningCircle size={17} weight="fill" aria-hidden="true" />
+            <strong>Automatic checks found possible scan issues</strong>
+          </div>
           <p>
             This is still the real measured mesh. Inspect it before accepting;
             ScanSpace did not add replacement wall geometry.
@@ -51,47 +61,64 @@ export default function PartialScanReview({
           </ul>
         </div>
       ) : scan.measuredGapWarning ? (
-        <p className="ss-notice">
-          Some regions did not provide reliable depth and remain open in this
-          result. ScanSpace did not generate replacement wall geometry.
-        </p>
+        <div className="ss-notice ss-notice--warning" role="status">
+          <div className="ss-notice-title">
+            <WarningCircle size={17} weight="fill" aria-hidden="true" />
+            <strong>Some areas remain unmeasured</strong>
+          </div>
+          <p>
+            Some regions did not provide reliable depth and remain open in this
+            result. ScanSpace did not generate replacement wall geometry.
+          </p>
+        </div>
       ) : null}
       <PartialScanScene scan={scan} />
-      <div className="ss-partial-facts">
-        <span>
+      <div className="ss-partial-facts" aria-label="Scan measurements">
+        <div>
           <strong>
             {scan.mesh
               ? scan.mesh.triangleCount.toLocaleString()
               : scan.cloud?.count?.toLocaleString() || 0}
           </strong>
-          {scan.mesh
-              ? "validated multi-view measured triangles"
-              : "rendered depth points"}
-        </span>
-        <span>
+          <span>{scan.mesh ? "measured triangles" : "captured depth points"}</span>
+        </div>
+        <div>
           <strong>
             {scan.mesh?.textureCoverage ??
               scan.mesh?.colorCoverage ??
               scan.cloud?.colorCoverage ??
               0}%
           </strong>
-          {scan.mesh
-            ? "captured surface color coverage"
-            : "captured point color coverage"}
-        </span>
+          <span>{scan.mesh ? "surface color coverage" : "point color coverage"}</span>
+        </div>
       </div>
       {scan.fusionReason && (
-        <p className="ss-notice">
-          {scan.mesh
-            ? scan.fusionReason
-            : `Surface reconstruction fallback: ${scan.fusionReason} The measured RGB-D points are shown instead.`}
-        </p>
+        <div className="ss-notice ss-notice--status">
+          <div className="ss-notice-title">
+            <Info size={17} weight="fill" aria-hidden="true" />
+            <strong>{scan.mesh ? "Measured surface" : "Surface preview fallback"}</strong>
+          </div>
+          <p>
+            {scan.mesh
+              ? scan.fusionReason
+              : `Surface reconstruction fallback: ${scan.fusionReason} The measured RGB-D points are shown instead.`}
+          </p>
+        </div>
       )}
-      <p className="ss-notice">
-        This scan can be exported and opened on another device. Continue with
-        measurements whenever you want to turn the captured surfaces into a
-        room layout. Structural detection status: {scan.reason}
-      </p>
+      <div className="ss-notice ss-notice--success">
+        <div className="ss-notice-title">
+          <CheckCircle size={17} weight="fill" aria-hidden="true" />
+          <strong>Scan saved</strong>
+        </div>
+        <p>
+          This scan can be exported and opened on another device. Continue with
+          measurements whenever you want to turn the captured surfaces into a
+          room layout.
+        </p>
+        <p className="ss-notice-detail">
+          <strong>Structural detection status:</strong> {scan.reason}
+        </p>
+      </div>
       {exportError && (
         <p role="alert" className="ss-error">
           {exportError}
@@ -119,7 +146,7 @@ export default function PartialScanReview({
             Download scan diagnostics
           </button>
         )}
-        <button type="button" onClick={onDone}>
+        <button className="ss-action-quiet" type="button" onClick={onDone}>
           Back to ScanSpace
         </button>
         <button type="button" onClick={onRescan}>

@@ -203,12 +203,14 @@ export default function PartialScanScene({ scan }) {
         <div role="group" aria-label="Captured room view">
           <button
             className={mode === "orbit" ? "is-active" : ""}
+            aria-pressed={mode === "orbit"}
             onClick={() => setMode("orbit")}
           >
             Overview
           </button>
           <button
             className={mode === "first" ? "is-active" : ""}
+            aria-pressed={mode === "first"}
             onClick={() => setMode("first")}
           >
             Walk inside
@@ -242,13 +244,15 @@ export default function PartialScanScene({ scan }) {
           ? "Drag to look · Use the joystick to move"
           : "Drag to orbit · Pinch to zoom"}
       </span>
-      <span className="ss-partial-legend">
+      <span className="ss-partial-legend" role="status">
         <i />{" "}
-        {mesh
-            ? "Validated multi-view RGB-D surface"
-            : "Captured RGB-D points"}
+        {mesh ? "Captured measured surface" : "Captured depth points"}
       </span>
-      <button className="ss-quality" onClick={() => setLow((value) => !value)}>
+      <button
+        className="ss-quality"
+        aria-pressed={low}
+        onClick={() => setLow((value) => !value)}
+      >
         {low ? "Battery saver" : "High quality"}
       </button>
     </div>

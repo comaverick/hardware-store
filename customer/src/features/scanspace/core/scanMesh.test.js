@@ -136,11 +136,15 @@ test("stores a compact transferable RGB-D keyframe instead of a frame mesh", () 
     transformMatrix: Array(16).fill(0),
     camera: { x: 1, y: 2, z: 3 },
     timestamp: 42,
+    colorSharpness: 18,
+    colorClippedRatio: 0.12,
   });
   expect(frame.validCount).toBe(9);
   expect(frame.positions).toHaveLength(27);
   expect(frame.depths).toHaveLength(9);
   expect(frame.camera).toEqual(new Float32Array([1, 2, 3]));
+  expect(frame.colorSharpness).toBe(18);
+  expect(frame.colorClippedRatio).toBeCloseTo(0.12);
   expect(frame.timestamp).toBe(42);
 });
 

@@ -32,6 +32,9 @@ const captureQualitySummary = (stats) => ({
   cameraBaseline: stats.cameraBaseline || 0,
   acceptedDepthFrames: stats.acceptedDepthFrames || 0,
   rejectedDepthFrames: stats.rejectedDepthFrames || 0,
+  textureKeyframes: stats.textureKeyframes || 0,
+  colorSharpness: stats.colorSharpness || 0,
+  colorClippedRatio: stats.colorClippedRatio || 0,
 });
 
 function CoverageCompass({ sectors = [], heading = 0 }) {
@@ -65,6 +68,8 @@ function captureGuidance(stats, busy = false) {
     return "Depth paused. Move back toward a textured, well-lit surface.";
   if (stats.movingTooFast)
     return "Move more slowly. Fast depth frames are being skipped to prevent warped surfaces.";
+  if (stats.colorActive && (stats.colorClippedRatio || 0) > 0.45)
+    return "Color is clipped here. Tilt away from bright windows and hold still for a clearer texture.";
   if (stats.frameQuality === "sparse-depth")
     return "Depth is sparse here. Aim at a matte, well-lit surface and revisit shiny or dark areas from another angle.";
   if (stats.nearDepthWarning)
