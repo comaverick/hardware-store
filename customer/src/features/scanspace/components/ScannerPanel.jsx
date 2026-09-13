@@ -64,8 +64,14 @@ function captureGuidance(stats, busy = false) {
     return "Capture is safely paused while the accepted depth frames are reconstructed.";
   if (!stats.tracking)
     return "Tracking is unstable. Point back at a confirmed area and hold still.";
+  if (stats.depthState === "unavailable")
+    return "This session has no CPU depth sensor. End the scan and use a supported Android browser.";
+  if (stats.depthState === "error")
+    return "Depth reading was interrupted. Hold still over a matte surface while ScanSpace retries.";
   if (!stats.depthCurrent)
-    return "Depth paused. Move back toward a textured, well-lit surface.";
+    return stats.depthState === "stalled"
+      ? "Depth frames stopped. Hold still over a textured, well-lit surface and let tracking recover."
+      : "Waiting for depth. Aim at a matte, well-lit surface and hold still for a moment.";
   if (stats.movingTooFast)
     return "Move more slowly. Fast depth frames are being skipped to prevent warped surfaces.";
   if (
@@ -79,6 +85,8 @@ function captureGuidance(stats, busy = false) {
     return "Color is clipped here. Tilt away from bright windows and hold still for a clearer texture.";
   if (stats.frameQuality === "sparse-depth")
     return "Depth is sparse here. Aim at a matte, well-lit surface and revisit shiny or dark areas from another angle.";
+  if (stats.frameQuality === "pose-inconsistent")
+    return "Tracking drift was detected. Return to the last confirmed area, hold still, then continue slowly.";
   if (stats.nearDepthWarning)
     return "Something is reading very close. Step back, keep fingers clear, and rescan that area slowly.";
   if (!Number.isFinite(stats.floorY))
@@ -104,7 +112,9 @@ function captureTargetState(stats, busy = false) {
       hint: "Capture is safely paused",
     };
   if (stats.paused)
-    return { tone: "busy", label: "Capture paused", hint: "Resume to save more views" };
+    return stats.originChanged
+      ? { tone: "busy", label: "Tracking reset", hint: "Start a new scan" }
+      : { tone: "busy", label: "Capture paused", hint: "Resume to save more views" };
   if (!stats.tracking)
     return {
       tone: "warning",
@@ -120,8 +130,24 @@ function captureTargetState(stats, busy = false) {
   if (!stats.depthCurrent)
     return {
       tone: "warning",
-      label: "No reliable depth",
-      hint: "Change distance or angle",
+      label:
+        stats.depthState === "error"
+          ? "Depth read interrupted"
+          : stats.depthState === "stalled"
+            ? "Depth interrupted"
+            : "Waiting for depth",
+      hint:
+        stats.depthState === "error"
+          ? "Hold still while ScanSpace retries"
+          : stats.depthState === "stalled"
+            ? "Hold still to recover tracking"
+            : "Aim at a matte surface",
+    };
+  if (stats.frameQuality === "pose-inconsistent")
+    return {
+      tone: "warning",
+      label: "Tracking drift detected",
+      hint: "Return to the last confirmed area",
     };
   if (stats.frameQuality === "sparse-depth" || stats.nearDepthWarning)
     return {
@@ -629,11 +655,15 @@ export default function ScannerPanel({
                   ? "Capture is paused during reconstruction."
                   : partial
                     ? "Capture is paused after validation. Keep scanning to add more coverage."
-                  : stats.depthCurrent
+                    : stats.depthCurrent
                     ? "Depth frames are being received."
-                    : stats.depthActive
-                      ? "Depth frames have stopped. Resume or move slowly to recover tracking."
-                      : "Depth unavailable or not yet received. Assisted capture is ready."}{" "}
+                    : stats.depthState === "stalled"
+                      ? "Depth frames have stopped. Hold still and let tracking recover."
+                      : stats.depthState === "error"
+                        ? "A depth read was interrupted. ScanSpace is retrying automatically."
+                        : stats.depthActive
+                          ? "Depth frames are starting again. Hold still over the surface."
+                          : "Waiting for the device to provide depth data."}{" "}
                 {stats.colorActive
                   ? "Camera colors captured."
                   : "Captured colors unavailable."}
@@ -651,9 +681,9 @@ export default function ScannerPanel({
                   Keep scanning until this area has enough stable coverage: {surfaceReadiness.missing.join(", ")}.
                 </p>
               )}
-              {stats.cloudCompactions > 0 && (
+              {(stats.cloudCompactions > 0 || stats.fusionKeyframeCompactions > 0) && (
                 <p className="ss-scan-hint">
-                  Capture density was optimized to retain your scan coverage.
+                  Capture density was optimized while preserving your scan coverage.
                 </p>
               )}
               {stats.full && (
@@ -664,6 +694,14 @@ export default function ScannerPanel({
               )}
               {!partial ? (
                 <div className="ss-actions">
+                  {stats.paused && !stats.originChanged && !busy && (
+                    <button
+                      type="button"
+                      onClick={() => scanner.current?.togglePause()}
+                    >
+                      Resume capture
+                    </button>
+                  )}
                   <button disabled={busy} onClick={cancelScan}>
                     Cancel scan
                   </button>
@@ -732,6 +770,9 @@ export default function ScannerPanel({
               immersiveAR: capabilities.ar,
               grantedFeatures: stats.features?.join(", ") || "None",
               depthFrames: stats.depthFrames,
+              depthState: stats.depthState || "waiting",
+              depthMisses: stats.depthMisses || 0,
+              depthReadErrors: stats.depthReadErrors || 0,
               depthFormat: stats.format || "Unavailable",
               depthType: stats.depthType || "Unavailable",
               depthUsage: stats.depthUsage || "Unavailable",
@@ -749,6 +790,10 @@ export default function ScannerPanel({
               fusionKeyframes: stats.fusionKeyframes || 0,
               acceptedDepthFrames: stats.acceptedDepthFrames || 0,
               rejectedDepthFrames: stats.rejectedDepthFrames || 0,
+              rejectedPoseFrames: stats.rejectedPoseFrames || 0,
+              poseOverlapRatio: `${Math.round((stats.poseOverlapRatio || 0) * 100)}%`,
+              poseMedianResidual: `${Math.round((stats.poseMedianResidual || 0) * 100)} cm`,
+              poseUpperResidual: `${Math.round((stats.poseUpperResidual || 0) * 100)} cm`,
               frameQuality: stats.frameQuality || "waiting",
               validDepthCoverage: `${Math.round((stats.validDepthRatio || 0) * 100)}%`,
               horizontalCameraBaseline: `${Math.round((stats.cameraBaseline || 0) * 100)} cm`,

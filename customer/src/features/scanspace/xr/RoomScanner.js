@@ -31,6 +31,93 @@ export function coveragePreviewSize(voxelSize = 0.08) {
   return Math.max(0.09, Math.min(0.22, voxelSize * 1.5));
 }
 
+export const MAX_FUSION_KEYFRAMES = 60;
+export const KEYFRAME_RETENTION_TRIGGER = 64;
+
+function keyframePoseForRetention(frame) {
+  const camera = frame?.camera;
+  const matrix = frame?.transformMatrix;
+  const position =
+    camera?.length >= 3 &&
+    [camera[0], camera[1], camera[2]].every(Number.isFinite)
+      ? [camera[0], camera[1], camera[2]]
+      : matrix?.length >= 15 &&
+          [matrix[12], matrix[13], matrix[14]].every(Number.isFinite)
+        ? [matrix[12], matrix[13], matrix[14]]
+        : [0, 0, 0];
+  const direction = matrix?.length >= 11
+    ? [-matrix[8], -matrix[9], -matrix[10]]
+    : [0, 0, -1];
+  const length = Math.hypot(...direction) || 1;
+  return {
+    position,
+    direction: direction.map((value) => value / length),
+    timestamp: Number(frame?.timestamp) || 0,
+  };
+}
+
+// Retain the viewpoints that provide the most spatial and directional
+// coverage. Keeping every other frame is tempting, but a scan path can spend
+// different amounts of time on each wall; index decimation then drops a whole
+// area. This bounded farthest-point pass keeps the endpoints and fills the
+// remaining slots with the least-covered poses.
+export function selectKeyframesForRetention(
+  frames,
+  maximum = MAX_FUSION_KEYFRAMES,
+) {
+  if (!Array.isArray(frames) || frames.length <= maximum) return frames?.slice() || [];
+  const limit = Math.max(2, Math.floor(maximum));
+  if (limit >= frames.length) return frames.slice();
+  const poses = frames.map(keyframePoseForRetention);
+  const timestamps = poses.map((pose, index) => pose.timestamp || index);
+  const timestampSpan = Math.max(1, timestamps[timestamps.length - 1] - timestamps[0]);
+  const selected = new Set([0, frames.length - 1]);
+  while (selected.size < limit) {
+    let bestIndex = -1;
+    let bestScore = -Infinity;
+    for (let candidate = 0; candidate < frames.length; candidate++) {
+      if (selected.has(candidate)) continue;
+      let score = Infinity;
+      selected.forEach((chosen) => {
+        const a = poses[candidate];
+        const b = poses[chosen];
+        const spatial = Math.hypot(
+          a.position[0] - b.position[0],
+          a.position[1] - b.position[1],
+          a.position[2] - b.position[2],
+        );
+        const directionDot = Math.max(
+          -1,
+          Math.min(
+            1,
+            a.direction[0] * b.direction[0] +
+              a.direction[1] * b.direction[1] +
+              a.direction[2] * b.direction[2],
+          ),
+        );
+        const angular = Math.acos(directionDot);
+        const temporal =
+          Math.abs(timestamps[candidate] - timestamps[chosen]) / timestampSpan;
+        score = Math.min(score, spatial + angular * 0.18 + temporal * 0.01);
+      });
+      if (score > bestScore) {
+        bestScore = score;
+        bestIndex = candidate;
+      }
+    }
+    if (bestIndex < 0) break;
+    selected.add(bestIndex);
+  }
+  // The fallback matters only when all poses are identical and the novelty
+  // score ties. It still gives callers exactly the requested bounded count.
+  for (let index = 0; selected.size < limit && index < frames.length; index++)
+    selected.add(index);
+  return [...selected]
+    .sort((left, right) => left - right)
+    .slice(0, limit)
+    .map((index) => frames[index]);
+}
+
 export class RoomScanner {
   constructor({ canvas, overlay, onUpdate, onEnd }) {
     Object.assign(this, { canvas, overlay, onUpdate, onEnd });
@@ -46,6 +133,10 @@ export class RoomScanner {
       cloudCompactions: 0,
       floorAutoDetected: false,
       depthActive: false,
+      depthState: "waiting",
+      depthMisses: 0,
+      depthReadErrors: 0,
+      originChanged: false,
       colorActive: false,
       tracking: false,
       features: [],
@@ -73,6 +164,12 @@ export class RoomScanner {
       cameraTravel: 0,
       nearDepthWarning: false,
       currentConfirmedRatio: 0,
+      poseDriftWarning: false,
+      rejectedPoseFrames: 0,
+      poseOverlapRatio: 0,
+      poseMedianResidual: 0,
+      poseUpperResidual: 0,
+      captureError: "",
     };
     this.directions = new Set();
     this.observer = { x: 0, z: 0 };
@@ -91,10 +188,12 @@ export class RoomScanner {
     try {
       // Called synchronously from a user click, before any asynchronous capability probe.
       this.session = await navigator.xr.requestSession("immersive-ar", {
-        requiredFeatures: ["hit-test"],
+        // A depth-less AR session cannot produce a ScanSpace scan. Require the
+        // feature so unsupported sessions fail immediately instead of showing
+        // "No reliable depth" forever after the camera opens.
+        requiredFeatures: ["hit-test", "depth-sensing"],
         optionalFeatures: [
           "local-floor",
-          "depth-sensing",
           "dom-overlay",
           "camera-access",
           "plane-detection",
@@ -119,6 +218,15 @@ export class RoomScanner {
           "This browser cannot display ScanSpace controls in AR. Try a compatible Android browser.",
         );
       this.stats.features = Array.from(this.session.enabledFeatures || []);
+      this.stats.depthUsage = this.session.depthUsage || "Unavailable";
+      this.stats.depthType = this.session.depthType || "Unavailable";
+      const depthEnabled = this.stats.features.includes("depth-sensing");
+      if (!depthEnabled || this.session.depthUsage !== "cpu-optimized") {
+        this.stats.depthState = "unavailable";
+        throw new Error(
+          "This device did not grant CPU depth sensing. Use a supported Android browser and allow camera/depth access.",
+        );
+      }
       this.renderer = new THREE.WebGLRenderer({
         canvas: this.canvas,
         alpha: true,
@@ -139,6 +247,7 @@ export class RoomScanner {
       this.space.addEventListener("reset", () => {
         this.originChanged = true;
         this.paused = true;
+        this.stats.originChanged = true;
         this.hit = null;
         this.stats.errors.push(
           "Tracking origin changed. Start a new scan to avoid mixing coordinates.",
@@ -190,6 +299,177 @@ export class RoomScanner {
       throw error;
     }
   }
+  recordCaptureError(error, prefix = "Capture error") {
+    const message = `${prefix}: ${error?.message || String(error)}`;
+    this.stats.captureError = message;
+    if (this.stats.errors[this.stats.errors.length - 1] !== message)
+      this.stats.errors = [...this.stats.errors.slice(-4), message];
+  }
+  markDepthMiss(time) {
+    this.stats.depthMisses++;
+    if (!this.stats.depthActive) {
+      this.stats.depthState = this.stats.depthMisses >= 5 ? "stalled" : "waiting";
+      this.stats.frameQuality = "waiting";
+    } else {
+      const age = this.lastDepthAt ? time - this.lastDepthAt : Infinity;
+      this.stats.depthState = age > 2000 ? "stalled" : "waiting";
+    }
+  }
+  captureDepthFrame(time, frame, view) {
+    let depth = null;
+    try {
+      const depthUsage = this.session?.depthUsage || this.stats.depthUsage;
+      if (
+        depthUsage === "cpu-optimized" &&
+        typeof frame.getDepthInformation === "function"
+      )
+        depth = frame.getDepthInformation(view);
+    } catch (error) {
+      this.stats.rejectedDepthFrames++;
+      this.stats.depthReadErrors++;
+      this.stats.depthState = "error";
+      this.recordCaptureError(error, "Depth read failed");
+      return;
+    }
+    if (!depth) {
+      this.markDepthMiss(time);
+      return;
+    }
+    this.lastDepthAt = time;
+    this.stats.depthMisses = 0;
+    this.stats.depthState = "active";
+    this.stats.depthFrames++;
+    this.stats.depthActive = true;
+    this.stats.format = this.session.depthDataFormat || "Unavailable";
+    this.stats.depthType = this.session.depthType || "Unavailable";
+    this.stats.depthUsage = this.session.depthUsage || "Unavailable";
+    this.stats.dimensions = `${depth.width} × ${depth.height}`;
+    try {
+      const keyframePose = this.keyframePose(view);
+      const motion = this.measureFrameMotion(keyframePose, time);
+      const keyframeEligible = this.shouldCaptureKeyframe(keyframePose);
+      let colorAt = null;
+      if (
+        keyframeEligible &&
+        this.binding &&
+        view.camera &&
+        !this.colorFailed
+      ) {
+        try {
+          this.colorReader ??= createCameraColorReader(
+            this.renderer.getContext(),
+          );
+          colorAt = this.colorReader.read(this.binding, view.camera);
+          if (colorAt) {
+            this.stats.colorActive = true;
+            this.stats.colorSharpness = colorAt.sharpness || 0;
+            this.stats.colorClippedRatio = colorAt.clippedRatio || 0;
+          }
+        } catch (error) {
+          this.colorFailures = (this.colorFailures || 0) + 1;
+          this.colorFailed = this.colorFailures >= 3;
+          this.recordCaptureError(error, "Captured color unavailable");
+        } finally {
+          this.renderer.resetState();
+        }
+      }
+      // Preserve a bounded grid for mid-range phones while matching the XR
+      // view aspect. Native depth storage may be rotated or cropped.
+      const { columns, rows } = viewSampleGrid(view, !!colorAt);
+      const framePoints = unprojectDepth(
+        depth,
+        view,
+        columns,
+        rows,
+        colorAt,
+      );
+      const nearPointCount = framePoints.reduce(
+        (count, point) => count + (point.depth < 0.7 ? 1 : 0),
+        0,
+      );
+      const nearRatio = framePoints.length
+        ? nearPointCount / framePoints.length
+        : 0;
+      const quality = depthFrameQuality({
+        validSamples: framePoints.length,
+        totalSamples: columns * rows,
+        nearRatio,
+        ...motion,
+      });
+      this.stats.frameQuality = quality.reason;
+      this.stats.validDepthRatio = quality.validRatio;
+      this.stats.movingTooFast = quality.reason === "moving-too-fast";
+      this.stats.linearSpeed = motion.linearSpeed;
+      this.stats.angularSpeed = motion.angularSpeed;
+      this.stats.nearDepthWarning = nearRatio > 0.12;
+      this.stats.poseDriftWarning = false;
+      if (quality.accepted) {
+        this.stats.acceptedDepthFrames++;
+        const consistency = keyframeEligible
+          ? this.cloud.overlapConsistency(framePoints)
+          : null;
+        this.stats.poseOverlapRatio = consistency?.overlapRatio || 0;
+        this.stats.poseMedianResidual = consistency?.medianDistance || 0;
+        this.stats.poseUpperResidual = consistency?.upperDistance || 0;
+        if (keyframeEligible && this.shouldRejectPose(consistency, keyframePose)) {
+          this.stats.rejectedDepthFrames++;
+          this.stats.rejectedPoseFrames++;
+          this.stats.poseDriftWarning = true;
+          this.stats.frameQuality = "pose-inconsistent";
+          this.stats.currentConfirmedRatio = 0;
+        } else {
+          // Pose gating decides whether this accepted depth frame adds a
+          // useful new viewpoint. Fast/sparse frames never reach fusion.
+          if (keyframeEligible)
+            this.captureKeyframe(
+              framePoints,
+              view,
+              columns,
+              rows,
+              time,
+              colorAt,
+              keyframePose,
+              depth,
+              motion,
+            );
+          // Feedback counts only views actually retained for fusion, with
+          // the full image grid as denominator (including missing depth).
+          this.stats.currentConfirmedRatio =
+            this.cloud.confirmedRatio(framePoints, columns * rows);
+        }
+      } else {
+        this.stats.rejectedDepthFrames++;
+        this.stats.currentConfirmedRatio = 0;
+      }
+      this.stats.cloudCellSize = this.cloud.size;
+      this.stats.cloudCompactions = this.cloud.compactions;
+      const m = view.transform.matrix;
+      const direction =
+        Math.floor(
+          ((Math.atan2(-m[8], -m[10]) + Math.PI) / (Math.PI * 2)) * 24,
+        ) % 24;
+      if (quality.accepted && !this.stats.poseDriftWarning)
+        this.directions.add(direction);
+      this.stats.currentDirection = direction;
+      this.stats.directionCoverage = Array.from(
+        { length: 24 },
+        (_, index) => this.directions.has(index),
+      );
+      this.stats.coverage = Math.min(
+        100,
+        Math.round((this.directions.size / 24) * 100),
+      );
+    } catch (error) {
+      // A single malformed depth texture must not turn the whole XR session
+      // into a permanent paused state. The next frame can often recover.
+      this.stats.rejectedDepthFrames++;
+      this.stats.depthReadErrors++;
+      this.stats.depthState = "error";
+      this.stats.frameQuality = "depth-error";
+      this.stats.currentConfirmedRatio = 0;
+      this.recordCaptureError(error, "Depth frame skipped");
+    }
+  }
   frame(time, frame) {
     if (!frame || this.closed) return;
     try {
@@ -221,121 +501,7 @@ export class RoomScanner {
         if (!this.paused && time - (this.lastCapture || 0) > 400) {
           this.lastCapture = time;
           const view = pose.views[0];
-          let depth = null;
-          if (
-            this.session.depthUsage === "cpu-optimized" &&
-            typeof frame.getDepthInformation === "function"
-          )
-            depth = frame.getDepthInformation(view);
-          if (depth) {
-            this.lastDepthAt = time;
-            this.stats.depthFrames++;
-            this.stats.depthActive = true;
-            this.stats.format = this.session.depthDataFormat;
-            this.stats.depthType = this.session.depthType || "Unavailable";
-            this.stats.depthUsage = this.session.depthUsage;
-            this.stats.dimensions = `${depth.width} × ${depth.height}`;
-            const keyframePose = this.keyframePose(view);
-            const motion = this.measureFrameMotion(keyframePose, time);
-            const keyframeEligible = this.shouldCaptureKeyframe(keyframePose);
-            let colorAt = null;
-            if (
-              keyframeEligible &&
-              this.binding &&
-              view.camera &&
-              !this.colorFailed
-            ) {
-              try {
-                this.colorReader ??= createCameraColorReader(
-                  this.renderer.getContext(),
-                );
-                colorAt = this.colorReader.read(this.binding, view.camera);
-                if (colorAt) {
-                  this.stats.colorActive = true;
-                  this.stats.colorSharpness = colorAt.sharpness || 0;
-                  this.stats.colorClippedRatio = colorAt.clippedRatio || 0;
-                }
-              } catch (error) {
-                this.colorFailures = (this.colorFailures || 0) + 1;
-                this.colorFailed = this.colorFailures >= 3;
-                this.stats.errors.push(
-                  `Captured color unavailable: ${error.message}`,
-                );
-              } finally {
-                this.renderer.resetState();
-              }
-            }
-            // Preserve a bounded grid for mid-range phones while matching the
-            // XR view aspect. Native depth storage may be rotated or cropped.
-            const { columns, rows } = viewSampleGrid(view, !!colorAt);
-            const framePoints = unprojectDepth(
-              depth,
-              view,
-              columns,
-              rows,
-              colorAt,
-            );
-            const nearPointCount = framePoints.reduce(
-              (count, point) => count + (point.depth < 0.7 ? 1 : 0),
-              0,
-            );
-            const nearRatio = framePoints.length
-              ? nearPointCount / framePoints.length
-              : 0;
-            const quality = depthFrameQuality({
-              validSamples: framePoints.length,
-              totalSamples: columns * rows,
-              nearRatio,
-              ...motion,
-            });
-            this.stats.frameQuality = quality.reason;
-            this.stats.validDepthRatio = quality.validRatio;
-            this.stats.movingTooFast = quality.reason === "moving-too-fast";
-            this.stats.linearSpeed = motion.linearSpeed;
-            this.stats.angularSpeed = motion.angularSpeed;
-            this.stats.nearDepthWarning = nearRatio > 0.12;
-            if (quality.accepted) {
-              this.stats.acceptedDepthFrames++;
-              // Pose gating decides whether this accepted depth frame adds a
-              // useful new viewpoint. Fast/sparse frames never reach fusion.
-              if (keyframeEligible)
-                this.captureKeyframe(
-                  framePoints,
-                  view,
-                  columns,
-                  rows,
-                  time,
-                  colorAt,
-                  keyframePose,
-                  depth,
-                  motion,
-                );
-              // Feedback counts only views actually retained for fusion, with
-              // the full image grid as denominator (including missing depth).
-              this.stats.currentConfirmedRatio =
-                this.cloud.confirmedRatio(framePoints, columns * rows);
-            } else {
-              this.stats.rejectedDepthFrames++;
-              this.stats.currentConfirmedRatio = 0;
-            }
-            this.stats.cloudCellSize = this.cloud.size;
-            this.stats.cloudCompactions = this.cloud.compactions;
-            const m = view.transform.matrix;
-            const direction =
-              Math.floor(
-                ((Math.atan2(-m[8], -m[10]) + Math.PI) / (Math.PI * 2)) * 24,
-              ) % 24;
-            if (quality.accepted) this.directions.add(direction);
-            this.stats.currentDirection = direction;
-            this.stats.directionCoverage = Array.from(
-              { length: 24 },
-              (_, index) => this.directions.has(index),
-            );
-            this.stats.coverage = Math.min(
-              100,
-              Math.round((this.directions.size / 24) * 100),
-            );
-          }
+          this.captureDepthFrame(time, frame, view);
           if (frame.detectedPlanes) {
             for (const plane of this.planes.keys())
               if (!frame.detectedPlanes.has(plane)) this.planes.delete(plane);
@@ -356,7 +522,7 @@ export class RoomScanner {
       this.renderer.render(this.scene, this.camera);
     } catch (error) {
       this.paused = true;
-      this.stats.errors = [...this.stats.errors.slice(-5), error.message];
+      this.recordCaptureError(error, "Capture paused after an XR error");
       this.publish();
     }
   }
@@ -439,6 +605,27 @@ export class RoomScanner {
     }
     return true;
   }
+  shouldRejectPose(consistency, pose) {
+    if (
+      !consistency ||
+      consistency.compared < 80 ||
+      consistency.overlapRatio < 0.3 ||
+      !Number.isFinite(consistency.medianDistance) ||
+      !Number.isFinite(consistency.upperDistance)
+    )
+      return false;
+    const moved = this.lastMeshPose
+      ? Math.hypot(
+          pose.position.x - this.lastMeshPose.position.x,
+          pose.position.y - this.lastMeshPose.position.y,
+          pose.position.z - this.lastMeshPose.position.z,
+        )
+      : 0;
+    // A genuinely new area can be far from the previous cloud. Only reject a
+    // nearby view whose overlapping geometry has shifted into a second layer.
+    if (moved > 0.35) return false;
+    return consistency.medianDistance > 0.085 && consistency.upperDistance > 0.13;
+  }
   captureKeyframe(
     points,
     view,
@@ -493,14 +680,14 @@ export class RoomScanner {
         pose.position.z - previousPosition.z,
       );
     capturedPositions.push({ ...pose.position });
-    // A bounded set is important on phones: the worker receives at most sixty
-    // compact grids, not a growing collection of full per-frame meshes.
-    const compacted = this.keyframes.length >= 60;
-    if (compacted) {
-      this.keyframes = this.keyframes.filter((_, index) => index % 2 === 0);
-      this.stats.fusionKeyframeCompactions++;
-    }
-    this.keyframes.push(keyframe);
+    // Keep a small memory cushion so retention runs only every few frames,
+    // while never throwing away half of a scan path at once.
+    const pending = [...this.keyframes, keyframe];
+    const compacted = pending.length > KEYFRAME_RETENTION_TRIGGER;
+    this.keyframes = compacted
+      ? selectKeyframesForRetention(pending, MAX_FUSION_KEYFRAMES)
+      : pending;
+    if (compacted) this.stats.fusionKeyframeCompactions++;
     this.compactTextureKeyframes();
     if (compacted) {
       // Previously the preview kept observations whose keyframes had been

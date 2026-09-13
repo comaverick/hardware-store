@@ -153,6 +153,23 @@ test("rotation at one camera position is not independent depth support", () => {
   cloud.add(points, 3, new Float32Array([0.08, 1.6, 0]));
   expect(cloud.confirmedRatio(points)).toBe(1);
 });
+test("overlap consistency detects a shifted duplicate surface", () => {
+  const cloud = new VoxelCloud(0.08);
+  const points = Array.from({ length: 120 }, (_, index) => ({
+    x: (index % 12) * 0.09,
+    y: Math.floor(index / 12) * 0.09,
+    z: -2,
+  }));
+  cloud.add(points, 1, new Float32Array([0, 1.6, 0]));
+  const aligned = cloud.overlapConsistency(points);
+  const shifted = cloud.overlapConsistency(
+    points.map((point) => ({ ...point, z: point.z + 0.12 })),
+  );
+  expect(aligned.overlapRatio).toBeGreaterThan(0.9);
+  expect(aligned.medianDistance).toBeLessThan(0.04);
+  expect(shifted.overlapRatio).toBeGreaterThan(0.9);
+  expect(shifted.medianDistance).toBeGreaterThan(0.08);
+});
 function fixture(wallCount = 4) {
   const points = [];
   for (let y = 0.4; y < 2.5; y += 0.13)

@@ -111,11 +111,58 @@ export function createRgbdKeyframe(points, options = {}) {
   };
 }
 
+function frameCameraPosition(frame) {
+  const camera = frame?.camera;
+  if (camera?.length >= 3 && [camera[0], camera[1], camera[2]].every(Number.isFinite))
+    return [camera[0], camera[1], camera[2]];
+  const matrix = frame?.transformMatrix;
+  if (matrix?.length >= 15 && [matrix[12], matrix[13], matrix[14]].every(Number.isFinite))
+    return [matrix[12], matrix[13], matrix[14]];
+  return [0, 0, 0];
+}
+
+// The old index-based decimator could throw away an entire wall when capture
+// intervals were uneven. Sample by travelled camera distance instead, which
+// preserves physical coverage while keeping the worker's bounded frame count.
 function selectEvenly(values, limit) {
   if (values.length <= limit) return values;
-  return Array.from({ length: limit }, (_, index) =>
-    values[Math.floor((index * (values.length - 1)) / (limit - 1))],
-  );
+  const positions = values.map(frameCameraPosition);
+  const cumulative = [0];
+  for (let index = 1; index < positions.length; index++)
+    cumulative.push(
+      cumulative[index - 1] +
+        Math.hypot(
+          positions[index][0] - positions[index - 1][0],
+          positions[index][1] - positions[index - 1][1],
+          positions[index][2] - positions[index - 1][2],
+        ),
+    );
+  const total = cumulative[cumulative.length - 1];
+  if (!(total > 0))
+    return Array.from({ length: limit }, (_, index) =>
+      values[Math.floor((index * (values.length - 1)) / (limit - 1))],
+    );
+  const selected = new Set();
+  for (let index = 0; index < limit; index++) {
+    const target = (index * total) / (limit - 1);
+    let best = -1;
+    let bestDistance = Infinity;
+    for (let candidate = 0; candidate < cumulative.length; candidate++) {
+      if (selected.has(candidate)) continue;
+      const distance = Math.abs(cumulative[candidate] - target);
+      if (distance < bestDistance) {
+        best = candidate;
+        bestDistance = distance;
+      }
+    }
+    if (best >= 0) selected.add(best);
+  }
+  for (let index = 0; selected.size < limit && index < values.length; index++)
+    selected.add(index);
+  return [...selected]
+    .sort((left, right) => left - right)
+    .slice(0, limit)
+    .map((index) => values[index]);
 }
 
 export function filterDepth(frame) {

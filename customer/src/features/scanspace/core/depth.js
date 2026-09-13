@@ -205,6 +205,66 @@ export class VoxelCloud {
       else this.full = this.size >= this.maxSize;
     }
   }
+  // Compare a new depth view with the points already accumulated in the
+  // preview. A correctly tracked camera should land close to existing cells
+  // wherever the views overlap. A second, shifted wall layer instead appears
+  // as a dense group of nearby points with a large residual. Keep this query
+  // bounded because it runs on the phone while the scan is live.
+  overlapConsistency(points, { radius = 0.16, maximumSamples = 480 } = {}) {
+    if (!points?.length || !this.cells.size)
+      return {
+        sampled: 0,
+        compared: 0,
+        matched: 0,
+        overlapRatio: 0,
+        matchedRatio: 0,
+        medianDistance: null,
+        upperDistance: null,
+      };
+    const stride = Math.max(1, Math.ceil(points.length / maximumSamples));
+    const cellRadius = Math.max(1, Math.ceil(radius / this.size));
+    const distances = [];
+    let sampled = 0;
+    let compared = 0;
+    for (let index = 0; index < points.length; index += stride) {
+      const point = points[index];
+      if (![point?.x, point?.y, point?.z].every(Number.isFinite)) continue;
+      sampled++;
+      const x = Math.floor(point.x / this.size);
+      const y = Math.floor(point.y / this.size);
+      const z = Math.floor(point.z / this.size);
+      let nearest = Infinity;
+      for (let dx = -cellRadius; dx <= cellRadius; dx++)
+        for (let dy = -cellRadius; dy <= cellRadius; dy++)
+          for (let dz = -cellRadius; dz <= cellRadius; dz++) {
+            const candidate = this.cells.get(`${x + dx},${y + dy},${z + dz}`);
+            if (!candidate) continue;
+            nearest = Math.min(
+              nearest,
+              Math.hypot(
+                point.x - candidate.x,
+                point.y - candidate.y,
+                point.z - candidate.z,
+              ),
+            );
+          }
+      if (!Number.isFinite(nearest)) continue;
+      compared++;
+      if (nearest <= radius) distances.push(nearest);
+    }
+    if (!distances.length)
+      return { sampled, compared, matched: 0, overlapRatio: 0, matchedRatio: 0, medianDistance: null, upperDistance: null };
+    distances.sort((a, b) => a - b);
+    return {
+      sampled,
+      compared,
+      matched: distances.length,
+      overlapRatio: distances.length / Math.max(1, sampled),
+      matchedRatio: distances.length / Math.max(1, compared),
+      medianDistance: distances[Math.floor(distances.length / 2)],
+      upperDistance: distances[Math.floor((distances.length - 1) * 0.75)],
+    };
+  }
   previewStableCount() {
     return this.repeatedCells;
   }

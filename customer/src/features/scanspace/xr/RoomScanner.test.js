@@ -1,5 +1,11 @@
 import { PerspectiveCamera, Matrix4 } from "three";
-import { coveragePreviewSize, RoomScanner } from "./RoomScanner";
+import {
+  coveragePreviewSize,
+  KEYFRAME_RETENTION_TRIGGER,
+  MAX_FUSION_KEYFRAMES,
+  RoomScanner,
+  selectKeyframesForRetention,
+} from "./RoomScanner";
 
 test("stationary unsaved frames cannot turn the preview green", () => {
   const scanner = new RoomScanner({ onUpdate: () => {} });
@@ -86,4 +92,37 @@ test("texture compaction keeps the sharpest low-motion frame in each scan sector
   expect(scanner.keyframes[0].colorImage).not.toBeNull();
   expect(scanner.keyframes[2].colorImage).not.toBeNull();
   expect(scanner.keyframes[4].colorImage).not.toBeNull();
+});
+
+test("keyframe retention preserves a bounded spatial path instead of dropping every other view", () => {
+  const frames = Array.from({ length: KEYFRAME_RETENTION_TRIGGER + 8 }, (_, index) => ({
+    frameId: index,
+    camera: new Float32Array([index * 0.04, 1.6, 0]),
+    transformMatrix: new Float32Array([
+      1, 0, 0, 0,
+      0, 1, 0, 0,
+      0, 0, 1, 0,
+      index * 0.04, 1.6, 0, 1,
+    ]),
+    timestamp: index * 400,
+  }));
+  const retained = selectKeyframesForRetention(frames, MAX_FUSION_KEYFRAMES);
+  expect(retained).toHaveLength(MAX_FUSION_KEYFRAMES);
+  expect(retained[0].frameId).toBe(0);
+  expect(retained[retained.length - 1].frameId).toBe(
+    frames[frames.length - 1].frameId,
+  );
+  expect(retained.map((frame) => frame.frameId)).not.toEqual(
+    frames.filter((_, index) => index % 2 === 0).slice(0, MAX_FUSION_KEYFRAMES).map((frame) => frame.frameId),
+  );
+});
+
+test("a transient depth read error is recorded without permanently pausing capture", () => {
+  const scanner = new RoomScanner({ onUpdate: () => {} });
+  scanner.session = { depthUsage: "cpu-optimized" };
+  scanner.captureDepthFrame(500, { getDepthInformation: () => { throw new Error("temporary depth failure"); } }, {});
+  expect(scanner.paused).toBe(false);
+  expect(scanner.stats.depthReadErrors).toBe(1);
+  expect(scanner.stats.depthState).toBe("error");
+  expect(scanner.stats.errors[0]).toMatch(/Depth read failed/);
 });

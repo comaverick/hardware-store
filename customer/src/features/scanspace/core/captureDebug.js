@@ -80,8 +80,8 @@ export function downloadDepthCapture(blob, diagnostics = null) {
 
 export function restoreDepthCapture(payload) {
   const capture = payload.capture || payload;
-  if (!Array.isArray(capture.keyframes) || capture.keyframes.length > 60)
-    throw new Error("Expected a ScanSpace capture with at most 60 keyframes.");
+  if (!Array.isArray(capture.keyframes) || capture.keyframes.length > 64)
+    throw new Error("Expected a ScanSpace capture with at most 64 keyframes.");
   const keyframes = capture.keyframes.map((frame) => {
     const count = frame.columns * frame.rows;
     if (!Number.isInteger(count) || count < 1 || count > 100000 ||
