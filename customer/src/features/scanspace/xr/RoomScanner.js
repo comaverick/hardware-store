@@ -6,7 +6,11 @@ import {
   depthPosition,
   imageSharpness,
 } from "../core/fusion";
-import { depthFrameQuality } from "../core/readiness";
+import {
+  depthFrameQuality,
+  MAX_COLOR_CAPTURE_ANGULAR_SPEED,
+  MAX_COLOR_CAPTURE_LINEAR_SPEED,
+} from "../core/readiness";
 import { createCameraColorReader } from "./cameraColor";
 
 function coverageSplatTexture() {
@@ -153,6 +157,8 @@ export class RoomScanner {
       textureKeyframes: 0,
       colorSharpness: 0,
       colorClippedRatio: 0,
+      colorFrameReliable: true,
+      colorFramesSkippedForMotion: 0,
       acceptedDepthFrames: 0,
       rejectedDepthFrames: 0,
       frameQuality: "waiting",
@@ -624,7 +630,7 @@ export class RoomScanner {
     // A genuinely new area can be far from the previous cloud. Only reject a
     // nearby view whose overlapping geometry has shifted into a second layer.
     if (moved > 0.35) return false;
-    return consistency.medianDistance > 0.085 && consistency.upperDistance > 0.13;
+    return consistency.medianDistance > 0.06 && consistency.upperDistance > 0.095;
   }
   captureKeyframe(
     points,
@@ -637,7 +643,16 @@ export class RoomScanner {
     depth = null,
     motion = {},
   ) {
-    const colorSnapshot = colorAt?.snapshot?.() || null;
+    const colorFrameReliable =
+      (Number(motion.linearSpeed) || 0) <=
+        MAX_COLOR_CAPTURE_LINEAR_SPEED &&
+      (Number(motion.angularSpeed) || 0) <=
+        MAX_COLOR_CAPTURE_ANGULAR_SPEED;
+    const keepColor = !colorAt || colorFrameReliable;
+    const colorSnapshot = keepColor ? colorAt?.snapshot?.() || null : null;
+    this.stats.colorFrameReliable = !colorAt || colorFrameReliable;
+    if (colorAt && !colorFrameReliable)
+      this.stats.colorFramesSkippedForMotion++;
     const keyframe = createRgbdKeyframe(points, {
       columns,
       rows,
@@ -654,6 +669,7 @@ export class RoomScanner {
       camera: pose.position,
       timestamp,
       colorImage: colorSnapshot,
+      keepColor,
       colorSharpness:
         Number(colorAt?.sharpness ?? colorSnapshot?.sharpness) || 0,
       colorClippedRatio:

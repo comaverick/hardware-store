@@ -29,6 +29,7 @@ export function createRgbdKeyframe(points, options = {}) {
   const depths = new Float32Array(length);
   const colors = new Uint8Array(length * 3);
   const colorMask = new Uint8Array(length);
+  const keepColor = options.keepColor !== false;
   let validCount = 0;
   let coloredCount = 0;
   points.forEach((point) => {
@@ -44,7 +45,11 @@ export function createRgbdKeyframe(points, options = {}) {
     positions[target + 2] = point.z;
     depths[index] = Number.isFinite(point.depth) ? point.depth : 0;
     validCount++;
-    if (Array.isArray(point.color) && point.color.slice(0, 3).every(Number.isFinite)) {
+    if (
+      keepColor &&
+      Array.isArray(point.color) &&
+      point.color.slice(0, 3).every(Number.isFinite)
+    ) {
       colors[target] = clamp(Math.round(point.color[0]), 0, 255);
       colors[target + 1] = clamp(Math.round(point.color[1]), 0, 255);
       colors[target + 2] = clamp(Math.round(point.color[2]), 0, 255);
@@ -53,7 +58,7 @@ export function createRgbdKeyframe(points, options = {}) {
     }
   });
   if (validCount < 6) return null;
-  const image = options.colorImage;
+  const image = keepColor ? options.colorImage : null;
   const transformMatrix = new Float32Array(options.transformMatrix || []);
   const cameraCoordinate = (name, offset) =>
     Number.isFinite(options.camera?.[name])
@@ -626,29 +631,58 @@ function validateFrameOverlap(frames, diagnostics = {}, limits = {}) {
         const compared = forward.compared + backward.compared;
         const agreeing = forward.agreeing + backward.agreeing;
         const agreementRatio = agreeing / Math.max(1, compared);
-        const medianError = Math.min(
-          forward.medianErrorMeters ?? Infinity,
-          backward.medianErrorMeters ?? Infinity,
+        const forwardAgreementRatio =
+          forward.agreeing / Math.max(1, forward.compared);
+        const backwardAgreementRatio =
+          backward.agreeing / Math.max(1, backward.compared);
+        const combineDirectionalError = (firstError, secondError) => {
+          const errors = [firstError, secondError].filter(Number.isFinite);
+          if (!errors.length) return Infinity;
+          return limits.requireBidirectional
+            ? Math.max(...errors)
+            : Math.min(...errors);
+        };
+        const medianError = combineDirectionalError(
+          forward.medianErrorMeters,
+          backward.medianErrorMeters,
         );
-        const upperError = Math.min(
-          forward.upperErrorMeters ?? Infinity,
-          backward.upperErrorMeters ?? Infinity,
+        const upperError = combineDirectionalError(
+          forward.upperErrorMeters,
+          backward.upperErrorMeters,
         );
+        const minimumDirectionalSamples =
+          limits.minimumDirectionalSamples || 8;
+        const minimumDirectionalAgreementRatio =
+          limits.minimumDirectionalAgreementRatio || 0.34;
+        // A one-way match is not enough for a final partial-surface result.
+        // Foreground clutter can agree in one projection while a shifted wall
+        // sheet fails in the reverse direction. Requiring both directions in
+        // the strict pass prevents that sheet from joining the fusion core.
+        const bidirectionalAccepted =
+          !limits.requireBidirectional ||
+          (forward.compared >= minimumDirectionalSamples &&
+            backward.compared >= minimumDirectionalSamples &&
+            forwardAgreementRatio >= minimumDirectionalAgreementRatio &&
+            backwardAgreementRatio >= minimumDirectionalAgreementRatio);
         const accepted =
           agreeing >= (limits.minimumAgreeing || 12) &&
           agreementRatio >= (limits.minimumAgreementRatio || 0.4) &&
           medianError <= (limits.maximumMedianError || 0.075) &&
-          upperError <= (limits.maximumUpperError || 0.14);
+          upperError <= (limits.maximumUpperError || 0.14) &&
+          bidirectionalAccepted;
         diagnostics.pairs.push({
           firstFrame: frames[left].frameId,
           secondFrame: frames[right].frameId,
           compared,
           agreeing,
           agreementRatio,
+          forwardAgreementRatio,
+          backwardAgreementRatio,
           forwardMedianErrorMeters: forward.medianErrorMeters,
           backwardMedianErrorMeters: backward.medianErrorMeters,
           forwardUpperErrorMeters: forward.upperErrorMeters,
           backwardUpperErrorMeters: backward.upperErrorMeters,
+          bidirectionalAccepted,
           accepted,
         });
         if (!accepted) continue;
@@ -677,12 +711,31 @@ function validateFrameOverlap(frames, diagnostics = {}, limits = {}) {
   // A weak or corrupt first frame must not poison the entire scan. Keep the
   // largest mutually connected capture sequence, with valid sample count as a
   // tie breaker, and restore chronological order for fusion.
-  const strongest = components.sort((left, right) => {
-    if (right.length !== left.length) return right.length - left.length;
-    const samples = (component) => component.reduce(
+  const samples = (component) =>
+    component.reduce(
       (sum, index) => sum + frames[index].filteredCount,
       0,
     );
+  let strongest;
+  if (limits.selectionMode === "anchor-core") {
+    // Connected components permit a long A-B-C-D chain even when A and D no
+    // longer describe the same wall. A partial scan is safer when every kept
+    // frame directly agrees with one common anchor. This trades a little
+    // marginal coverage for a globally coherent surface instead of a curl.
+    const cores = frames.map((_, anchor) => [
+      anchor,
+      ...adjacency[anchor],
+    ]);
+    strongest = cores.sort((left, right) => {
+      if (right.length !== left.length) return right.length - left.length;
+      return samples(right) - samples(left);
+    })[0] || [];
+    diagnostics.selectionMode = "anchor-core";
+    diagnostics.anchorFrameId = strongest.length
+      ? frames[strongest[0]].frameId
+      : null;
+  } else strongest = components.sort((left, right) => {
+    if (right.length !== left.length) return right.length - left.length;
     return samples(right) - samples(left);
   })[0] || [];
   diagnostics.selectedFrameIds = strongest.map((index) => frames[index].frameId);
@@ -2183,6 +2236,14 @@ function triangleMaximumEdge(positions, first, second, third) {
 // have a calibrated voxel size (for example older diagnostic replays).
 export function meshBridgeDiagnostics(mesh, voxelSize, options = {}) {
   const totalTriangles = Math.floor((mesh?.indices?.length || 0) / 3);
+  const protectedTrailingTriangles = Math.max(
+    0,
+    Math.min(
+      totalTriangles,
+      Math.floor(Number(options.protectedTrailingTriangles) || 0),
+    ),
+  );
+  const checkedTriangles = totalTriangles - protectedTrailingTriangles;
   const size = Number(voxelSize);
   const maxEdge = Number.isFinite(Number(options.maxEdge))
     ? Number(options.maxEdge)
@@ -2190,7 +2251,7 @@ export function meshBridgeDiagnostics(mesh, voxelSize, options = {}) {
   let longEdgeTriangles = 0;
   let maximumEdge = 0;
   if (mesh?.positions?.length && mesh?.indices?.length)
-    for (let index = 0; index < mesh.indices.length; index += 3) {
+    for (let index = 0; index < checkedTriangles * 3; index += 3) {
       const edge = triangleMaximumEdge(
         mesh.positions,
         mesh.indices[index],
@@ -2204,8 +2265,10 @@ export function meshBridgeDiagnostics(mesh, voxelSize, options = {}) {
     maxEdgeMeters: maxEdge,
     maximumObservedEdgeMeters: maximumEdge,
     totalTriangles,
+    checkedTriangles,
+    protectedTrailingTriangles,
     longEdgeTriangles,
-    longEdgeRatio: longEdgeTriangles / Math.max(1, totalTriangles),
+    longEdgeRatio: longEdgeTriangles / Math.max(1, checkedTriangles),
   };
 }
 
@@ -2217,10 +2280,15 @@ export function pruneUnsupportedMeshBridges(mesh, voxelSize, options = {}) {
     return { ...mesh, removedBridgeTriangles: 0, meshBridgeDiagnostics: diagnostics };
   const kept = [];
   let removedArea = 0;
+  const protectedIndexStart = diagnostics.checkedTriangles * 3;
   for (let index = 0; index < mesh.indices.length; index += 3) {
     const first = mesh.indices[index];
     const second = mesh.indices[index + 1];
     const third = mesh.indices[index + 2];
+    if (index >= protectedIndexStart) {
+      kept.push(first, second, third);
+      continue;
+    }
     const edge = triangleMaximumEdge(mesh.positions, first, second, third);
     if (edge <= diagnostics.maxEdgeMeters) {
       kept.push(first, second, third);
@@ -2855,8 +2923,8 @@ export function stabilizeMeasuredWallSectors(mesh, walls = [], voxelSize = 0.03)
       wall?.dominantNormal &&
       Number.isFinite(wall.wallOffset) &&
       wall.bounds &&
-      wall.dominantOrientationRatio >= 0.45 &&
-      wall.dominantLayerRatio >= 0.5,
+      wall.dominantOrientationRatio >= 0.38 &&
+      wall.dominantLayerRatio >= 0.55,
   );
   if (!supported.length)
     return { ...mesh, stabilizedPlaneCount: 0, stabilizedVertexCount: 0 };
@@ -2866,7 +2934,10 @@ export function stabilizeMeasuredWallSectors(mesh, walls = [], voxelSize = 0.03)
   // supported wall by more than one voxel. The cap keeps nearby furniture and
   // recessed surfaces out of the correction; no vertices or triangles are
   // created by this operation.
-  const distanceLimit = clamp(voxelSize * 2.2, 0.045, 0.06);
+  // The retained frame core already passed strict bidirectional depth checks,
+  // so a broad, wall-like patch may be corrected across several noisy voxels.
+  // The 10 cm cap still keeps ordinary shelves and furniture fronts separate.
+  const distanceLimit = clamp(voxelSize * 4, 0.065, 0.1);
   const extentMargin = Math.max(0.025, voxelSize * 1.2);
   let stabilizedVertexCount = 0;
   for (let vertex = 0; vertex < positions.length / 3; vertex++) {
@@ -2878,7 +2949,7 @@ export function stabilizeMeasuredWallSectors(mesh, walls = [], voxelSize = 0.03)
       const alignment = Math.abs(
         normals[offset] * normal.x + normals[offset + 2] * normal.z,
       );
-      if (alignment < 0.82) return;
+      if (alignment < 0.72) return;
       const distance =
         positions[offset] * normal.x +
         positions[offset + 2] * normal.z -
@@ -2899,8 +2970,8 @@ export function stabilizeMeasuredWallSectors(mesh, walls = [], voxelSize = 0.03)
         best = { normal, distance };
     });
     if (!best) continue;
-    positions[offset] -= best.normal.x * best.distance * 0.96;
-    positions[offset + 2] -= best.normal.z * best.distance * 0.96;
+    positions[offset] -= best.normal.x * best.distance;
+    positions[offset + 2] -= best.normal.z * best.distance;
     stabilizedVertexCount++;
   }
   return {
@@ -3595,6 +3666,39 @@ function projectedTexturePenalty(frame, projections) {
   );
 }
 
+function closestProjectiveDepthAgreement(frame, projection, radiusLimit = 2) {
+  if (!projection) return null;
+  const center = gridIndex(frame, projection.u, projection.v);
+  const centerX = center % frame.columns;
+  const centerY = Math.floor(center / frame.columns);
+  let closestDifference = Infinity;
+  let closestDepth = 0;
+  let closestRadius = Infinity;
+  for (let offsetY = -radiusLimit; offsetY <= radiusLimit; offsetY++)
+    for (let offsetX = -radiusLimit; offsetX <= radiusLimit; offsetX++) {
+      const radius = Math.abs(offsetX) + Math.abs(offsetY);
+      if (radius > radiusLimit) continue;
+      const x = centerX + offsetX;
+      const y = centerY + offsetY;
+      if (x < 0 || y < 0 || x >= frame.columns || y >= frame.rows) continue;
+      const measured = frame.filteredDepth[y * frame.columns + x];
+      if (!measured) continue;
+      const difference = Math.abs(measured - projection.depth);
+      if (difference < closestDifference) {
+        closestDifference = difference;
+        closestDepth = measured;
+        closestRadius = radius;
+      }
+    }
+  return closestDepth
+    ? {
+        difference: closestDifference,
+        depth: closestDepth,
+        radius: closestRadius,
+      }
+    : null;
+}
+
 function texturedMesh(mesh, frames, precomputedCalibration = null) {
   const atlas = buildAtlas(frames, precomputedCalibration);
   const sharedNormals = computeNormals(mesh);
@@ -3683,43 +3787,48 @@ function texturedMesh(mesh, frames, precomputedCalibration = null) {
       ));
       if (colorProjections.some((value) =>
         !value || value.u < 0.01 || value.v < 0.01 || value.u > 0.99 || value.v > 0.99)) return;
-      // Visibility belongs to the depth camera/grid. Color UVs are only used
-      // after the surface has passed that independent occlusion check.
-      const depthIndex = gridIndex(
+      const vertexDepthProjections = triangle.map((vertex) => projectWorld(
         frame,
-        depthProjection.u,
-        depthProjection.v,
+        projectionPositions[vertex * 3],
+        projectionPositions[vertex * 3 + 1],
+        projectionPositions[vertex * 3 + 2],
+      ));
+      if (vertexDepthProjections.some((value) =>
+        !value || value.u < 0.01 || value.v < 0.01 || value.u > 0.99 || value.v > 0.99)) return;
+      // Visibility belongs to the depth camera/grid. Color UVs are only used
+      // after the surface has passed that independent occlusion check. Check
+      // every corner as well as the center: a center-only match can stretch a
+      // foreground texture over a triangle whose corners lie behind it.
+      const centerAgreement = closestProjectiveDepthAgreement(
+        frame,
+        depthProjection,
+        2,
       );
-      const centerX = depthIndex % frame.columns;
-      const centerY = Math.floor(depthIndex / frame.columns);
-      let closestAgreement = Infinity;
-      let closestDepth = 0;
-      let closestRadius = Infinity;
-      // Mesh vertices can land just across a depth-pixel boundary after TSDF
-      // extraction. A two-pixel diamond can recover texture for an existing
-      // edge triangle, but its depth still has to agree with the triangle's
-      // original measured position. This cannot create or bridge geometry.
-      for (let offsetY = -2; offsetY <= 2; offsetY++)
-        for (let offsetX = -2; offsetX <= 2; offsetX++) {
-          const radius = Math.abs(offsetX) + Math.abs(offsetY);
-          if (radius > 2) continue;
-          const x = centerX + offsetX;
-          const y = centerY + offsetY;
-          if (x < 0 || y < 0 || x >= frame.columns || y >= frame.rows) continue;
-          const measured = frame.filteredDepth[y * frame.columns + x];
-          if (!measured) continue;
-          const difference = Math.abs(measured - depthProjection.depth);
-          if (difference < closestAgreement) {
-            closestAgreement = difference;
-            closestDepth = measured;
-            closestRadius = radius;
-          }
-        }
       if (
-        !closestDepth ||
-        closestAgreement > Math.max(0.055, closestDepth * 0.03)
+        !centerAgreement ||
+        centerAgreement.difference >
+          Math.max(0.055, centerAgreement.depth * 0.03)
       )
         return;
+      const vertexAgreements = vertexDepthProjections.map((projection) =>
+        closestProjectiveDepthAgreement(frame, projection, 2),
+      );
+      if (
+        vertexAgreements.some(
+          (agreement) =>
+            !agreement ||
+            agreement.difference >
+              Math.max(0.065, agreement.depth * 0.035),
+        )
+      )
+        return;
+      const allDepthAgreements = [centerAgreement, ...vertexAgreements];
+      const worstAgreement = Math.max(
+        ...allDepthAgreements.map((agreement) => agreement.difference),
+      );
+      const farthestRecovery = Math.max(
+        ...allDepthAgreements.map((agreement) => agreement.radius),
+      );
       const dx = frame.transformMatrix[12] - center.x;
       const dy = frame.transformMatrix[13] - center.y;
       const dz = frame.transformMatrix[14] - center.z;
@@ -3767,14 +3876,14 @@ function texturedMesh(mesh, frames, precomputedCalibration = null) {
         frame,
         projections: colorProjections,
         sampledColor,
-        recoveredTexture: closestRadius > 1,
+        recoveredTexture: farthestRecovery > 1,
         score:
           facing * 2 +
           1 / distance +
           sharpness * 0.72 +
           localSharpness * 0.48 -
-          closestAgreement * 5 -
-          Math.max(0, closestRadius - 1) * 0.18 -
+          worstAgreement * 5 -
+          Math.max(0, farthestRecovery - 1) * 0.18 -
           motionPenalty * 0.68 -
           texturePenalty * 1.05 -
           frameClippingPenalty * 0.8,
@@ -4010,6 +4119,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     .filter(Boolean);
   const alignment = {};
   const initialOverlap = {};
+  let surfaceConsistencyFailure = null;
   let overlapping = validateFrameOverlap(prepared, initialOverlap);
   if (options.poseRefinement === "validated" && overlapping.length >= 2) {
     const refinement = refineFramePoses(overlapping, {
@@ -4028,15 +4138,24 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     alignment.poseRefinementDiagnostics = refinement.diagnostics;
   } else {
     Object.assign(alignment, initialOverlap);
-    alignment.poseRefinement = "disabled-until-independently-validated";
+    alignment.poseRefinement =
+      options.poseRefinement === "native-tracking"
+        ? "native-webxr-tracking"
+        : "disabled-until-independently-validated";
   }
   if (options.completionMode === "surface" && overlapping.length >= 3) {
     const strictDiagnostics = {};
     const consistent = validateFrameOverlap(overlapping, strictDiagnostics, {
       minimumAgreeing: 16,
       minimumAgreementRatio: 0.5,
+      minimumDirectionalSamples: 10,
+      minimumDirectionalAgreementRatio: 0.38,
       maximumMedianError: 0.045,
       maximumUpperError: 0.09,
+      requireBidirectional: !!options.requireCoherentSurfaceCore,
+      selectionMode: options.requireCoherentSurfaceCore
+        ? "anchor-core"
+        : "connected-component",
     });
     const enoughConsistentFrames =
       consistent.length >= 3 &&
@@ -4044,9 +4163,28 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     alignment.surfaceConsistency = {
       ...strictDiagnostics,
       applied: enoughConsistentFrames,
-      fallbackToGeneralOverlap: !enoughConsistentFrames,
+      fallbackToGeneralOverlap:
+        !enoughConsistentFrames && !options.requireCoherentSurfaceCore,
+      rejectedAsIncoherent:
+        !enoughConsistentFrames && !!options.requireCoherentSurfaceCore,
     };
     if (enoughConsistentFrames) overlapping = consistent;
+    else if (options.requireCoherentSurfaceCore) {
+      surfaceConsistencyFailure = {
+        consistentFrames: consistent.length,
+        candidateFrames: overlapping.length,
+      };
+      overlapping = [];
+    }
+  } else if (
+    options.completionMode === "surface" &&
+    options.requireCoherentSurfaceCore
+  ) {
+    surfaceConsistencyFailure = {
+      consistentFrames: overlapping.length,
+      candidateFrames: prepared.length,
+    };
+    overlapping = [];
   }
   const selected = selectEvenly(
     overlapping,
@@ -4061,7 +4199,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   if (localLayerConsensus.diagnostics)
     alignment.localLayerConsensus = localLayerConsensus.diagnostics;
   const stages = {
-    algorithmVersion: 30,
+    algorithmVersion: 31,
     completionMode: options.completionMode === "surface" ? "surface" : "room",
     reconstructionProfile: options.reconstructionProfile || "quality",
     supportMode: "translated-camera-viewpoints",
@@ -4107,6 +4245,14 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   if (ambiguousLegacyKeyframes && !prepared.length)
     return failure(
       "This older diagnostic capture used ambiguous depth-buffer coordinates. Record a fresh scan with the repaired view-aligned geometry format.",
+    );
+  if (surfaceConsistencyFailure)
+    return failure(
+      "The captured views do not agree on one stable surface. Return to the last confirmed area, hold still, and repeat the wall with overlapping sideways views.",
+      {
+        surfaceConsistencyFailure,
+        rejectedUnsafeFusion: true,
+      },
     );
   if (
     options.completionMode !== "surface" &&
@@ -4174,7 +4320,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     // A partial measured result may close only tiny meshing cracks. Broad
     // unmeasured regions remain open and never become replacement walls.
     maxDiameter: surfaceCompletion
-      ? clamp(volume.voxelSize * 6, 0.12, 0.18)
+      ? clamp(volume.voxelSize * 7.5, 0.14, 0.2)
       : clamp(volume.voxelSize * 9, 0.3, 0.45),
     maxPlanarity: surfaceCompletion
       ? Math.max(0.028, volume.voxelSize * 0.9)
@@ -4184,18 +4330,21 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   stages.filledHoleTriangles = surface.filledHoleTriangles;
   const bridgeDiagnostics = meshBridgeDiagnostics(surface, volumeVoxelSize, {
     maxEdge: options.maxBridgeEdge,
+    protectedTrailingTriangles: surface.filledHoleTriangles,
   });
   stages.meshBridgeDiagnostics = bridgeDiagnostics;
   if (options.pruneUnsupportedBridges) {
     surface = pruneUnsupportedMeshBridges(surface, volumeVoxelSize, {
       maxEdge: options.maxBridgeEdge,
+      protectedTrailingTriangles: surface.filledHoleTriangles,
     });
     stages.removedBridgeTriangles = surface.removedBridgeTriangles || 0;
     stages.trianglesAfterBridgePrune = surface.indices.length / 3;
   }
   const highlyFragmented = meshFragmentationIsUnacceptable(surface);
-  const wallStructure = meshWallStructureDiagnostics(surface);
+  let wallStructure = meshWallStructureDiagnostics(surface);
   stages.wallStructure = wallStructure;
+  stages.initialWallStructure = wallStructure;
   const measuredSurfaceQuality =
     options.completionMode === "surface"
       ? measuredWallSectorQualityDiagnostics(surface)
@@ -4312,8 +4461,11 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       };
     }
   }
-  if (!stages.rectangularRoomModelCompatible && !surfaceCompletion)
-    return failure("The measured views create curled or overlapping wall layers. Keep scanning the affected wall from overlapping sideways positions.", {
+  if (
+    !stages.rectangularRoomModelCompatible &&
+    !surfaceCompletion
+  )
+    return failure("The measured views create curled or overlapping wall layers. Return to a confirmed area, hold still, and repeat the affected wall from overlapping sideways positions.", {
       ...stages,
       confirmedVoxels,
       voxelSize: volumeVoxelSize,
@@ -4321,7 +4473,10 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       fusedTriangles: surface.indices.length / 3,
       rejectedUnsafeFusion: true,
     });
-  if (!stages.rectangularRoomModelCompatible)
+  if (
+    !stages.rectangularRoomModelCompatible &&
+    !options.rejectStructurallyInvalidSurface
+  )
     measuredSurfaceWarnings.push({
       code: "possible-curved-or-overlapping-surface",
       message:
@@ -4402,6 +4557,26 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       surface,
       volumeVoxelSize,
       5,
+    );
+  wallStructure = meshWallStructureDiagnostics(surface);
+  stages.wallStructure = wallStructure;
+  stages.postStabilizationWallStructure = wallStructure;
+  stages.rectangularRoomModelCompatible =
+    !meshOutsideRectangularRoomModel(wallStructure);
+  if (
+    surfaceCompletion &&
+    options.rejectStructurallyInvalidSurface &&
+    !stages.rectangularRoomModelCompatible
+  )
+    return failure(
+      "The measured surface is still curled or overlapping after safe planar correction. Return to a confirmed area, hold still, and repeat the affected section.",
+      {
+        confirmedVoxels,
+        voxelSize: volumeVoxelSize,
+        fusedSurfaceArea: surface.surfaceArea,
+        fusedTriangles: surface.indices.length / 3,
+        rejectedUnsafeFusion: true,
+      },
     );
   report?.("texturing", 88);
   const textured = texturedMesh(surface, usable, colorCalibration);

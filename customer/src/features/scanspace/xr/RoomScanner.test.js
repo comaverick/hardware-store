@@ -126,3 +126,37 @@ test("a transient depth read error is recorded without permanently pausing captu
   expect(scanner.stats.depthState).toBe("error");
   expect(scanner.stats.errors[0]).toMatch(/Depth read failed/);
 });
+
+test("nearby overlapping views with a shifted surface are rejected live", () => {
+  const scanner = new RoomScanner({ onUpdate: () => {} });
+  scanner.lastMeshPose = {
+    position: { x: 0, y: 1.6, z: 0 },
+    orientation: { x: 0, y: 0, z: 0, w: 1 },
+  };
+  const pose = {
+    position: { x: 0.1, y: 1.6, z: 0 },
+    orientation: { x: 0, y: 0, z: 0, w: 1 },
+  };
+  expect(
+    scanner.shouldRejectPose(
+      {
+        compared: 180,
+        overlapRatio: 0.65,
+        medianDistance: 0.07,
+        upperDistance: 0.11,
+      },
+      pose,
+    ),
+  ).toBe(true);
+  expect(
+    scanner.shouldRejectPose(
+      {
+        compared: 180,
+        overlapRatio: 0.65,
+        medianDistance: 0.025,
+        upperDistance: 0.05,
+      },
+      pose,
+    ),
+  ).toBe(false);
+});

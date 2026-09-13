@@ -36,6 +36,7 @@ const captureQualitySummary = (stats, fusion = null) => ({
   textureKeyframes: stats.textureKeyframes || 0,
   colorSharpness: stats.colorSharpness || 0,
   colorClippedRatio: stats.colorClippedRatio || 0,
+  colorFramesSkippedForMotion: stats.colorFramesSkippedForMotion || 0,
   floorOutlierSamples: fusion?.floorOutlierSamples || 0,
   floorOutlierRatio: fusion?.floorOutlierRatio || 0,
   removedBridgeTriangles: fusion?.removedBridgeTriangles || 0,
@@ -79,6 +80,8 @@ function captureGuidance(stats, busy = false) {
       : "Waiting for depth. Aim at a matte, well-lit surface and hold still for a moment.";
   if (stats.movingTooFast)
     return "Move more slowly. Fast depth frames are being skipped to prevent warped surfaces.";
+  if (stats.colorActive && stats.colorFrameReliable === false)
+    return "Hold still briefly. Depth is being kept, but blurred camera colors are being skipped.";
   if (
     (stats.rejectedDepthFrames || 0) >= 6 &&
     (stats.rejectedDepthFrames || 0) /
@@ -290,10 +293,13 @@ export default function ScannerPanel({
       reconstructionProfile: "quality",
       floorOutlierTolerance: FLOOR_OUTLIER_TOLERANCE_METERS,
       pruneUnsupportedBridges: true,
-      // Correct small AR pose drift from overlapping depth views before TSDF
-      // fusion. The worker applies only bounded corrections that measurably
-      // reduce reprojection residuals; otherwise the original pose is kept.
-      poseRefinement: "validated",
+      // WebXR/ARCore already supplies one globally tracked coordinate system.
+      // Pairwise ICP on a mostly flat wall is under-constrained and can turn a
+      // sequence of locally improved poses into one globally curled surface.
+      poseRefinement: "native-tracking",
+      requireCoherentSurfaceCore: true,
+      rejectStructurallyInvalidSurface: true,
+      smoothingPasses: 3,
     };
     const runWorker = (options, transferable = []) =>
       new Promise((resolve, reject) => {

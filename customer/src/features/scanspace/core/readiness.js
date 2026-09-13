@@ -14,6 +14,11 @@ export const FLOOR_OUTLIER_TOLERANCE_METERS = 0.45;
 // with the neighboring pose. Keep only deliberately slow views.
 export const MAX_CAPTURE_LINEAR_SPEED = 0.45;
 export const MAX_CAPTURE_ANGULAR_SPEED = 0.6;
+// Geometry can still be useful while the phone is moving moderately, but a
+// camera image captured at that speed becomes a smeared texture. Keep the
+// depth keyframe and omit only its colors until the phone is steadier.
+export const MAX_COLOR_CAPTURE_LINEAR_SPEED = 0.22;
+export const MAX_COLOR_CAPTURE_ANGULAR_SPEED = 0.32;
 
 export function depthFrameQuality({
   validSamples = 0,

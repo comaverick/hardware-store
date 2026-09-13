@@ -150,6 +150,32 @@ test("stores a compact transferable RGB-D keyframe instead of a frame mesh", () 
   expect(frame.timestamp).toBe(42);
 });
 
+test("keeps a moving depth keyframe without storing its blurred colors", () => {
+  const frame = createRgbdKeyframe(grid(() => -2), {
+    columns: 3,
+    rows: 3,
+    projectionMatrix: projection,
+    transformMatrix: new Float32Array([
+      1, 0, 0, 0,
+      0, 1, 0, 0,
+      0, 0, 1, 0,
+      0, 0, 0, 1,
+    ]),
+    colorImage: {
+      data: new Uint8Array(4 * 4 * 4).fill(180),
+      width: 4,
+      height: 4,
+      channels: 4,
+    },
+    keepColor: false,
+  });
+  expect(frame).not.toBeNull();
+  expect(frame.validCount).toBe(9);
+  expect(frame.coloredCount).toBe(0);
+  expect(frame.colorImage).toBeNull();
+  expect([...frame.colorMask].every((value) => value === 0)).toBe(true);
+});
+
 test("returns a safe no-mesh result when depth coverage is too small", () => {
   const result = fuseRgbdKeyframes([], { floorY: 0 });
   expect(result.mesh).toBeNull();
@@ -205,6 +231,13 @@ test("removes triangles that bridge unsupported mesh gaps", () => {
   });
   expect(pruned.removedBridgeTriangles).toBe(1);
   expect(Array.from(pruned.indices)).toEqual([0, 1, 2]);
+
+  const preservedFill = pruneUnsupportedMeshBridges(mesh, 0.02, {
+    maxEdge: 0.06,
+    protectedTrailingTriangles: 1,
+  });
+  expect(preservedFill.removedBridgeTriangles).toBe(0);
+  expect(Array.from(preservedFill.indices)).toEqual(Array.from(mesh.indices));
 });
 
 function gridPlaneWithMissingCell(missingColumn, missingRow) {
@@ -378,6 +411,34 @@ test("straightens only existing vertices on a supported measured wall", () => {
   expect(Math.abs(result.positions[2] + 2)).toBeLessThan(
     Math.abs(mesh.positions[2] + 2),
   );
+});
+
+test("straightens a supported wall bowed across several depth voxels", () => {
+  const mesh = {
+    positions: new Float32Array([
+      -1, 0, -1.92, 0, 0, -2.08, 1, 0, -1.92,
+      -1, 1, -1.92, 0, 1, -2.08, 1, 1, -1.92,
+      -1, 2, -1.92, 0, 2, -2.08, 1, 2, -1.92,
+    ]),
+    indices: new Uint32Array([
+      0, 1, 4, 0, 4, 3, 1, 2, 5, 1, 5, 4,
+      3, 4, 7, 3, 7, 6, 4, 5, 8, 4, 8, 7,
+    ]),
+  };
+  const result = stabilizeMeasuredWallSectors(
+    mesh,
+    [{
+      dominantNormal: { x: 0, z: 1 },
+      wallOffset: -2,
+      dominantOrientationRatio: 0.8,
+      dominantLayerRatio: 0.9,
+      bounds: { minX: -1, maxX: 1, minY: 0, maxY: 2 },
+    }],
+    0.025,
+  );
+  const depths = [...result.positions].filter((_, index) => index % 3 === 2);
+  expect(result.indices).toEqual(mesh.indices);
+  expect(Math.max(...depths) - Math.min(...depths)).toBeLessThan(0.001);
 });
 
 test("flattens measured shelf planes without adding geometry", () => {
@@ -944,6 +1005,29 @@ test("partial-surface consistency removes a smaller pose drift before fusion", (
   expect(
     result.diagnostics.alignment.surfaceConsistency.rejectedFrameIds,
   ).toContain(1);
+});
+
+test("partial-surface consistency does not accept a gradual drift chain", () => {
+  const frames = Array.from({ length: 7 }, (_, index) => {
+    const frame = planeKeyframe((index - 3) * 0.04, false);
+    const drift = index * 0.035;
+    frame.transformMatrix[14] = drift;
+    frame.viewTransformMatrix[14] = drift;
+    frame.camera[2] = drift;
+    return frame;
+  });
+  const result = fuseRgbdKeyframes(frames, {
+    completionMode: "surface",
+    requireCoherentSurfaceCore: true,
+  });
+  expect(result.mesh?.kind).toBe("projective-tsdf-surface-net");
+  expect(result.diagnostics.alignment.surfaceConsistency.selectionMode).toBe(
+    "anchor-core",
+  );
+  expect(
+    result.diagnostics.alignment.surfaceConsistency.selectedFrameIds.length,
+  ).toBeLessThan(frames.length);
+  expect(result.diagnostics.fusedFrameIds.length).toBeLessThan(frames.length);
 });
 
 test("suppresses a minority reflective strip before surface fusion", () => {
