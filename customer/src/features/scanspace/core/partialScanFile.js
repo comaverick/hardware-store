@@ -79,6 +79,15 @@ function safeObserver(observer, bounds) {
   };
 }
 
+function srgbByteToLinearByte(value) {
+  const channel = Math.max(0, Math.min(255, Number(value) || 0)) / 255;
+  const linear =
+    channel <= 0.04045
+      ? channel / 12.92
+      : Math.pow((channel + 0.055) / 1.055, 2.4);
+  return Math.round(linear * 255);
+}
+
 function bakedMeshColors(mesh) {
   const original = mesh.colors
     ? new Uint8Array(mesh.colors.buffer, mesh.colors.byteOffset, mesh.colors.byteLength)
@@ -94,26 +103,55 @@ function bakedMeshColors(mesh) {
     const y = Math.min(texture.height - 1, Math.round(v * (texture.height - 1)));
     const source = (y * texture.width + x) * 4;
     if ((texture.data[source + 3] ?? 255) === 0) continue;
-    colors[vertex * 3] = texture.data[source];
-    colors[vertex * 3 + 1] = texture.data[source + 1];
-    colors[vertex * 3 + 2] = texture.data[source + 2];
+    colors[vertex * 3] = srgbByteToLinearByte(texture.data[source]);
+    colors[vertex * 3 + 1] = srgbByteToLinearByte(texture.data[source + 1]);
+    colors[vertex * 3 + 2] = srgbByteToLinearByte(texture.data[source + 2]);
   }
   return colors;
 }
 
 function encodeMesh(mesh) {
   if (!mesh) return null;
-  return {
+  const includeTexture = canIncludeTexture(mesh);
+  const colors = includeTexture
+    ? mesh.colors
+      ? new Uint8Array(
+          mesh.colors.buffer,
+          mesh.colors.byteOffset,
+          mesh.colors.byteLength,
+        )
+      : new Uint8Array(mesh.positions.length).fill(255)
+    : bakedMeshColors(mesh);
+  const value = {
     positions: encodeArray(mesh.positions, "f32"),
     normals: encodeArray(mesh.normals, "f32"),
-    colors: encodeArray(bakedMeshColors(mesh), "u8"),
+    colors: encodeArray(colors, "u8"),
     indices: encodeArray(mesh.indices, "u32"),
     colorCoverage: finite(
       mesh.textureCoverage ?? mesh.colorCoverage,
       0,
     ),
     observer: mesh.observer || null,
+    // A texture-backed export renders through the same camera atlas as the
+    // live result. Only mark the mesh as portable when that atlas had to be
+    // omitted and its sRGB pixels were baked into linear vertex colors.
+    portableColors: Boolean(mesh.texture?.data && !includeTexture),
   };
+  if (includeTexture) {
+    value.uvs = encodeArray(mesh.uvs, "f32");
+    value.texture = {
+      data: encodeArray(mesh.texture.data, "u8"),
+      width: mesh.texture.width,
+      height: mesh.texture.height,
+    };
+  }
+  return value;
+}
+
+function baseMeshBytes(mesh) {
+  if (!mesh?.positions || !mesh?.indices) return Infinity;
+  const arrays = [mesh.positions, mesh.normals, mesh.indices].filter(Boolean);
+  return arrays.reduce((total, array) => total + array.byteLength, mesh.positions.length);
 }
 
 function canIncludeMesh(mesh) {
@@ -124,6 +162,33 @@ function canIncludeMesh(mesh) {
     arrays.every((array) => array.byteLength <= MAX_ARRAY_BYTES) &&
     colorBytes <= MAX_ARRAY_BYTES &&
     arrays.reduce((total, array) => total + array.byteLength, colorBytes) <=
+      MAX_PORTABLE_MESH_BYTES
+  );
+}
+
+function canIncludeTexture(mesh) {
+  const texture = mesh?.texture;
+  const width = Number(texture?.width);
+  const height = Number(texture?.height);
+  const data = texture?.data;
+  if (
+    !canIncludeMesh(mesh) ||
+    !mesh.uvs ||
+    mesh.uvs.length !== (mesh.positions?.length || 0) / 3 * 2 ||
+    !Number.isInteger(width) ||
+    !Number.isInteger(height) ||
+    width < 1 ||
+    height < 1 ||
+    width > 8192 ||
+    height > 8192 ||
+    !data ||
+    data.byteLength !== width * height * 4
+  )
+    return false;
+  return (
+    mesh.uvs.byteLength <= MAX_ARRAY_BYTES &&
+    data.byteLength <= MAX_ARRAY_BYTES &&
+    baseMeshBytes(mesh) + mesh.uvs.byteLength + data.byteLength <=
       MAX_PORTABLE_MESH_BYTES
   );
 }
@@ -148,16 +213,41 @@ function decodeMesh(mesh) {
   const normals = mesh.normals
     ? decodeArray(mesh.normals, "f32", "mesh normal")
     : null;
+  const uvs = mesh.uvs ? decodeArray(mesh.uvs, "f32", "mesh UV") : null;
   if (!positions.length || positions.length % 3 || colors.length !== positions.length)
     throw new Error("The scan file has inconsistent mesh geometry.");
-  if (indices.length % 3 || (normals && normals.length !== positions.length))
+  if (
+    indices.length % 3 ||
+    (normals && normals.length !== positions.length) ||
+    (uvs && uvs.length !== (positions.length / 3) * 2)
+  )
     throw new Error("The scan file has inconsistent mesh geometry.");
   validateFiniteArray(positions, "mesh");
   if (normals) validateFiniteArray(normals, "mesh normal");
+  if (uvs) validateFiniteArray(uvs, "mesh UV");
   const vertexCount = positions.length / 3;
   for (let index = 0; index < indices.length; index++)
     if (indices[index] >= vertexCount)
       throw new Error("The scan file contains an invalid mesh index.");
+  let texture = null;
+  if (mesh.texture) {
+    const width = Number(mesh.texture.width);
+    const height = Number(mesh.texture.height);
+    if (
+      !uvs ||
+      !Number.isInteger(width) ||
+      !Number.isInteger(height) ||
+      width < 1 ||
+      height < 1 ||
+      width > 8192 ||
+      height > 8192
+    )
+      throw new Error("The scan file has invalid mesh texture data.");
+    const data = decodeArray(mesh.texture.data, "u8", "mesh texture");
+    if (data.length !== width * height * 4)
+      throw new Error("The scan file has invalid mesh texture data.");
+    texture = { data, width, height };
+  }
   const bounds = boundsFromPositions(positions);
   return {
     version: 3,
@@ -165,9 +255,12 @@ function decodeMesh(mesh) {
     positions,
     normals,
     colors,
+    uvs,
     indices,
     triangleCount: indices.length / 3,
     colorCoverage: finite(mesh.colorCoverage, 0),
+    portableColors: !!mesh.portableColors,
+    texture,
     bounds,
     observer: safeObserver(mesh.observer, bounds),
   };

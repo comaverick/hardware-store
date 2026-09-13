@@ -46,6 +46,7 @@ test("incomplete scans survive portable serialization", () => {
     10, 20, 30, 40, 50, 60, 70, 80, 90,
   ]);
   expect(restored.mesh.triangleCount).toBe(1);
+  expect(restored.mesh.portableColors).toBe(false);
   expect(restored.cloud.count).toBe(2);
 });
 
@@ -57,4 +58,27 @@ test("incomplete scan imports reject unsafe geometry", () => {
   expect(() => parsePartialScan(JSON.stringify(value))).toThrow(
     "invalid mesh index",
   );
+});
+
+test("portable exports retain the live mesh texture when it fits", () => {
+  const scan = measuredScan();
+  scan.mesh.uvs = new Float32Array([0, 0, 1, 0, 0, 1]);
+  scan.mesh.texture = {
+    width: 2,
+    height: 2,
+    data: new Uint8Array([
+      12, 24, 36, 255,
+      48, 60, 72, 255,
+      84, 96, 108, 255,
+      120, 132, 144, 255,
+    ]),
+  };
+  const restored = parsePartialScan(serializePartialScan(scan));
+  expect(restored.mesh.texture.width).toBe(2);
+  expect(restored.mesh.texture.height).toBe(2);
+  expect(Array.from(restored.mesh.texture.data)).toEqual(
+    Array.from(scan.mesh.texture.data),
+  );
+  expect(Array.from(restored.mesh.uvs)).toEqual([0, 0, 1, 0, 0, 1]);
+  expect(restored.mesh.portableColors).toBe(false);
 });
