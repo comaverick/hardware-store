@@ -18,8 +18,20 @@ import {
 } from "@phosphor-icons/react";
 import { detectCapabilities } from "./core/depth";
 import { downloadDepthCapture } from "./core/captureDebug";
+import {
+  looksLikePartialScan,
+  MAX_PARTIAL_SCAN_IMPORT_BYTES,
+  parsePartialScan,
+} from "./core/partialScanFile";
 import { useScanSpace, sampleRoom } from "./store";
-import { api, loadDraft, captureStore } from "./services";
+import {
+  api,
+  captureStore,
+  loadDraft,
+  looksLikeScanDiagnostics,
+  MAX_ROOM_IMPORT_BYTES,
+  parseRoomImport,
+} from "./services";
 import RoomReview from "./components/RoomReview";
 import SavedProjectsDialog from "./components/SavedProjectsDialog";
 import "./scanspace.css";
@@ -105,19 +117,39 @@ export default function ScanSpace() {
       setError(e.message);
     }
   }
-  function importRoom(e) {
-    const file = e.target.files?.[0];
+  async function importRoom(e) {
+    const input = e.currentTarget;
+    const file = input.files?.[0];
     if (!file) return;
-    if (file.size > 512000) {
-      setError("Room JSON must be under 500 KB.");
-      return;
+    try {
+      const beginning = await file.slice(0, 65536).text();
+      const partial = looksLikePartialScan(beginning);
+      if (looksLikeScanDiagnostics(file.name, beginning))
+        throw new Error(
+          "This is a scan-diagnostics file, not a saved room. Open the room from Saved rooms, or import a scanspace-room.json export.",
+        );
+      const limit = partial
+        ? MAX_PARTIAL_SCAN_IMPORT_BYTES
+        : MAX_ROOM_IMPORT_BYTES;
+      if (file.size > limit)
+        throw new Error(
+          partial
+            ? "Incomplete scan files can be up to 64 MB."
+            : "Saved room files can be up to 10 MB.",
+        );
+      const contents = await file.text();
+      if (partial) {
+        setSurfaceScan(parsePartialScan(contents));
+        setStage("surface");
+        setError("");
+      } else {
+        openRoom(parseRoomImport(contents));
+      }
+    } catch (reason) {
+      setError(reason.message || "The saved room could not be opened.");
+    } finally {
+      input.value = "";
     }
-    file
-      .text()
-      .then((value) => {
-        openRoom(JSON.parse(value));
-      })
-      .catch((err) => setError(err.message));
   }
   if (stage === "editor")
     return (
@@ -205,7 +237,7 @@ export default function ScanSpace() {
               )}
               <label className="ss-import">
                 <UploadSimple size={17} />
-                Import room JSON
+                Import saved scan or room
                 <input
                   type="file"
                   accept="application/json,.json"
@@ -298,6 +330,16 @@ export default function ScanSpace() {
         >
           <PartialScanReview
             scan={surfaceScan}
+            onCompleteManually={() => {
+              setReviewRoom(null);
+              setCapture({
+                scanMesh: surfaceScan.mesh || null,
+                scanCloud: surfaceScan.cloud || null,
+                textures: {},
+              });
+              setSurfaceScan(null);
+              setStage("review");
+            }}
             onDone={() => {
               setSurfaceScan(null);
               setStage("welcome");

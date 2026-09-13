@@ -1,4 +1,27 @@
 import { normalizeRoom } from "./core/domain";
+export const MAX_ROOM_IMPORT_BYTES = 10 * 1024 * 1024;
+
+export function looksLikeScanDiagnostics(fileName, beginning = "") {
+  return (
+    /^scanspace-debug-/i.test(fileName || "") ||
+    /^\s*\{\s*"capture"\s*:/i.test(beginning)
+  );
+}
+
+export function parseRoomImport(value) {
+  const parsed = JSON.parse(value);
+  if (parsed?.capture?.keyframes || parsed?.capture?.version)
+    throw new Error(
+      "This is a scan-diagnostics file, not a saved room. Open the room from Saved rooms, or import a scanspace-room.json export.",
+    );
+  const room = parsed?.room || parsed;
+  if (!room || !Array.isArray(room.floorPolygon))
+    throw new Error(
+      "This file does not contain a ScanSpace room. Choose a scanspace-room.json export.",
+    );
+  return normalizeRoom(room);
+}
+
 const BASE = (process.env.REACT_APP_API_URL || "http://localhost:5000")
   .replace(/\/$/, "")
   .replace(/\/api$/, "");

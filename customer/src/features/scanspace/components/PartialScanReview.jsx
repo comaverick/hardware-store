@@ -1,11 +1,19 @@
+import { useState } from "react";
 import PartialScanScene from "./PartialScanScene";
 import { downloadDepthCapture } from "../core/captureDebug";
+import { downloadPartialScan } from "../core/partialScanFile";
 import {
   MIN_CAMERA_BASELINE_METERS,
   MIN_DIRECTION_COVERAGE,
 } from "../core/readiness";
 
-export default function PartialScanReview({ scan, onRescan, onDone }) {
+export default function PartialScanReview({
+  scan,
+  onCompleteManually,
+  onRescan,
+  onDone,
+}) {
+  const [exportError, setExportError] = useState("");
   const quality = scan.captureQuality;
   return (
     <section className="ss-partial-review">
@@ -80,10 +88,31 @@ export default function PartialScanReview({ scan, onRescan, onDone }) {
         </p>
       )}
       <p className="ss-notice">
-        The room editor and material estimates stay unavailable until a closed
-        footprint is measured. Structural detection status: {scan.reason}
+        This incomplete scan can be exported and opened on another device. To
+        unlock the room editor and material estimates, complete a closed room
+        footprint manually. Structural detection status: {scan.reason}
       </p>
+      {exportError && (
+        <p role="alert" className="ss-error">
+          {exportError}
+        </p>
+      )}
       <div className="ss-actions">
+        <button
+          type="button"
+          onClick={() => {
+            try {
+              downloadPartialScan(scan);
+              setExportError("");
+            } catch (reason) {
+              setExportError(
+                reason.message || "The incomplete scan could not be exported.",
+              );
+            }
+          }}
+        >
+          Export incomplete scan
+        </button>
         {scan.debugCapture && (
           <button type="button" onClick={() =>
             downloadDepthCapture(scan.debugCapture, scan.fusionDiagnostics)}>
@@ -93,8 +122,15 @@ export default function PartialScanReview({ scan, onRescan, onDone }) {
         <button type="button" onClick={onDone}>
           Back to ScanSpace
         </button>
-        <button className="ss-primary" type="button" onClick={onRescan}>
+        <button type="button" onClick={onRescan}>
           Start a new scan
+        </button>
+        <button
+          className="ss-primary"
+          type="button"
+          onClick={onCompleteManually}
+        >
+          Complete room manually
         </button>
       </div>
     </section>
