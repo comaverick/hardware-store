@@ -925,17 +925,121 @@
   background: white;
   padding: 24px;
   border-radius: 16px;
-  width: min(480px, 100%);
+  width: min(620px, 100%);
   max-height: 85dvh;
   overflow: auto;
+  box-shadow: 0 18px 52px #10241d2e;
 }
 .ss-project-dialog header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 20px;
 }
 .ss-project-dialog h2 {
   font-size: 20px;
+  margin: 0;
+}
+.ss-project-dialog header p {
+  color: var(--ss-muted);
+  line-height: 1.5;
+  margin: 6px 0 0;
+}
+.ss-project-dialog header > button {
+  flex: 0 0 auto;
+  min-height: 36px;
+  padding: 7px;
+}
+.ss-transfer-panel {
+  margin: 22px 0 26px;
+  padding: 18px;
+  border-radius: 12px;
+  background: #f2f5f1;
+}
+.ss-transfer-heading {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+.ss-transfer-heading > svg {
+  flex: 0 0 auto;
+  color: var(--ss-accent);
+  margin-top: 2px;
+}
+.ss-transfer-heading h3,
+.ss-project-list-heading h3 {
+  margin: 0;
+  font-size: 14px;
+}
+.ss-transfer-heading p,
+.ss-transfer-ready p {
+  margin: 5px 0 0;
+  color: var(--ss-muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.ss-transfer-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+  margin-top: 16px;
+}
+.ss-transfer-form label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: var(--ss-muted);
+  font-size: 11px;
+  font-weight: 650;
+}
+.ss-transfer-form input {
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid #cbd4cc;
+  border-radius: 9px;
+  padding: 9px 12px;
+  background: white;
+  color: var(--ss-ink);
+  font-size: 16px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.ss-transfer-ready {
+  margin-top: 18px;
+  padding-top: 17px;
+  border-top: 1px solid #d6ddd6;
+}
+.ss-transfer-ready > span {
+  display: block;
+  color: var(--ss-muted);
+  font-size: 11px;
+}
+.ss-transfer-ready output {
+  display: block;
+  margin-top: 5px;
+  font-size: clamp(22px, 5vw, 30px);
+  font-weight: 750;
+  letter-spacing: 0.1em;
+  overflow-wrap: anywhere;
+}
+.ss-transfer-ready > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+.ss-project-list-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.ss-project-list-heading span {
+  color: var(--ss-muted);
+  font-size: 11px;
 }
 .ss-project-row {
   display: flex;
@@ -944,8 +1048,22 @@
 }
 .ss-project-row > button:first-child {
   flex: 1;
+  min-width: 0;
   align-items: flex-start;
   flex-direction: column;
+  text-align: start;
+}
+.ss-project-row > button:first-child strong {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.ss-project-row > button[aria-current="true"] {
+  border-color: #c66f50;
+  background: #fff4ed;
+}
+.ss-project-row .ss-transfer-action {
+  white-space: nowrap;
+  font-size: 12px;
 }
 .ss-project-row small {
   font-size: 10px;
@@ -1406,6 +1524,32 @@
   }
   .ss-editor-actions button span {
     display: none;
+  }
+  .ss-project-dialog {
+    padding: 20px;
+    max-height: calc(100dvh - 24px);
+  }
+  .ss-transfer-panel {
+    margin-block: 18px 22px;
+    padding: 15px;
+  }
+  .ss-transfer-form {
+    grid-template-columns: 1fr;
+  }
+  .ss-transfer-form button {
+    width: 100%;
+  }
+  .ss-project-row {
+    gap: 6px;
+  }
+  .ss-project-row > button:not(:first-child) {
+    padding-inline: 10px;
+  }
+  .ss-project-row .ss-transfer-action {
+    gap: 5px;
+  }
+  .ss-project-row .ss-transfer-action span {
+    font-size: 10px;
   }
   .ss-editor-body {
     display: flex;

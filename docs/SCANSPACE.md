@@ -61,6 +61,14 @@ Floor products use `materialType` of `tile`, `wood`, or `vinyl` and set `coverag
 
 `POST /api/scanspace/cart-lines` validates the final material selections on the server but intentionally returns an unreserved draft: this repository's customer checkout has no public stock-reservation endpoint yet. The customer app persists that validated draft locally and exposes `registerReservationCartAdapter()` in `customer/src/cart/reservationCart.js`. Connect that adapter to the real customer reservation/cart endpoint when it is introduced; only that endpoint should reserve stock or create a reservation.
 
+## Saved rooms and cross-device loading
+
+Cloud projects are private to the browser profile that created them. **Saved rooms** is available from both the ScanSpace start screen and the editor. It lists projects connected to the current browser and can open or delete them.
+
+To continue a phone project on a PC, open **Saved rooms** on the phone, choose **Send to another device** beside the project, and share the generated link or 12-character code. On the PC, open the link or enter the code under **Open a room from your phone**. The code expires after one hour, works once, and copies the editable room into the PC browser's private project list. The source project stays on the phone.
+
+The transfer includes the normalized room geometry, measurements, openings, finishes, placed products, and scan metadata. Captured camera textures and raw depth diagnostics remain on the scanning device and are never transferred.
+
 ## Deployment checklist
 
 - Deploy the `customer` application as its own HTTPS static app with `npm run build`. The current root `render.yaml` does not deploy this customer application.

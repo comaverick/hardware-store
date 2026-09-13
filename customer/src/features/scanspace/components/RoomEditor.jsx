@@ -20,6 +20,7 @@ import {
   Plus,
   Trash,
   Copy,
+  FolderOpen,
 } from "@phosphor-icons/react";
 import { useScanSpace } from "../store";
 import {
@@ -37,6 +38,7 @@ import {
   useReservationCart,
 } from "../../../cart/reservationCart";
 import RoomReview from "./RoomReview";
+import SavedProjectsDialog from "./SavedProjectsDialog";
 const RoomScene = lazy(() => import("./RoomScene"));
 const money = (value) =>
   new Intl.NumberFormat("en-PH", {
@@ -76,7 +78,7 @@ export default function RoomEditor({ onExit }) {
     [snap, setSnap] = useState(true),
     [snapWall, setSnapWall] = useState(false),
     [saveColors, setSaveColors] = useState(false),
-    [projectList, setProjectList] = useState(null);
+    [projectsOpen, setProjectsOpen] = useState(false);
   const current = useRef(s.room);
   current.current = s.room;
   const loading = useRef(0);
@@ -255,24 +257,23 @@ export default function RoomEditor({ onExit }) {
       setBusy(false);
     }
   }
-  async function openProjects() {
-    setBusy(true);
+  async function loadProject(data) {
+    let saved;
     try {
-      setProjectList(await api("/projects"));
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setBusy(false);
-    }
-  }
-  async function loadProject(p) {
-    try {
-      const data = await api(`/projects/${p._id}`);
-      s.setRoom(data.room, { projectId: data._id, revision: data.revision });
-      setProjectList(null);
-    } catch (e) {
-      setError(e.message);
-    }
+      saved = await captureStore("get");
+    } catch {}
+    const textures =
+      saved?.outline === JSON.stringify(data.room.floorPolygon)
+        ? saved.textures
+        : {};
+    s.setRoom(data.room, {
+      projectId: data._id,
+      revision: data.revision,
+      textures,
+    });
+    setProjectsOpen(false);
+    setNotice("Saved room opened.");
+    setError("");
   }
   function exportRoom() {
     const blob = new Blob([JSON.stringify(s.room, null, 2)], {
@@ -341,6 +342,13 @@ export default function RoomEditor({ onExit }) {
             onClick={s.redo}
           >
             <ArrowClockwise size={19} />
+          </button>
+          <button
+            title="Saved rooms"
+            aria-label="Open saved rooms"
+            onClick={() => setProjectsOpen(true)}
+          >
+            <FolderOpen size={19} />
           </button>
           <button
             disabled={busy}
@@ -763,8 +771,9 @@ export default function RoomEditor({ onExit }) {
                   <Ruler size={17} />
                   Edit measurements & openings
                 </button>
-                <button disabled={busy} onClick={openProjects}>
-                  Open cloud project
+                <button disabled={busy} onClick={() => setProjectsOpen(true)}>
+                  <FolderOpen size={17} />
+                  Open saved room
                 </button>
                 <button onClick={exportRoom}>Export room JSON</button>
                 <button onClick={s.resetDesign}>
@@ -990,50 +999,15 @@ export default function RoomEditor({ onExit }) {
           </div>
         </aside>
       </div>
-      {projectList && (
-        <div className="ss-modal-backdrop">
-          <section
-            role="dialog"
-            aria-modal="true"
-            aria-label="Saved projects"
-            className="ss-project-dialog"
-          >
-            <header>
-              <h2>Saved projects</h2>
-              <button
-                onClick={() => setProjectList(null)}
-                aria-label="Close projects"
-              >
-                <X size={20} />
-              </button>
-            </header>
-            {!projectList.length && <p>No cloud projects yet.</p>}
-            {projectList.map((p) => (
-              <div className="ss-project-row" key={p._id}>
-                <button onClick={() => loadProject(p)}>
-                  {p.name}
-                  <small>{new Date(p.updatedAt).toLocaleDateString()}</small>
-                </button>
-                <button
-                  aria-label={`Delete ${p.name}`}
-                  onClick={async () => {
-                    try {
-                      await api(`/projects/${p._id}`, null, "DELETE");
-                      setProjectList((list) =>
-                        list.filter((v) => v._id !== p._id),
-                      );
-                      if (s.projectId === p._id) s.update({ projectId: null });
-                    } catch (e) {
-                      setError(e.message);
-                    }
-                  }}
-                >
-                  <Trash size={18} />
-                </button>
-              </div>
-            ))}
-          </section>
-        </div>
+      {projectsOpen && (
+        <SavedProjectsDialog
+          onClose={() => setProjectsOpen(false)}
+          onLoad={loadProject}
+          currentProjectId={s.projectId}
+          onDeleted={(projectId) => {
+            if (s.projectId === projectId) s.update({ projectId: null });
+          }}
+        />
       )}
       <button
         className="ss-cart-access"

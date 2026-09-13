@@ -1,17 +1,27 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   ArrowLeft,
   ArrowRight,
   Camera,
   Cube,
+  FolderOpen,
   Ruler,
   UploadSimple,
 } from "@phosphor-icons/react";
 import { detectCapabilities } from "./core/depth";
 import { downloadDepthCapture } from "./core/captureDebug";
 import { useScanSpace, sampleRoom } from "./store";
-import { loadDraft, captureStore } from "./services";
+import { api, loadDraft, captureStore } from "./services";
 import RoomReview from "./components/RoomReview";
+import SavedProjectsDialog from "./components/SavedProjectsDialog";
 import "./scanspace.css";
 const ScannerPanel = lazy(() => import("./components/ScannerPanel"));
 const RoomEditor = lazy(() => import("./components/RoomEditor"));
@@ -26,7 +36,9 @@ export default function ScanSpace() {
     [surfaceScan, setSurfaceScan] = useState(null),
     [capture, setCapture] = useState({}),
     [error, setError] = useState(""),
-    [draft, setDraft] = useState(false);
+    [draft, setDraft] = useState(false),
+    [savedOpen, setSavedOpen] = useState(false);
+  const transferStarted = useRef(false);
   const demo = useMemo(() => sampleRoom(), []);
   useEffect(() => {
     let active = true;
@@ -40,11 +52,42 @@ export default function ScanSpace() {
       active = false;
     };
   }, []);
-  function openRoom(room, extra = {}) {
+  const openRoom = useCallback((room, extra = {}) => {
     useScanSpace.getState().setRoom(room, extra);
     setStage("editor");
     setError("");
-  }
+  }, []);
+  const openSavedProject = useCallback(async (project) => {
+    let saved;
+    try {
+      saved = await captureStore("get");
+    } catch {}
+    const textures =
+      saved?.outline === JSON.stringify(project.room.floorPolygon)
+        ? saved.textures
+        : {};
+    openRoom(project.room, {
+      projectId: project._id,
+      revision: project.revision,
+      textures,
+    });
+    setSavedOpen(false);
+  }, [openRoom]);
+  useEffect(() => {
+    const code = new URLSearchParams(window.location.search).get("transfer");
+    if (!code || transferStarted.current) return;
+    transferStarted.current = true;
+    api("/transfers/claim", { code })
+      .then((project) => openSavedProject(project))
+      .catch((reason) =>
+        setError(`This transfer link could not be opened. ${reason.message}`),
+      )
+      .finally(() => {
+        const url = new URL(window.location.href);
+        url.searchParams.delete("transfer");
+        window.history.replaceState({}, "", url);
+      });
+  }, [openSavedProject]);
   async function continueDraft() {
     try {
       const room = loadDraft();
@@ -135,6 +178,10 @@ export default function ScanSpace() {
               >
                 <Ruler size={20} />
                 Enter measurements
+              </button>
+              <button onClick={() => setSavedOpen(true)}>
+                <FolderOpen size={20} />
+                Open saved room
               </button>
             </div>
             <p className="ss-device-note">
@@ -318,6 +365,12 @@ export default function ScanSpace() {
             </div>
           )}
         </>
+      )}
+      {savedOpen && (
+        <SavedProjectsDialog
+          onClose={() => setSavedOpen(false)}
+          onLoad={openSavedProject}
+        />
       )}
     </main>
   );

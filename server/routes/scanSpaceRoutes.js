@@ -9,6 +9,25 @@ const defaultModels = {
 };
 const { normalizeRoom, estimateRoom } = require("../lib/scanspaceDomain");
 
+const TRANSFER_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
+const TRANSFER_TTL_MS = 60 * 60 * 1000;
+
+function transferCode() {
+  return Array.from({ length: 12 }, () =>
+    TRANSFER_ALPHABET[crypto.randomInt(TRANSFER_ALPHABET.length)],
+  ).join("");
+}
+
+function transferHash(code) {
+  return crypto.createHash("sha256").update(code).digest("hex");
+}
+
+function normalizeTransferCode(value) {
+  return typeof value === "string"
+    ? value.toUpperCase().replace(/[^A-Z0-9]/g, "")
+    : "";
+}
+
 function createScanSpaceRouter({
   Project,
   Product,
@@ -89,7 +108,70 @@ function createScanSpaceRouter({
           .limit(30)
           .lean(),
       ),
-    ),
+      ),
+  );
+  router.post(
+    "/projects/:id/transfer",
+    wrap(async (req, res) => {
+      const code = transferCode();
+      const transferExpiresAt = new Date(Date.now() + TRANSFER_TTL_MS);
+      const project = await Project.findOneAndUpdate(
+        {
+          _id: id(req.params.id),
+          ownerHash: req.ownerHash,
+          expiresAt: { $gt: new Date() },
+        },
+        {
+          $set: {
+            transferHash: transferHash(code),
+            transferExpiresAt,
+          },
+        },
+        { new: true },
+      );
+      if (!project)
+        return res.status(404).json({ message: "Project not found." });
+      res.json({
+        code: code.replace(/(.{4})(?=.)/g, "$1-"),
+        expiresAt: transferExpiresAt,
+      });
+    }),
+  );
+  router.post(
+    "/transfers/claim",
+    wrap(async (req, res) => {
+      const code = normalizeTransferCode(req.body.code);
+      if (code.length !== 12 || ![...code].every((v) => TRANSFER_ALPHABET.includes(v))) {
+        return res.status(400).json({
+          message: "Enter the 12-character transfer code from your other device.",
+        });
+      }
+      if ((await Project.countDocuments({ ownerHash: req.ownerHash })) >= 30)
+        return res
+          .status(409)
+          .json({ message: "Delete an old project before importing another." });
+      const source = await Project.findOneAndUpdate(
+        {
+          transferHash: transferHash(code),
+          transferExpiresAt: { $gt: new Date() },
+          expiresAt: { $gt: new Date() },
+        },
+        { $unset: { transferHash: 1, transferExpiresAt: 1 } },
+        { new: false },
+      );
+      if (!source)
+        return res.status(404).json({
+          message: "That transfer code is invalid or has expired. Create a new code on the device that saved the room.",
+        });
+      const room = normalizeRoom(source.room);
+      const project = await Project.create({
+        ownerHash: req.ownerHash,
+        name: room.name,
+        room,
+        expiresAt: new Date(Date.now() + 90 * 86400000),
+      });
+      res.status(201).json(publicProject(project));
+    }),
   );
   router.post(
     "/projects",
