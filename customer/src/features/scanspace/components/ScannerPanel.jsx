@@ -1,10 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { RoomScanner } from "../xr/RoomScanner";
-import { surfaceTextures } from "../core/reconstruction";
 import { buildScanCloud } from "../core/scanCloud";
 import { snapshotDepthCapture, downloadDepthCapture } from "../core/captureDebug";
 import {
-  scanReadiness,
   surfaceScanReadiness,
   MIN_CAMERA_BASELINE_METERS,
   MIN_DIRECTION_COVERAGE,
@@ -190,14 +188,12 @@ function captureTargetState(stats, busy = false) {
 
 export default function ScannerPanel({
   capabilities,
-  onComplete,
   onSurface,
   onCancel,
 }) {
   const canvas = useRef(),
     overlay = useRef(),
     scanner = useRef(),
-    worker = useRef(),
     fusionWorker = useRef(),
     debugCapture = useRef(null),
     finished = useRef(false),
@@ -213,12 +209,14 @@ export default function ScannerPanel({
     [partial, setPartial] = useState(null),
     [fusion, setFusion] = useState(null),
     [error, setError] = useState("");
-  const readiness = scanReadiness(stats);
   const surfaceReadiness = surfaceScanReadiness(stats);
+  // Finishing a partial surface only needs enough saved data to form a mesh.
+  // The fuller readiness score remains useful guidance, but must not trap the
+  // user in capture when they deliberately scanned only one wall.
+  const hasReconstructableCapture = (stats.fusionKeyframes || 0) >= 2;
   const targetState = captureTargetState(stats, busy);
   useEffect(
     () => () => {
-      worker.current?.terminate();
       fusionWorker.current?.terminate();
       scanner.current?.stop();
     },
@@ -297,8 +295,11 @@ export default function ScannerPanel({
       // Pairwise ICP on a mostly flat wall is under-constrained and can turn a
       // sequence of locally improved poses into one globally curled surface.
       poseRefinement: "native-tracking",
-      requireCoherentSurfaceCore: true,
-      rejectStructurallyInvalidSurface: true,
+      // Prefer the coherent subset when one can be identified, but retain the
+      // ordinary measured overlap as a fallback. Real mobile depth is noisy;
+      // coherence and wall-shape diagnostics must warn, not block completion.
+      requireCoherentSurfaceCore: false,
+      rejectStructurallyInvalidSurface: false,
       smoothingPasses: 3,
     };
     const runWorker = (options, transferable = []) =>
@@ -378,140 +379,7 @@ export default function ScannerPanel({
       }
     }
   }
-  async function finish() {
-    if (!readiness.ready) {
-      setError(`Keep scanning before finishing: ${readiness.missing.join(", ")}.`);
-      return;
-    }
-    setBusy(true);
-    setError("");
-    setFusion({ stage: "preparing", progress: 0 });
-    try {
-      const raw = scanner.current.result();
-      let acceptedPoints = raw.points;
-      let scanCloud = null;
-      let scanMesh = null;
-      let room,
-        floorY = raw.floorY,
-        ceilingMeasured = false;
-      scanner.current.paused = true;
-      debugCapture.current = snapshotDepthCapture(raw);
-      try {
-        const fused = await buildFusedMesh(raw, true);
-        scanMesh = fused.mesh;
-        acceptedPoints = observationPoints(fused.observations) || raw.points;
-        raw.stats.fusion = fused.diagnostics;
-        if (!scanMesh) {
-          setPartial({
-            reason:
-              fused.diagnostics?.reason ||
-              "The measured views did not pass surface-quality checks.",
-            pointCount: acceptedPoints.length,
-            coverage: raw.stats.coverage || 0,
-            cameraBaseline: raw.stats.cameraBaseline || 0,
-            rejectedDepthFrames: raw.stats.rejectedDepthFrames || 0,
-          });
-          return;
-        }
-      } catch (fusionError) {
-        raw.stats.fusion = { reason: fusionError.message, triangles: 0 };
-        setPartial({
-          reason: fusionError.message,
-          pointCount: raw.points.length,
-          coverage: raw.stats.coverage || 0,
-          cameraBaseline: raw.stats.cameraBaseline || 0,
-          rejectedDepthFrames: raw.stats.rejectedDepthFrames || 0,
-        });
-        return;
-      } finally {
-        fusionWorker.current?.terminate();
-        fusionWorker.current = null;
-      }
-      scanCloud = buildScanCloud(acceptedPoints, {
-        floorY: raw.floorY,
-        observer: raw.observer,
-        voxelSize: raw.stats.cloudCellSize,
-        floorOutlierTolerance: FLOOR_OUTLIER_TOLERANCE_METERS,
-      });
-      const stride = Math.max(1, Math.ceil(acceptedPoints.length / 16000));
-      const points = acceptedPoints.filter((_, i) => i % stride === 0);
-      worker.current = new Worker(
-        new URL("../core/reconstruction.worker.js", import.meta.url),
-      );
-      try {
-        const result = await new Promise((resolve, reject) => {
-          worker.current.onmessage = (e) =>
-            e.data.error
-              ? reject(new Error(e.data.error))
-              : resolve(e.data.result);
-          worker.current.onerror = () =>
-            reject(
-              new Error("Surface reconstruction failed. Keep scanning the area."),
-            );
-          worker.current.postMessage({
-            points,
-            options: {
-              floorY: raw.floorY,
-              height: 2.7,
-              observer: raw.observer,
-              depthFrames: raw.stats.depthFrames,
-            },
-          });
-        });
-        ({ room, floorY, ceilingMeasured } = result);
-        if (!room && result.partial) {
-          setPartial({
-            reason: result.partial.reason,
-            pointCount: result.partial.pointCount,
-            coverage: raw.stats.coverage || 0,
-            cameraBaseline: raw.stats.cameraBaseline || 0,
-            rejectedDepthFrames: raw.stats.rejectedDepthFrames || 0,
-          });
-          return;
-        }
-      } catch (reconstructionError) {
-        setPartial({
-          reason: reconstructionError.message,
-          pointCount: acceptedPoints.length,
-          coverage: raw.stats.coverage || 0,
-          cameraBaseline: raw.stats.cameraBaseline || 0,
-          rejectedDepthFrames: raw.stats.rejectedDepthFrames || 0,
-        });
-        return;
-      }
-      room.scanMetadata.deviceInfo = capabilities.browser;
-      const textures = surfaceTextures(room, acceptedPoints, floorY || 0);
-      finished.current = true;
-      await scanner.current.stop();
-      onComplete(room, {
-        textures,
-        ceilingMeasured,
-        stats: raw.stats,
-        partial: room.scanMetadata.partial,
-        inferredWallCount: room.scanMetadata.inferredWallCount,
-        scanCloud,
-        scanMesh,
-        debugCapture: debugCapture.current,
-      });
-    } catch (e) {
-      setError(e.message);
-      if (scanner.current) scanner.current.paused = false;
-    } finally {
-      worker.current?.terminate();
-      worker.current = null;
-      fusionWorker.current?.terminate();
-      fusionWorker.current = null;
-      setFusion(null);
-      setBusy(false);
-    }
-  }
   async function finishSurface() {
-    if (!surfaceReadiness.ready) {
-      setError(
-        `Keep scanning this area before finishing: ${surfaceReadiness.missing.join(", ")}.`,
-      );
-      return;
-    }
     setBusy(true);
     setError("");
     setFusion({ stage: "preparing", progress: 0 });
@@ -575,13 +443,9 @@ export default function ScannerPanel({
     }
   }
   async function finishScan() {
-    if (!surfaceReadiness.ready) {
-      setError(
-        `Keep scanning before finishing this scan: ${surfaceReadiness.missing.join(", ")}.`,
-      );
-      return;
-    }
-    if (readiness.ready) return finish();
+    // Every capture now follows the same measured-surface result path. Room
+    // sweep readiness may describe quality, but it must not switch the user to
+    // a second "complete room" pipeline or prevent a one-wall result.
     return finishSurface();
   }
   return (
@@ -691,11 +555,20 @@ export default function ScannerPanel({
                 Keep moving until the visible surface is evenly tinted; clear
                 gaps still need another angle.
               </p>
-              {!busy && !partial && !surfaceReadiness.ready && (
+              {!busy && !partial && !hasReconstructableCapture && (
                 <p className="ss-scan-hint">
-                  Keep scanning until this area has enough stable coverage: {surfaceReadiness.missing.join(", ")}.
+                  Capture at least two nearby depth views before finishing.
                 </p>
               )}
+              {!busy &&
+                !partial &&
+                hasReconstructableCapture &&
+                !surfaceReadiness.ready && (
+                  <p className="ss-scan-hint">
+                    You can finish this scan now. Additional slow, overlapping
+                    views may improve detail, but they are optional.
+                  </p>
+                )}
               {(stats.cloudCompactions > 0 || stats.fusionKeyframeCompactions > 0) && (
                 <p className="ss-scan-hint">
                   Capture density was optimized while preserving your scan coverage.
@@ -722,7 +595,7 @@ export default function ScannerPanel({
                   </button>
                   <button
                     className="ss-primary"
-                    disabled={busy || !surfaceReadiness.ready}
+                    disabled={busy || !hasReconstructableCapture}
                     onClick={finishScan}
                   >
                     Finish scan
@@ -730,17 +603,11 @@ export default function ScannerPanel({
                 </div>
               ) : (
                 <section className="ss-partial-capture" role="status">
-                  <strong>Scan needs more coverage</strong>
+                  <strong>Scan processing paused</strong>
                   <p>
-                    {partial.pointCount.toLocaleString()} points across{" "}
-                    {partial.coverage}% of the view sweep. Add another angle so
-                    the captured geometry can be used.
-                  </p>
-                  <p>
-                    Horizontal camera-position spread: {Math.round(
-                    (partial.cameraBaseline || 0) * 100,
-                    )} cm. Move sideways, not only in place, before finishing
-                    again.
+                    ScanSpace kept {partial.pointCount.toLocaleString()} measured
+                    points. Processing stopped for the reason below; your
+                    capture was not discarded.
                   </p>
                   <p className="ss-partial-reason">{partial.reason}</p>
                   <div className="ss-actions">
