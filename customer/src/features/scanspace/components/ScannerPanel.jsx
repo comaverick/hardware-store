@@ -68,6 +68,13 @@ function captureGuidance(stats, busy = false) {
     return "Depth paused. Move back toward a textured, well-lit surface.";
   if (stats.movingTooFast)
     return "Move more slowly. Fast depth frames are being skipped to prevent warped surfaces.";
+  if (
+    (stats.rejectedDepthFrames || 0) >= 6 &&
+    (stats.rejectedDepthFrames || 0) /
+      Math.max(1, (stats.acceptedDepthFrames || 0) + (stats.rejectedDepthFrames || 0)) >
+      0.12
+  )
+    return "Several frames were too fast or unreliable. Slow down and repeat this area for better overlap.";
   if (stats.colorActive && (stats.colorClippedRatio || 0) > 0.45)
     return "Color is clipped here. Tilt away from bright windows and hold still for a clearer texture.";
   if (stats.frameQuality === "sparse-depth")
@@ -250,6 +257,10 @@ export default function ScannerPanel({
       headingCoverage: raw.stats.coverage || 0,
       completionMode,
       reconstructionProfile: "quality",
+      // Correct small AR pose drift from overlapping depth views before TSDF
+      // fusion. The worker applies only bounded corrections that measurably
+      // reduce reprojection residuals; otherwise the original pose is kept.
+      poseRefinement: "validated",
     };
     const runWorker = (options, transferable = []) =>
       new Promise((resolve, reject) => {

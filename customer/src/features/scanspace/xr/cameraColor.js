@@ -168,9 +168,20 @@ export function createCameraColorReader(gl, options = {}) {
       gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
       gl.bindVertexArray(null);
       const sample = (u, v) => {
+        // WebXR normalized view coordinates are top-left based, while
+        // readPixels returns the camera copy from the OpenGL bottom row.
+        // Use pixel centres so depth/color samples do not drift by a row or
+        // column at the image boundary.
         const i =
-          (Math.min(height - 1, Math.floor((1 - v) * height)) * width +
-            Math.min(width - 1, Math.floor(u * width))) *
+          (Math.min(
+            height - 1,
+            Math.max(0, Math.round((1 - v) * (height - 1))),
+          ) *
+            width +
+            Math.min(
+              width - 1,
+              Math.max(0, Math.round(u * (width - 1))),
+            )) *
           4;
         return [pixels[i], pixels[i + 1], pixels[i + 2]];
       };

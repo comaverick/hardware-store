@@ -351,13 +351,17 @@ export default function ScanMesh({ mesh, low = false }) {
     );
     if (mesh.uvs)
       value.setAttribute("uv", new THREE.BufferAttribute(mesh.uvs, 2));
-    if (mesh.normals)
+    if (mesh.normals && positions === mesh.positions)
       value.setAttribute(
         "normal",
         new THREE.BufferAttribute(mesh.normals, 3),
       );
     value.setIndex(new THREE.BufferAttribute(mesh.indices, 1));
-    if (!mesh.normals) value.computeVertexNormals();
+    // Boundary/plane stabilization changes the rendered positions. Reusing
+    // pre-stabilization normals makes portable (untextured) scans show false
+    // dark bands, so derive normals from the exact vertices on screen.
+    if (!mesh.normals || positions !== mesh.positions)
+      value.computeVertexNormals();
     value.computeBoundingSphere();
     let texture = null;
     if (mesh.texture?.data) {

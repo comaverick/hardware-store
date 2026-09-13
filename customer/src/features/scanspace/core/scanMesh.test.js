@@ -984,6 +984,25 @@ test("does not mutate accepted poses without explicit validated refinement", () 
   expect(drifted.transformMatrix).toEqual(originalPose);
 });
 
+test("validated pose refinement removes a small depth-pose drift before fusion", () => {
+  const drifted = planeKeyframe(0.04);
+  drifted.transformMatrix[14] += 0.035;
+  const result = fuseRgbdKeyframes(
+    [planeKeyframe(0), drifted, planeKeyframe(0.08), planeKeyframe(-0.08)],
+    { completionMode: "surface", poseRefinement: "validated" },
+  );
+  expect(result.mesh?.kind).toBe("projective-tsdf-surface-net");
+  expect(result.diagnostics.alignment.poseCorrectionApplied).toBe(true);
+  expect(
+    result.diagnostics.alignment.poseRefinementDiagnostics.corrected,
+  ).toBeGreaterThan(0);
+  expect(
+    result.diagnostics.alignment.poseRefinementDiagnostics.corrections.some(
+      (correction) => correction.frameId === 1,
+    ),
+  ).toBe(true);
+});
+
 test("preserves a measured back surface through ordinary furniture-depth occlusion", () => {
   const result = fuseRgbdKeyframes(
     [

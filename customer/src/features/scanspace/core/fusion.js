@@ -133,10 +133,15 @@ export function filterDepth(frame) {
       )
         continue;
       const range = Math.max(0.07, center * 0.045);
-      let sum = center * 2;
-      let weight = 2;
+      // Keep the measured centre dominant. A symmetric mean softens sensor
+      // noise on a wall, but it also pulls a shelf edge toward the foreground
+      // whenever one side of the 3x3 footprint contains a different layer.
+      let sum = center * 3;
+      let weight = 3;
       let support = 0;
       let differenceSum = 0;
+      let minimum = center;
+      let maximum = center;
       for (let offsetY = -1; offsetY <= 1; offsetY++)
         for (let offsetX = -1; offsetX <= 1; offsetX++) {
           if (!offsetX && !offsetY) continue;
@@ -150,6 +155,8 @@ export function filterDepth(frame) {
           sum += next * contribution;
           weight += contribution;
           differenceSum += difference;
+          minimum = Math.min(minimum, next);
+          maximum = Math.max(maximum, next);
           support++;
         }
       // Keep a real sensor sample when two neighboring pixels agree. These
@@ -158,7 +165,11 @@ export function filterDepth(frame) {
       // them here created avoidable holes around shelves, curtains, and other
       // thin or partly occluded surfaces.
       if (support >= 2) {
-        filtered[index] = sum / weight;
+        const average = sum / weight;
+        const edgeTransition = maximum - minimum > range * 0.82;
+        filtered[index] = edgeTransition
+          ? center * 0.78 + average * 0.22
+          : average;
         const agreement = 1 - clamp(differenceSum / support / range, 0, 1);
         confidence[index] = Math.round(255 * clamp((support / 8) * 0.7 + agreement * 0.3, 0.15, 1));
         if (support === 2) weakSupportedCount++;
@@ -264,14 +275,9 @@ export function filterDepth(frame) {
   return { filtered, confidence, measuredMask, weakSupportedCount };
 }
 
-export function depthPosition(frame, index, depth) {
+function depthPositionAt(frame, u, v, depth) {
   const p = frame.projectionMatrix;
   const m = frame.transformMatrix;
-  // Keyframe storage is a normalized XR-view grid. Its cell centre is the
-  // single source of truth for depth sampling, unprojection, filtering,
-  // overlap checks, visibility checks, and hole repair.
-  const u = ((index % frame.columns) + 0.5) / frame.columns;
-  const v = (Math.floor(index / frame.columns) + 0.5) / frame.rows;
   const nx = u * 2 - 1;
   const ny = 1 - v * 2;
   const z = -depth;
@@ -290,6 +296,15 @@ export function depthPosition(frame, index, depth) {
     m[1] * x + m[5] * y + m[9] * z + m[13],
     m[2] * x + m[6] * y + m[10] * z + m[14],
   ];
+}
+
+export function depthPosition(frame, index, depth) {
+  // Keyframe storage is a normalized XR-view grid. Its cell centre is the
+  // single source of truth for depth sampling, unprojection, filtering,
+  // overlap checks, visibility checks, and hole repair.
+  const u = ((index % frame.columns) + 0.5) / frame.columns;
+  const v = (Math.floor(index / frame.columns) + 0.5) / frame.rows;
+  return depthPositionAt(frame, u, v, depth);
 }
 
 function prepareFrame(frame, frameId) {
@@ -604,6 +619,368 @@ function validateFrameOverlap(frames, diagnostics = {}, limits = {}) {
   diagnostics.rejectedFrameIds = frames
     .filter((_, index) => !strongest.includes(index)).map((frame) => frame.frameId);
   return strongest.sort((left, right) => left - right).map((index) => frames[index]);
+}
+
+function transformPointByRigidDelta(point, delta) {
+  const { rotation, translation } = delta;
+  return {
+    x:
+      rotation[0] * point.x +
+      rotation[1] * point.y +
+      rotation[2] * point.z +
+      translation[0],
+    y:
+      rotation[3] * point.x +
+      rotation[4] * point.y +
+      rotation[5] * point.z +
+      translation[1],
+    z:
+      rotation[6] * point.x +
+      rotation[7] * point.y +
+      rotation[8] * point.z +
+      translation[2],
+  };
+}
+
+function rigidDeltaRotationAngle(delta) {
+  return 2 * Math.acos(clamp(Math.abs(delta.quaternion[0]), -1, 1));
+}
+
+function cloneFrameForPoseRefinement(frame) {
+  return {
+    ...frame,
+    positions: new Float32Array(frame.positions),
+    transformMatrix: new Float32Array(frame.transformMatrix),
+    viewTransformMatrix:
+      frame.viewTransformMatrix?.length === 16
+        ? new Float32Array(frame.viewTransformMatrix)
+        : new Float32Array(frame.transformMatrix),
+    camera: new Float32Array(frame.camera || frame.transformMatrix.slice(12, 15)),
+  };
+}
+
+function applyRigidDeltaToFrame(frame, delta) {
+  const multiply = (matrix) => {
+    const result = new Float32Array(matrix);
+    for (let column = 0; column < 3; column++) {
+      const offset = column * 4;
+      const x = matrix[offset];
+      const y = matrix[offset + 1];
+      const z = matrix[offset + 2];
+      result[offset] =
+        delta.rotation[0] * x + delta.rotation[1] * y + delta.rotation[2] * z;
+      result[offset + 1] =
+        delta.rotation[3] * x + delta.rotation[4] * y + delta.rotation[5] * z;
+      result[offset + 2] =
+        delta.rotation[6] * x + delta.rotation[7] * y + delta.rotation[8] * z;
+    }
+    const x = matrix[12],
+      y = matrix[13],
+      z = matrix[14];
+    result[12] =
+      delta.rotation[0] * x +
+      delta.rotation[1] * y +
+      delta.rotation[2] * z +
+      delta.translation[0];
+    result[13] =
+      delta.rotation[3] * x +
+      delta.rotation[4] * y +
+      delta.rotation[5] * z +
+      delta.translation[1];
+    result[14] =
+      delta.rotation[6] * x +
+      delta.rotation[7] * y +
+      delta.rotation[8] * z +
+      delta.translation[2];
+    return result;
+  };
+  const positions = new Float32Array(frame.positions);
+  for (let index = 0; index < positions.length; index += 3) {
+    const x = positions[index],
+      y = positions[index + 1],
+      z = positions[index + 2];
+    if (![x, y, z].every(Number.isFinite)) continue;
+    const transformed = transformPointByRigidDelta({ x, y, z }, delta);
+    positions[index] = transformed.x;
+    positions[index + 1] = transformed.y;
+    positions[index + 2] = transformed.z;
+  }
+  const transformMatrix = multiply(frame.transformMatrix);
+  const viewTransformMatrix = multiply(
+    frame.viewTransformMatrix?.length === 16
+      ? frame.viewTransformMatrix
+      : frame.transformMatrix,
+  );
+  return {
+    ...frame,
+    positions,
+    transformMatrix,
+    viewTransformMatrix,
+    camera: new Float32Array([
+      transformMatrix[12],
+      transformMatrix[13],
+      transformMatrix[14],
+    ]),
+  };
+}
+
+function rigidCorrespondences(source, target, limit = 420) {
+  if (
+    !source?.filteredDepth?.length ||
+    !target?.filteredDepth?.length ||
+    !source.measuredMask?.length ||
+    !target.measuredMask?.length
+  )
+    return [];
+  const stride = Math.max(1, Math.ceil((source.filteredCount || 0) / limit));
+  const pairs = [];
+  let cursor = 0;
+  for (let index = 0; index < source.filteredDepth.length; index++) {
+    if (!source.measuredMask[index] || cursor++ % stride) continue;
+    const offset = index * 3;
+    const sourcePoint = {
+      x: source.positions[offset],
+      y: source.positions[offset + 1],
+      z: source.positions[offset + 2],
+    };
+    if (![sourcePoint.x, sourcePoint.y, sourcePoint.z].every(Number.isFinite))
+      continue;
+    const projection = projectWorld(target, sourcePoint.x, sourcePoint.y, sourcePoint.z);
+    if (!projection) continue;
+    const measured = sampleProjectiveDepth(
+      target,
+      projection.u,
+      projection.v,
+    );
+    if (!measured) continue;
+    // Keep the correspondence search broad enough to recover a small AR pose
+    // drift, but never use a different depth layer as a rigid anchor.
+    if (
+      Math.abs(measured - projection.depth) >
+      Math.max(0.16, measured * 0.085)
+    )
+      continue;
+    const targetPoint = depthPositionAt(
+      target,
+      projection.u,
+      projection.v,
+      measured,
+    );
+    if (!targetPoint?.every(Number.isFinite)) continue;
+    pairs.push({ source: sourcePoint, target: {
+      x: targetPoint[0],
+      y: targetPoint[1],
+      z: targetPoint[2],
+    } });
+  }
+  return pairs;
+}
+
+function estimateRigidDelta(pairs) {
+  if (pairs.length < 18) return null;
+  const sourceCenter = [0, 0, 0];
+  const targetCenter = [0, 0, 0];
+  pairs.forEach(({ source, target }) => {
+    sourceCenter[0] += source.x;
+    sourceCenter[1] += source.y;
+    sourceCenter[2] += source.z;
+    targetCenter[0] += target.x;
+    targetCenter[1] += target.y;
+    targetCenter[2] += target.z;
+  });
+  for (let axis = 0; axis < 3; axis++) {
+    sourceCenter[axis] /= pairs.length;
+    targetCenter[axis] /= pairs.length;
+  }
+  // Horn's quaternion form of the absolute orientation problem. The
+  // covariance maps the current target points onto the source points; the
+  // largest eigenvector is the least-squares rigid rotation.
+  let sxx = 0, sxy = 0, sxz = 0;
+  let syx = 0, syy = 0, syz = 0;
+  let szx = 0, szy = 0, szz = 0;
+  pairs.forEach(({ source, target }) => {
+    const tx = target.x - targetCenter[0];
+    const ty = target.y - targetCenter[1];
+    const tz = target.z - targetCenter[2];
+    const sx = source.x - sourceCenter[0];
+    const sy = source.y - sourceCenter[1];
+    const sz = source.z - sourceCenter[2];
+    sxx += tx * sx; sxy += tx * sy; sxz += tx * sz;
+    syx += ty * sx; syy += ty * sy; syz += ty * sz;
+    szx += tz * sx; szy += tz * sy; szz += tz * sz;
+  });
+  const matrix = [
+    [sxx + syy + szz, syz - szy, szx - sxz, sxy - syx],
+    [syz - szy, sxx - syy - szz, sxy + syx, szx + sxz],
+    [szx - sxz, sxy + syx, -sxx + syy - szz, syz + szy],
+    [sxy - syx, szx + sxz, syz + szy, -sxx - syy + szz],
+  ];
+  let quaternion = [1, 0, 0, 0];
+  for (let pass = 0; pass < 18; pass++) {
+    const next = [0, 0, 0, 0];
+    for (let rowIndex = 0; rowIndex < 4; rowIndex++) {
+      const row = matrix[rowIndex];
+      for (let columnIndex = 0; columnIndex < 4; columnIndex++)
+        next[rowIndex] += row[columnIndex] * quaternion[columnIndex];
+    }
+    const length = Math.hypot(...next) || 1;
+    quaternion = next.map((value) => value / length);
+  }
+  const [qw, qx, qy, qz] = quaternion;
+  const rotation = [
+    1 - 2 * (qy * qy + qz * qz),
+    2 * (qx * qy - qz * qw),
+    2 * (qx * qz + qy * qw),
+    2 * (qx * qy + qz * qw),
+    1 - 2 * (qx * qx + qz * qz),
+    2 * (qy * qz - qx * qw),
+    2 * (qx * qz - qy * qw),
+    2 * (qy * qz + qx * qw),
+    1 - 2 * (qx * qx + qy * qy),
+  ];
+  const rotatedTarget = {
+    x: rotation[0] * targetCenter[0] + rotation[1] * targetCenter[1] + rotation[2] * targetCenter[2],
+    y: rotation[3] * targetCenter[0] + rotation[4] * targetCenter[1] + rotation[5] * targetCenter[2],
+    z: rotation[6] * targetCenter[0] + rotation[7] * targetCenter[1] + rotation[8] * targetCenter[2],
+  };
+  const translation = [
+    sourceCenter[0] - rotatedTarget.x,
+    sourceCenter[1] - rotatedTarget.y,
+    sourceCenter[2] - rotatedTarget.z,
+  ];
+  const beforeErrors = pairs.map(({ source, target }) =>
+    Math.hypot(
+      source.x - target.x,
+      source.y - target.y,
+      source.z - target.z,
+    ),
+  );
+  const delta = { quaternion, rotation, translation };
+  const afterErrors = pairs.map(({ source, target }) => {
+    const corrected = transformPointByRigidDelta(target, delta);
+    return Math.hypot(
+      source.x - corrected.x,
+      source.y - corrected.y,
+      source.z - corrected.z,
+    );
+  });
+  const median = (values) => {
+    const sorted = values.slice().sort((left, right) => left - right);
+    return sorted[Math.floor(sorted.length / 2)] || 0;
+  };
+  const beforeMedian = median(beforeErrors);
+  const upperAfter = afterErrors
+    .slice()
+    .sort((left, right) => left - right)[Math.floor((afterErrors.length - 1) * 0.75)] || 0;
+  return {
+    ...delta,
+    beforeMedian,
+    afterMedian: median(afterErrors),
+    upperAfter,
+    beforeErrors,
+    afterErrors,
+  };
+}
+
+function refineRigidPair(source, target, options = {}) {
+  let pairs = rigidCorrespondences(
+    source,
+    target,
+    options.samples || 420,
+  );
+  if (pairs.length < 24) return null;
+  let estimate = estimateRigidDelta(pairs);
+  if (!estimate) return null;
+  const trimLimit = Math.max(
+    options.trimError || 0.045,
+    estimate.upperAfter * 1.8,
+  );
+  const inliers = pairs.filter((_, index) => estimate.afterErrors[index] <= trimLimit);
+  if (inliers.length >= 24 && inliers.length < pairs.length) {
+    pairs = inliers;
+    estimate = estimateRigidDelta(pairs) || estimate;
+  }
+  const translationMagnitude = Math.hypot(...estimate.translation);
+  const rotationAngle = rigidDeltaRotationAngle(estimate);
+  const improved =
+    estimate.beforeMedian > 0.008 &&
+    estimate.afterMedian < estimate.beforeMedian * 0.92;
+  if (
+    !improved ||
+    translationMagnitude > (options.maxTranslation || 0.085) ||
+    rotationAngle > (options.maxRotation || 0.095) ||
+    estimate.afterMedian > (options.maxResidual || 0.055)
+  )
+    return null;
+  return {
+    delta: estimate,
+    pairCount: pairs.length,
+    translationMagnitude,
+    rotationAngle,
+  };
+}
+
+// AR tracking is usually good enough for a single frame, but small pose drift
+// between depth frames bends a long wall and creates doubled shelf edges. Use
+// only depth correspondences that already agree in visibility, apply bounded
+// rigid corrections, and leave a frame untouched unless the residual improves
+// substantially. This is deliberately an opt-in validated pass so legacy
+// diagnostics and synthetic callers retain their original poses.
+export function refineFramePoses(frames, options = {}) {
+  const diagnostics = {
+    attempted: 0,
+    corrected: 0,
+    rejected: 0,
+    corrections: [],
+  };
+  if (!Array.isArray(frames) || frames.length < 2)
+    return { frames, diagnostics };
+  const corrected = frames.map(cloneFrameForPoseRefinement);
+  const window = Math.max(1, options.window || 3);
+  for (let index = 1; index < corrected.length; index++) {
+    const target = corrected[index];
+    let best = null;
+    for (let referenceIndex = Math.max(0, index - window); referenceIndex < index; referenceIndex++) {
+      diagnostics.attempted++;
+      const proposal = refineRigidPair(
+        corrected[referenceIndex],
+        target,
+        options,
+      );
+      if (!proposal) continue;
+      if (
+        !best ||
+        proposal.pairCount > best.pairCount ||
+        (proposal.pairCount === best.pairCount &&
+          proposal.delta.afterMedian < best.delta.afterMedian)
+      )
+        best = { ...proposal, referenceIndex };
+    }
+    if (!best) {
+      diagnostics.rejected++;
+      continue;
+    }
+    corrected[index] = applyRigidDeltaToFrame(target, best.delta);
+    diagnostics.corrected++;
+    diagnostics.corrections.push({
+      frameId: target.frameId,
+      referenceFrameId: corrected[best.referenceIndex].frameId,
+      pairCount: best.pairCount,
+      translationMeters: best.translationMagnitude,
+      rotationRadians: best.rotationAngle,
+      medianResidualBefore: best.delta.beforeMedian,
+      medianResidualAfter: best.delta.afterMedian,
+    });
+  }
+  diagnostics.maxTranslationMeters = diagnostics.corrections.reduce(
+    (maximum, correction) => Math.max(maximum, correction.translationMeters),
+    0,
+  );
+  diagnostics.maxRotationRadians = diagnostics.corrections.reduce(
+    (maximum, correction) => Math.max(maximum, correction.rotationRadians),
+    0,
+  );
+  return { frames: corrected, diagnostics };
 }
 
 export function sampleLooksLikeVerticalPatch(frame, index) {
@@ -922,8 +1299,20 @@ export function sampleProjectiveDepth(frame, u, v) {
 
 function sampleFrameColor(frame, u, v, depthIndex) {
   if (frame.colorImage?.length && frame.colorWidth && frame.colorHeight) {
-    const x = clamp(Math.floor(u * frame.colorWidth), 0, frame.colorWidth - 1);
-    const y = clamp(Math.floor((1 - v) * frame.colorHeight), 0, frame.colorHeight - 1);
+    // Keep the fallback vertex-color path on the same pixel-centre convention
+    // as camera capture, atlas construction, and texture quality checks. A
+    // height-multiplied floor samples the next row at v=0 and the last row
+    // twice, which shows up as a one-pixel colour seam along scan edges.
+    const x = clamp(
+      Math.round(u * (frame.colorWidth - 1)),
+      0,
+      frame.colorWidth - 1,
+    );
+    const y = clamp(
+      Math.round((1 - v) * (frame.colorHeight - 1)),
+      0,
+      frame.colorHeight - 1,
+    );
     const offset = (y * frame.colorWidth + x) * frame.colorChannels;
     return [frame.colorImage[offset], frame.colorImage[offset + 1], frame.colorImage[offset + 2]];
   }
@@ -1058,9 +1447,19 @@ function integrateProjective(volume, frames, report) {
                 0.08,
                 1,
               );
+              const frameColorScales = frame.fusionColorScales;
+              const correctedColor = frameColorScales
+                ? color.map((channel, channelIndex) =>
+                    clamp(
+                      channel * (frameColorScales[channelIndex] || 1),
+                      0,
+                      255,
+                    ),
+                  )
+                : color;
               const nextColorWeight = colorWeight + colorSampleWeight;
               const offset = index * 3;
-              color.forEach((channel, channelIndex) => {
+              correctedColor.forEach((channel, channelIndex) => {
                 volume.colors[offset + channelIndex] =
                   (volume.colors[offset + channelIndex] * colorWeight +
                     linearByte(channel) * colorSampleWeight) /
@@ -1244,10 +1643,11 @@ function extractSurfaceNet(volume, report, options = {}) {
         const reliable = (corner) => {
           const closeRange = corner.meanDepth < 0.9;
           const requiredViews = options.surfaceMode
-            // Most real walls have only two useful translated depth views.
-            // Requiring a third far-range view discarded large valid regions
-            // when the user scanned a wall from one side to the other.
-            ? (closeRange ? 4 : 2)
+            // Close-range phone depth is noisier, but three independent
+            // observations are enough to reject a transient reading. The old
+            // four-view requirement left broad holes when a user captured a
+            // partial wall from only a few translated positions.
+            ? (closeRange ? 3 : 2)
             : (closeRange ? 4 : 2);
           // Partial measured surfaces must not average incompatible depth
           // layers into a smooth-looking but physically bent sheet. The
@@ -2846,7 +3246,7 @@ function projectedTextureDetail(frame, projection) {
   ) / 2;
 }
 
-function buildAtlas(frames) {
+function buildAtlas(frames, precomputedCalibration = null) {
   const images = frames.filter((frame) => frame.colorImage?.length && frame.colorWidth && frame.colorHeight);
   if (!images.length) return null;
   images.forEach((frame) => {
@@ -2890,7 +3290,22 @@ function buildAtlas(frames) {
       ? median(validStatistics.map((stats) => stats.channels[channel]))
       : globalLuminance,
   );
-  const overlapCalibration = overlapTextureColorScales(images);
+  // Reuse the calibration that was applied to TSDF vertex colours when the
+  // caller already computed it for this exact frame set. Keeping atlas and
+  // fallback colours on one exposure solution removes a subtle seam at
+  // triangles that switch between camera texture and fused colour.
+  const calibrationByFrame = new Map();
+  if (precomputedCalibration?.scales?.length)
+    frames.forEach((frame, index) => {
+      const scale = precomputedCalibration.scales[index];
+      if (scale?.length === 3) calibrationByFrame.set(frame, scale);
+    });
+  const overlapCalibration = calibrationByFrame.size
+    ? {
+        scales: images.map((frame) => calibrationByFrame.get(frame) || null),
+        pairCount: precomputedCalibration.pairCount || 0,
+      }
+    : overlapTextureColorScales(images);
   images.forEach((frame, tile) => {
     const statistics = frame.textureColorStatistics;
     const frameLuminance = statistics?.luminance || imageLuminance(frame);
@@ -2912,7 +3327,10 @@ function buildAtlas(frames) {
       );
       return clamp(exposure * whiteBalance, 0.84, 1.18);
     });
-    const channelScales = overlapCalibration.scales[tile] || fallbackScales;
+    const channelScales =
+      calibrationByFrame.get(frame) ||
+      overlapCalibration.scales[tile] ||
+      fallbackScales;
     frame.textureChannelScales = channelScales;
     const tileX = tile % columns;
     const tileY = Math.floor(tile / columns);
@@ -3023,13 +3441,13 @@ function projectedTexturePenalty(frame, projections) {
   if (!sampled) return 0;
   return (
     overexposed / sampled +
-    (underexposed / sampled) * 0.45 +
+    (underexposed / sampled) * 0.75 +
     (coloredHighlight / sampled) * 0.35
   );
 }
 
-function texturedMesh(mesh, frames) {
-  const atlas = buildAtlas(frames);
+function texturedMesh(mesh, frames, precomputedCalibration = null) {
+  const atlas = buildAtlas(frames, precomputedCalibration);
   const sharedNormals = computeNormals(mesh);
   if (!atlas) return { ...mesh, normals: sharedNormals, textureCoverage: 0 };
   const projectionPositions =
@@ -3173,6 +3591,10 @@ function texturedMesh(mesh, frames) {
         colorProjection,
         ...colorProjections,
       ]);
+      // A camera patch dominated by clipped glare or black sensor borders is
+      // not a usable texture source. Leave this triangle on the fused color
+      // fallback rather than baking a white/discolored streak into the atlas.
+      if (texturePenalty > 0.58) return;
       const frameClippingPenalty = clamp(
         Number(frame.colorClippedRatio) || 0,
         0,
@@ -3438,7 +3860,27 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     .map(({ frame, frameId }) => prepareFrame(frame, frameId))
     .filter(Boolean);
   const alignment = {};
-  let overlapping = validateFrameOverlap(prepared, alignment);
+  const initialOverlap = {};
+  let overlapping = validateFrameOverlap(prepared, initialOverlap);
+  if (options.poseRefinement === "validated" && overlapping.length >= 2) {
+    const refinement = refineFramePoses(overlapping, {
+      window: options.poseRefinementWindow || 3,
+      samples: options.poseRefinementSamples || 420,
+      maxTranslation: options.poseRefinementMaxTranslation || 0.085,
+      maxRotation: options.poseRefinementMaxRotation || 0.095,
+      maxResidual: options.poseRefinementMaxResidual || 0.055,
+    });
+    const refinedOverlap = {};
+    overlapping = validateFrameOverlap(refinement.frames, refinedOverlap);
+    Object.assign(alignment, refinedOverlap);
+    alignment.initial = initialOverlap;
+    alignment.poseCorrectionApplied = refinement.diagnostics.corrected > 0;
+    alignment.poseRefinement = "validated-rigid-depth";
+    alignment.poseRefinementDiagnostics = refinement.diagnostics;
+  } else {
+    Object.assign(alignment, initialOverlap);
+    alignment.poseRefinement = "disabled-until-independently-validated";
+  }
   if (options.completionMode === "surface" && overlapping.length >= 3) {
     const strictDiagnostics = {};
     const consistent = validateFrameOverlap(overlapping, strictDiagnostics, {
@@ -3457,7 +3899,6 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     };
     if (enoughConsistentFrames) overlapping = consistent;
   }
-  alignment.poseRefinement = "disabled-until-independently-validated";
   const selected = selectEvenly(
     overlapping,
     options.maxKeyframes ||
@@ -3471,7 +3912,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   if (localLayerConsensus.diagnostics)
     alignment.localLayerConsensus = localLayerConsensus.diagnostics;
   const stages = {
-    algorithmVersion: 28,
+    algorithmVersion: 29,
     completionMode: options.completionMode === "surface" ? "surface" : "room",
     reconstructionProfile: options.reconstructionProfile || "quality",
     supportMode: "translated-camera-viewpoints",
@@ -3529,6 +3970,19 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       keyframes: usable.length,
       samples: samples.length,
     });
+  // Calibrate overlapping camera exposures before color fusion as well as
+  // atlas construction. Otherwise triangles that fall back to fused vertex
+  // colors can still show the raw exposure jump that the atlas corrected.
+  const colorCalibration =
+    options.colorCalibration === false
+      ? { scales: [], pairCount: 0 }
+      : overlapTextureColorScales(usable);
+  if (colorCalibration?.scales?.length)
+    usable.forEach((frame, index) => {
+      if (colorCalibration.scales[index])
+        frame.fusionColorScales = colorCalibration.scales[index];
+    });
+  stages.colorCalibrationPairs = colorCalibration?.pairCount || 0;
   const bounds = sampleBounds(samples);
   let volume = makeVolume(bounds, options);
   const volumeVoxelSize = volume.voxelSize;
@@ -3562,10 +4016,10 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     // A partial measured result may close only tiny meshing cracks. Broad
     // unmeasured regions remain open and never become replacement walls.
     maxDiameter: surfaceCompletion
-      ? clamp(volume.voxelSize * 3, 0.08, 0.12)
+      ? clamp(volume.voxelSize * 6, 0.12, 0.18)
       : clamp(volume.voxelSize * 9, 0.3, 0.45),
     maxPlanarity: surfaceCompletion
-      ? Math.max(0.025, volume.voxelSize * 0.8)
+      ? Math.max(0.028, volume.voxelSize * 0.9)
       : Math.max(0.04, volume.voxelSize * 1.2),
   });
   stages.filledHoleCount = surface.filledHoleCount;
@@ -3767,7 +4221,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       5,
     );
   report?.("texturing", 88);
-  const textured = texturedMesh(surface, usable);
+  const textured = texturedMesh(surface, usable, colorCalibration);
   const floorY = Number.isFinite(options.floorY) ? options.floorY : 0;
   const mesh = {
     version: 3,
