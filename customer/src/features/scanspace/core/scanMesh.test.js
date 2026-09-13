@@ -16,6 +16,8 @@ import {
   measuredSurfaceQualityDiagnostics,
   measuredSurfaceGapWarning,
   measuredWallSectorQualityDiagnostics,
+  meshBridgeDiagnostics,
+  pruneUnsupportedMeshBridges,
   stabilizeMeasuredHorizontalSurfaces,
   stabilizeMeasuredWallSectors,
   textureColorDifference,
@@ -172,6 +174,37 @@ test("does not retain an isolated or depth-discontinuous sample", () => {
   depths[17] = 3;
   const result = filterDepth({ columns: 5, rows: 5, depths });
   expect(result.filtered[12]).toBe(0);
+});
+
+test("excludes explicitly configured samples far below the detected floor", () => {
+  const result = fuseRgbdKeyframes(
+    [planeKeyframe(0), planeKeyframe(0.08), planeKeyframe(-0.08)],
+    { floorY: 0, floorOutlierTolerance: 0.4 },
+  );
+  expect(result.diagnostics.floorOutlierSamples).toBeGreaterThan(0);
+  expect(result.diagnostics.floorOutlierRatio).toBeGreaterThan(0);
+  const yValues = Array.from(result.observations.positions).filter(
+    (_, index) => index % 3 === 1,
+  );
+  expect(Math.min(...yValues)).toBeGreaterThanOrEqual(-0.4);
+});
+
+test("removes triangles that bridge unsupported mesh gaps", () => {
+  const mesh = {
+    positions: new Float32Array([
+      0, 0, 0, 0.02, 0, 0, 0, 0.02, 0,
+      0, 0, 0, 0.2, 0, 0, 0, 0.2, 0,
+    ]),
+    indices: new Uint32Array([0, 1, 2, 3, 4, 5]),
+    colors: new Uint8Array(18).fill(120),
+  };
+  const diagnostics = meshBridgeDiagnostics(mesh, 0.02, { maxEdge: 0.06 });
+  expect(diagnostics.longEdgeTriangles).toBe(1);
+  const pruned = pruneUnsupportedMeshBridges(mesh, 0.02, {
+    maxEdge: 0.06,
+  });
+  expect(pruned.removedBridgeTriangles).toBe(1);
+  expect(Array.from(pruned.indices)).toEqual([0, 1, 2]);
 });
 
 function gridPlaneWithMissingCell(missingColumn, missingRow) {

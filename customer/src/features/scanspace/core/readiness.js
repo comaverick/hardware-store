@@ -5,6 +5,9 @@ export const MIN_STABLE_POINTS = 2000;
 export const MIN_SURFACE_CAMERA_BASELINE_METERS = 0.25;
 export const MIN_SURFACE_FUSION_KEYFRAMES = 6;
 export const MIN_SURFACE_STABLE_POINTS = 800;
+// Allow a hit-test floor to be a little noisy, but never fuse points that are
+// far enough below it to be a plausible wall/floor measurement.
+export const FLOOR_OUTLIER_TOLERANCE_METERS = 0.45;
 // A depth sample is captured every few hundred milliseconds. At the old
 // limits a phone could translate many centimetres between samples, so the
 // resulting color frame was often motion-blurred and its geometry disagreed

@@ -29,12 +29,25 @@ function fallbackFloor(points) {
 }
 
 export function buildScanCloud(points, options = {}) {
-  const finite = points.filter(
+  const candidates = points.filter(
     (point) =>
       Number.isFinite(point.x) &&
       Number.isFinite(point.y) &&
       Number.isFinite(point.z),
   );
+  const floorY = Number.isFinite(options.floorY)
+    ? Number(options.floorY)
+    : NaN;
+  const floorOutlierTolerance = Number(options.floorOutlierTolerance);
+  const rejectFloorOutliers =
+    Number.isFinite(floorY) &&
+    Number.isFinite(floorOutlierTolerance) &&
+    floorOutlierTolerance > 0;
+  const finite = rejectFloorOutliers
+    ? candidates.filter(
+        (point) => point.y >= floorY - floorOutlierTolerance,
+      )
+    : candidates;
   if (!finite.length) return null;
   const limit = Math.max(1000, Math.min(40000, options.limit || 30000));
   const colored = finite.filter(hasColor);
@@ -45,9 +58,7 @@ export function buildScanCloud(points, options = {}) {
   const chosenColors = sampleEvenly(colored, colorBudget);
   const chosenPlain = sampleEvenly(uncolored, plainBudget);
   const selected = [...chosenColors, ...chosenPlain];
-  const floorY = Number.isFinite(options.floorY)
-    ? options.floorY
-    : fallbackFloor(finite);
+  const resolvedFloorY = Number.isFinite(floorY) ? floorY : fallbackFloor(finite);
 
   // A nearby color sample can safely color the same small surface patch. The
   // search radius stays below typical wall/furniture separation to avoid broad
@@ -89,7 +100,7 @@ export function buildScanCloud(points, options = {}) {
     max: { x: -Infinity, y: -Infinity, z: -Infinity },
   };
   selected.forEach((point, index) => {
-    const position = { x: point.x, y: point.y - floorY, z: point.z };
+    const position = { x: point.x, y: point.y - resolvedFloorY, z: point.z };
     positions.set([position.x, position.y, position.z], index * 3);
     ["x", "y", "z"].forEach((axis) => {
       bounds.min[axis] = Math.min(bounds.min[axis], position[axis]);
@@ -112,7 +123,10 @@ export function buildScanCloud(points, options = {}) {
     capturedColorCount: colored.length,
     colorCoverage: Math.round((colored.length / finite.length) * 100),
     pointSize: Math.max(0.035, Math.min(0.11, voxelSize * 0.8)),
-    floorY,
+    floorY: resolvedFloorY,
+    floorOutlierCount: candidates.length - finite.length,
+    floorOutlierRatio:
+      (candidates.length - finite.length) / Math.max(1, candidates.length),
     bounds,
     observer: {
       x: Number.isFinite(options.observer?.x)

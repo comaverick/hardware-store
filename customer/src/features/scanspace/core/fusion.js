@@ -354,7 +354,7 @@ export function depthPosition(frame, index, depth) {
   return depthPositionAt(frame, u, v, depth);
 }
 
-function prepareFrame(frame, frameId) {
+function prepareFrame(frame, frameId, options = {}) {
   const projection = frame.projectionMatrix;
   const transform = frame.transformMatrix;
   if (projection?.length !== 16 || transform?.length !== 16) return null;
@@ -363,12 +363,34 @@ function prepareFrame(frame, frameId) {
   const filteredDepth = filtered.filtered;
   const positions = new Float32Array(frame.positions.length).fill(NaN);
   const freeSpaceMask = new Uint8Array(filteredDepth.length);
+  const floorY = Number.isFinite(options.floorY)
+    ? Number(options.floorY)
+    : NaN;
+  const floorOutlierTolerance = Number(options.floorOutlierTolerance);
+  const rejectFloorOutliers =
+    Number.isFinite(floorY) &&
+    Number.isFinite(floorOutlierTolerance) &&
+    floorOutlierTolerance > 0;
+  let floorOutlierCount = 0;
   let valid = 0;
   filteredDepth.forEach((depth, index) => {
     if (!depth) return;
     const point = depthPosition(frame, index, depth);
     if (!point?.every(Number.isFinite)) {
       filteredDepth[index] = 0;
+      return;
+    }
+    // A hit-test floor is allowed a small amount of error, but a measured
+    // point far below it cannot be a wall or floor sample. Keeping these
+    // points lets a bad depth ray pull the TSDF volume downward and produces
+    // bent lower edges and long bridge triangles. Apply this only when the
+    // caller supplies an explicit tolerance so synthetic/replayed captures
+    // without a trustworthy floor retain their original geometry.
+    if (rejectFloorOutliers && point[1] < floorY - floorOutlierTolerance) {
+      filteredDepth[index] = 0;
+      filtered.measuredMask[index] = 0;
+      filtered.confidence[index] = 0;
+      floorOutlierCount++;
       return;
     }
     positions.set(point, index * 3);
@@ -405,6 +427,7 @@ function prepareFrame(frame, frameId) {
     freeSpaceMask,
     depthConfidence: filtered.confidence,
     weakSupportedCount: filtered.weakSupportedCount,
+    floorOutlierCount,
     filteredCount: valid,
   };
 }
@@ -2133,6 +2156,85 @@ export function fillSmallMeshHoles(mesh, options = {}) {
     surfaceArea: (mesh.surfaceArea || 0) + addedArea,
     filledHoleCount,
     filledHoleTriangles,
+  };
+}
+
+function triangleMaximumEdge(positions, first, second, third) {
+  const vertices = [first, second, third].map((vertex) => vertex * 3);
+  let maximum = 0;
+  for (let corner = 0; corner < 3; corner++) {
+    const left = vertices[corner];
+    const right = vertices[(corner + 1) % 3];
+    maximum = Math.max(
+      maximum,
+      Math.hypot(
+        positions[left] - positions[right],
+        positions[left + 1] - positions[right + 1],
+        positions[left + 2] - positions[right + 2],
+      ),
+    );
+  }
+  return maximum;
+}
+
+// A missing-depth boundary should remain open. A triangle spanning several
+// voxels is almost always a bridge across that boundary and reads as a long,
+// warped strip in the result. Keep this pass opt-in for callers that do not
+// have a calibrated voxel size (for example older diagnostic replays).
+export function meshBridgeDiagnostics(mesh, voxelSize, options = {}) {
+  const totalTriangles = Math.floor((mesh?.indices?.length || 0) / 3);
+  const size = Number(voxelSize);
+  const maxEdge = Number.isFinite(Number(options.maxEdge))
+    ? Number(options.maxEdge)
+    : Math.max(0.065, Number.isFinite(size) ? size * 3 : 0.065);
+  let longEdgeTriangles = 0;
+  let maximumEdge = 0;
+  if (mesh?.positions?.length && mesh?.indices?.length)
+    for (let index = 0; index < mesh.indices.length; index += 3) {
+      const edge = triangleMaximumEdge(
+        mesh.positions,
+        mesh.indices[index],
+        mesh.indices[index + 1],
+        mesh.indices[index + 2],
+      );
+      maximumEdge = Math.max(maximumEdge, edge);
+      if (edge > maxEdge) longEdgeTriangles++;
+    }
+  return {
+    maxEdgeMeters: maxEdge,
+    maximumObservedEdgeMeters: maximumEdge,
+    totalTriangles,
+    longEdgeTriangles,
+    longEdgeRatio: longEdgeTriangles / Math.max(1, totalTriangles),
+  };
+}
+
+export function pruneUnsupportedMeshBridges(mesh, voxelSize, options = {}) {
+  if (!mesh?.indices?.length || !mesh?.positions?.length)
+    return { ...mesh, removedBridgeTriangles: 0 };
+  const diagnostics = meshBridgeDiagnostics(mesh, voxelSize, options);
+  if (!diagnostics.longEdgeTriangles)
+    return { ...mesh, removedBridgeTriangles: 0, meshBridgeDiagnostics: diagnostics };
+  const kept = [];
+  let removedArea = 0;
+  for (let index = 0; index < mesh.indices.length; index += 3) {
+    const first = mesh.indices[index];
+    const second = mesh.indices[index + 1];
+    const third = mesh.indices[index + 2];
+    const edge = triangleMaximumEdge(mesh.positions, first, second, third);
+    if (edge <= diagnostics.maxEdgeMeters) {
+      kept.push(first, second, third);
+      continue;
+    }
+    const normal = meshTriangleNormal(mesh.positions, first, second, third);
+    removedArea += Math.hypot(...normal) * 0.5;
+  }
+  return {
+    ...mesh,
+    indices: new Uint32Array(kept),
+    surfaceArea: Math.max(0, (mesh.surfaceArea || 0) - removedArea),
+    removedBridgeTriangles: diagnostics.longEdgeTriangles,
+    meshBridgeDiagnostics: diagnostics,
   };
 }
 
@@ -3904,7 +4006,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       ({ frame }) =>
         frame?.tracking !== false && !frame?.legacyGeometryAmbiguous,
     )
-    .map(({ frame, frameId }) => prepareFrame(frame, frameId))
+    .map(({ frame, frameId }) => prepareFrame(frame, frameId, options))
     .filter(Boolean);
   const alignment = {};
   const initialOverlap = {};
@@ -3959,7 +4061,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   if (localLayerConsensus.diagnostics)
     alignment.localLayerConsensus = localLayerConsensus.diagnostics;
   const stages = {
-    algorithmVersion: 29,
+    algorithmVersion: 30,
     completionMode: options.completionMode === "surface" ? "surface" : "room",
     reconstructionProfile: options.reconstructionProfile || "quality",
     supportMode: "translated-camera-viewpoints",
@@ -3984,10 +4086,19 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       (sum, frame) => sum + (frame.weakSupportedCount || 0),
       0,
     ),
+    floorOutlierSamples: prepared.reduce(
+      (sum, frame) => sum + (frame.floorOutlierCount || 0),
+      0,
+    ),
+    floorOutlierTolerance: Number.isFinite(Number(options.floorOutlierTolerance))
+      ? Number(options.floorOutlierTolerance)
+      : null,
     roundTrip: prepared.map((frame) => frameRoundTripDiagnostics(frame)),
     alignment,
     fusedFrameIds: usable.map((frame) => frame.frameId),
   };
+  stages.floorOutlierRatio =
+    stages.floorOutlierSamples / Math.max(1, stages.inputDepthSamples);
   const failure = (reason, details = {}) => ({
     mesh: null,
     observations: buildAcceptedObservations(usable.length ? usable : prepared),
@@ -4071,6 +4182,17 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   });
   stages.filledHoleCount = surface.filledHoleCount;
   stages.filledHoleTriangles = surface.filledHoleTriangles;
+  const bridgeDiagnostics = meshBridgeDiagnostics(surface, volumeVoxelSize, {
+    maxEdge: options.maxBridgeEdge,
+  });
+  stages.meshBridgeDiagnostics = bridgeDiagnostics;
+  if (options.pruneUnsupportedBridges) {
+    surface = pruneUnsupportedMeshBridges(surface, volumeVoxelSize, {
+      maxEdge: options.maxBridgeEdge,
+    });
+    stages.removedBridgeTriangles = surface.removedBridgeTriangles || 0;
+    stages.trianglesAfterBridgePrune = surface.indices.length / 3;
+  }
   const highlyFragmented = meshFragmentationIsUnacceptable(surface);
   const wallStructure = meshWallStructureDiagnostics(surface);
   stages.wallStructure = wallStructure;
@@ -4128,6 +4250,13 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     }
   }
   const measuredSurfaceWarnings = [];
+  if (stages.floorOutlierRatio >= 0.01) {
+    measuredSurfaceWarnings.push({
+      code: "floor-outliers",
+      message:
+        `${Math.round(stages.floorOutlierRatio * 100)}% of depth samples were below the detected floor and were excluded. Recheck the floor anchor if lower surfaces still look warped.`,
+    });
+  }
   if (stages.measuredGapWarning)
     measuredSurfaceWarnings.push({
       code: "missing-depth",
@@ -4222,6 +4351,13 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       message:
         "The reconstruction contains disconnected measured pieces. Missing space remains open; inspect the result before accepting it.",
     });
+  if (bridgeDiagnostics.longEdgeRatio >= 0.008) {
+    measuredSurfaceWarnings.push({
+      code: "unsupported-bridges",
+      message:
+        "Some mesh triangles crossed a large unsupported depth gap and were removed. The affected area remains open until it is scanned again with overlapping views.",
+    });
+  }
   stages.measuredSurfaceWarnings = measuredSurfaceWarnings;
   stages.measuredReviewWarning = measuredSurfaceWarnings.length
     ? {

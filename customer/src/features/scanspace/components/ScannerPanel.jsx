@@ -10,6 +10,7 @@ import {
   MIN_DIRECTION_COVERAGE,
   MIN_FUSION_KEYFRAMES,
   MIN_STABLE_POINTS,
+  FLOOR_OUTLIER_TOLERANCE_METERS,
 } from "../core/readiness";
 
 function observationPoints(observations) {
@@ -27,7 +28,7 @@ function observationPoints(observations) {
   });
 }
 
-const captureQualitySummary = (stats) => ({
+const captureQualitySummary = (stats, fusion = null) => ({
   coverage: stats.coverage || 0,
   cameraBaseline: stats.cameraBaseline || 0,
   acceptedDepthFrames: stats.acceptedDepthFrames || 0,
@@ -35,6 +36,10 @@ const captureQualitySummary = (stats) => ({
   textureKeyframes: stats.textureKeyframes || 0,
   colorSharpness: stats.colorSharpness || 0,
   colorClippedRatio: stats.colorClippedRatio || 0,
+  floorOutlierSamples: fusion?.floorOutlierSamples || 0,
+  floorOutlierRatio: fusion?.floorOutlierRatio || 0,
+  removedBridgeTriangles: fusion?.removedBridgeTriangles || 0,
+  longEdgeTriangleRatio: fusion?.meshBridgeDiagnostics?.longEdgeRatio || 0,
 });
 
 function CoverageCompass({ sectors = [], heading = 0 }) {
@@ -283,6 +288,8 @@ export default function ScannerPanel({
       headingCoverage: raw.stats.coverage || 0,
       completionMode,
       reconstructionProfile: "quality",
+      floorOutlierTolerance: FLOOR_OUTLIER_TOLERANCE_METERS,
+      pruneUnsupportedBridges: true,
       // Correct small AR pose drift from overlapping depth views before TSDF
       // fusion. The worker applies only bounded corrections that measurably
       // reduce reprojection residuals; otherwise the original pose is kept.
@@ -418,6 +425,7 @@ export default function ScannerPanel({
         floorY: raw.floorY,
         observer: raw.observer,
         voxelSize: raw.stats.cloudCellSize,
+        floorOutlierTolerance: FLOOR_OUTLIER_TOLERANCE_METERS,
       });
       const stride = Math.max(1, Math.ceil(acceptedPoints.length / 16000));
       const points = acceptedPoints.filter((_, i) => i % stride === 0);
@@ -522,9 +530,10 @@ export default function ScannerPanel({
         return;
       }
       const scanCloud = buildScanCloud(acceptedPoints, {
-        floorY: Number.isFinite(raw.floorY) ? raw.floorY : 0,
+        floorY: raw.floorY,
         observer: raw.observer,
         voxelSize: raw.stats.cloudCellSize,
+        floorOutlierTolerance: FLOOR_OUTLIER_TOLERANCE_METERS,
       });
       const surfaceResult = {
         version: 2,
@@ -539,7 +548,7 @@ export default function ScannerPanel({
         cloud: scanCloud,
         mesh: fused.mesh,
         fusionMode: "multi-view",
-        captureQuality: captureQualitySummary(raw.stats),
+        captureQuality: captureQualitySummary(raw.stats, fused.diagnostics),
         debugCapture: debugCapture.current,
         fusionDiagnostics: fused.diagnostics,
         measuredGapWarning: fused.diagnostics?.measuredGapWarning || null,

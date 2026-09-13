@@ -20,3 +20,30 @@ test("builds a bounded colored scan cloud without generating surfaces", () => {
   expect(cloud.colorCoverage).toBeGreaterThan(60);
   expect(cloud.observer).toEqual({ x: 1, y: 1.6, z: 0.5 });
 });
+
+test("drops points well below an explicitly detected floor", () => {
+  const cloud = buildScanCloud(
+    [
+      { x: 0, y: 0, z: 0, color: [200, 200, 200] },
+      { x: 0.1, y: -0.6, z: 0, color: [200, 200, 200] },
+      { x: 0.2, y: -1.4, z: 0, color: [200, 200, 200] },
+    ],
+    { floorY: 0, floorOutlierTolerance: 0.45 },
+  );
+  expect(cloud.count).toBe(1);
+  expect(cloud.floorOutlierCount).toBe(2);
+  expect(cloud.floorOutlierRatio).toBeCloseTo(2 / 3);
+  expect(Math.min(...cloud.positions)).toBe(0);
+});
+
+test("does not invent a floor filter when floor detection is unavailable", () => {
+  const cloud = buildScanCloud(
+    [
+      { x: 0, y: -1, z: 0 },
+      { x: 0.1, y: 0, z: 0 },
+    ],
+    { floorY: null, floorOutlierTolerance: 0.45 },
+  );
+  expect(cloud.count).toBe(2);
+  expect(cloud.floorOutlierCount).toBe(0);
+});
