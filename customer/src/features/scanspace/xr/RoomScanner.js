@@ -4,6 +4,7 @@ import {
   createRgbdKeyframe,
   filterDepth,
   depthPosition,
+  imageFocus,
   imageSharpness,
 } from "../core/fusion";
 import {
@@ -393,13 +394,20 @@ export class RoomScanner {
         (count, point) => count + (point.depth < 0.7 ? 1 : 0),
         0,
       );
+      const obstructionPointCount = framePoints.reduce(
+        (count, point) => count + (point.depth < 0.52 ? 1 : 0),
+        0,
+      );
       const nearRatio = framePoints.length
         ? nearPointCount / framePoints.length
+        : 0;
+      const obstructionRatio = framePoints.length
+        ? obstructionPointCount / framePoints.length
         : 0;
       const quality = depthFrameQuality({
         validSamples: framePoints.length,
         totalSamples: columns * rows,
-        nearRatio,
+        obstructionRatio,
         ...motion,
       });
       this.stats.frameQuality = quality.reason;
@@ -726,14 +734,16 @@ export class RoomScanner {
         const motion =
           (Number(frame.linearSpeed) || 0) / 0.55 +
           (Number(frame.angularSpeed) || 0) / 0.65;
-        const sharpness = Number.isFinite(frame.colorSharpness)
-          ? frame.colorSharpness
-          : imageSharpness(frame);
+        const sharpness = imageSharpness(frame);
+        const focus = imageFocus(frame);
         const clipping = Math.min(
           0.75,
           Math.max(0, Number(frame.colorClippedRatio) || 0),
         );
-        return (sharpness * (1 - clipping)) / (1 + motion * 1.05);
+        return (
+          (sharpness * Math.sqrt(Math.max(0.5, focus)) * (1 - clipping)) /
+          (1 + motion * 1.05)
+        );
       };
       const keep = new Set();
       const targetCount = Math.max(1, Math.min(retained, textured.length));
@@ -747,17 +757,15 @@ export class RoomScanner {
           ),
         );
       } else {
-        // Keep the scan endpoints, then divide the path into non-overlapping
-        // temporal sectors and retain the sharpest low-motion image in each.
-        // This preserves wall coverage while avoiding arbitrary blurry frames.
-        keep.add(textured[0]);
-        keep.add(textured[textured.length - 1]);
-        const interior = textured.slice(1, -1);
-        const sectors = Math.max(0, targetCount - 2);
+        // Divide the entire path into temporal sectors and keep each sector's
+        // sharpest low-motion image. Forcing the first and last images kept
+        // autofocus/motion failures even when a clear neighbor saw the same
+        // area.
+        const sectors = targetCount;
         for (let sector = 0; sector < sectors; sector++) {
-          const start = Math.floor((sector * interior.length) / sectors);
-          const end = Math.floor(((sector + 1) * interior.length) / sectors);
-          const candidates = interior.slice(start, Math.max(start + 1, end));
+          const start = Math.floor((sector * textured.length) / sectors);
+          const end = Math.floor(((sector + 1) * textured.length) / sectors);
+          const candidates = textured.slice(start, Math.max(start + 1, end));
           if (!candidates.length) continue;
           keep.add(
             candidates.reduce((best, candidate) =>

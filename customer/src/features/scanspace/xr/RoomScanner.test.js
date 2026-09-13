@@ -67,7 +67,9 @@ test("higher-resolution texture snapshots stay bounded without dropping depth fr
   expect(scanner.keyframes.every((frame) => frame.depths[0] === 2)).toBe(true);
   expect(scanner.stats.textureKeyframes).toBe(18);
   expect(scanner.keyframes[0].colorImage).not.toBeNull();
-  expect(scanner.keyframes[24].colorImage).not.toBeNull();
+  expect(
+    scanner.keyframes.slice(-2).some((frame) => frame.colorImage !== null),
+  ).toBe(true);
 });
 
 test("texture compaction keeps the sharpest low-motion frame in each scan sector", () => {
@@ -91,7 +93,31 @@ test("texture compaction keeps the sharpest low-motion frame in each scan sector
   expect(scanner.stats.textureKeyframes).toBe(3);
   expect(scanner.keyframes[0].colorImage).not.toBeNull();
   expect(scanner.keyframes[2].colorImage).not.toBeNull();
+  expect(scanner.keyframes[3].colorImage).not.toBeNull();
+  expect(scanner.keyframes[4].colorImage).toBeNull();
+});
+
+test("texture compaction does not force blurred endpoint images into the atlas", () => {
+  const scanner = new RoomScanner({ onUpdate: () => {} });
+  const flat = new Uint8Array(Array(64).fill([120, 120, 120, 255]).flat());
+  const checker = new Uint8Array(
+    Array.from({ length: 64 }, (_, index) => {
+      const value = (index + Math.floor(index / 8)) % 2 ? 30 : 225;
+      return [value, value, value, 255];
+    }).flat(),
+  );
+  scanner.keyframes = Array.from({ length: 6 }, (_, index) => ({
+    colorImage: index === 1 || index === 4 ? checker.slice() : flat.slice(),
+    colorWidth: 8,
+    colorHeight: 8,
+    colorChannels: 4,
+  }));
+  scanner.compactTextureKeyframes(5, 2);
+  expect(scanner.stats.textureKeyframes).toBe(2);
+  expect(scanner.keyframes[0].colorImage).toBeNull();
+  expect(scanner.keyframes[1].colorImage).not.toBeNull();
   expect(scanner.keyframes[4].colorImage).not.toBeNull();
+  expect(scanner.keyframes[5].colorImage).toBeNull();
 });
 
 test("keyframe retention preserves a bounded spatial path instead of dropping every other view", () => {

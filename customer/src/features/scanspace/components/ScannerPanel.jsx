@@ -299,6 +299,7 @@ export default function ScannerPanel({
       // ordinary measured overlap as a fallback. Real mobile depth is noisy;
       // coherence and wall-shape diagnostics must warn, not block completion.
       requireCoherentSurfaceCore: false,
+      preferCoherentSurfaceCore: true,
       rejectStructurallyInvalidSurface: false,
       smoothingPasses: 3,
     };

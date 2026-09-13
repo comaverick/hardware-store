@@ -6,6 +6,7 @@ import {
   fuseRgbdKeyframes,
   gridIndex,
   imageColorStatistics,
+  imageFocus,
   imageSharpness,
   overlapTextureColorScales,
   sampleProjectiveDepth,
@@ -21,6 +22,7 @@ import {
   stabilizeMeasuredHorizontalSurfaces,
   stabilizeMeasuredWallSectors,
   textureColorDifference,
+  textureProjectionStretch,
   wallConsensusKeyframes,
   projectWorld,
 } from "./fusion";
@@ -413,7 +415,7 @@ test("straightens only existing vertices on a supported measured wall", () => {
   );
 });
 
-test("straightens a supported wall bowed across several depth voxels", () => {
+test("does not collapse a nearby parallel layer onto a supported wall", () => {
   const mesh = {
     positions: new Float32Array([
       -1, 0, -1.92, 0, 0, -2.08, 1, 0, -1.92,
@@ -438,7 +440,8 @@ test("straightens a supported wall bowed across several depth voxels", () => {
   );
   const depths = [...result.positions].filter((_, index) => index % 3 === 2);
   expect(result.indices).toEqual(mesh.indices);
-  expect(Math.max(...depths) - Math.min(...depths)).toBeLessThan(0.001);
+  expect(result.stabilizedVertexCount).toBe(0);
+  expect(Math.max(...depths) - Math.min(...depths)).toBeGreaterThan(0.15);
 });
 
 test("flattens measured shelf planes without adding geometry", () => {
@@ -491,6 +494,25 @@ test("texture sharpness favors detailed camera frames over flat or clipped ones"
     }).flat(),
   );
   expect(imageSharpness(checker)).toBeGreaterThan(imageSharpness(flat));
+  expect(imageFocus(checker)).toBeGreaterThan(imageFocus(flat));
+});
+
+test("texture projection detects a stretched triangle footprint", () => {
+  const points = [[0, 0, 0], [1, 0, 0], [0, 1, 0]];
+  const regular = textureProjectionStretch(
+    points,
+    [{ u: 0, v: 0 }, { u: 0.1, v: 0 }, { u: 0, v: 0.1 }],
+    1000,
+    1000,
+  );
+  const stretched = textureProjectionStretch(
+    points,
+    [{ u: 0, v: 0 }, { u: 0.1, v: 0 }, { u: 0, v: 0.001 }],
+    1000,
+    1000,
+  );
+  expect(regular.anisotropy).toBeLessThan(1.1);
+  expect(stretched.anisotropy).toBeGreaterThan(20);
 });
 
 test("texture color statistics ignore clipped glare and retain channel balance", () => {
@@ -545,6 +567,36 @@ test("overlapping RGB-D views receive correspondence-based color scales", () => 
   );
   expect(calibration.pairCount).toBeGreaterThan(0);
   expect(Math.max(...corrected) - Math.min(...corrected)).toBeLessThan(15);
+});
+
+test("overlap calibration cannot create a strong RGB color cast", () => {
+  const colors = [
+    [80, 120, 160],
+    [160, 100, 70],
+    [110, 130, 90],
+  ];
+  const frames = colors.map((color, index) => {
+    const frame = planeKeyframe((index - 1) * 0.06);
+    for (let pixel = 0; pixel < frame.colorImage.length; pixel += 4) {
+      frame.colorImage[pixel] = color[0];
+      frame.colorImage[pixel + 1] = color[1];
+      frame.colorImage[pixel + 2] = color[2];
+      frame.colorImage[pixel + 3] = 255;
+    }
+    const filtered = filterDepth(frame);
+    frame.filteredDepth = filtered.filtered;
+    frame.measuredMask = filtered.measuredMask;
+    frame.filteredCount = frame.filteredDepth.reduce(
+      (count, depth) => count + (depth ? 1 : 0),
+      0,
+    );
+    return frame;
+  });
+  const calibration = overlapTextureColorScales(frames);
+  expect(calibration.pairCount).toBeGreaterThan(0);
+  calibration.scales.forEach((scales) => {
+    expect(Math.max(...scales) / Math.min(...scales)).toBeLessThanOrEqual(1.13);
+  });
 });
 
 test("minority-layer filtering is limited to locally vertical surfaces", () => {
@@ -1144,16 +1196,15 @@ test("preserves a measured back surface through ordinary furniture-depth occlusi
   expect(backVertices).toBeGreaterThan(0);
 });
 
-test("refuses a close-range capture when strict fusion cannot make a reliable mesh", () => {
+test("accepts three independent close-range views as reliable support", () => {
   const result = fuseRgbdKeyframes(
-    [0, 0.04, -0.04].map((cameraX) =>
+    [0, 0.06, -0.06].map((cameraX) =>
       planeKeyframe(cameraX, true, false, false, 0.62),
     ),
-    { floorY: 0 },
+    { floorY: 0, completionMode: "surface" },
   );
-  expect(result.mesh).toBeNull();
-  expect(result.diagnostics.reason).toMatch(/reliable|overlap|surface/i);
-  expect(result.diagnostics.fallback).toBeUndefined();
+  expect(result.mesh?.triangleCount).toBeGreaterThan(0);
+  expect(result.diagnostics.confirmedVoxels).toBeGreaterThan(0);
 });
 
 test("does not substitute a single-view mesh when close-range fusion fails", () => {

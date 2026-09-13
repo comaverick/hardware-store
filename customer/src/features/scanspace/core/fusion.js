@@ -1336,6 +1336,8 @@ function makeVolume(bounds, options) {
   const count = cellCount();
   const firstViewIds = new Uint8Array(count);
   firstViewIds.fill(255);
+  const lastViewIds = new Uint8Array(count);
+  lastViewIds.fill(255);
   return {
     origin,
     dimensions,
@@ -1344,6 +1346,7 @@ function makeVolume(bounds, options) {
     weights: new Uint8Array(count),
     viewpointCounts: new Uint8Array(count),
     firstViewIds,
+    lastViewIds,
     weightSums: new Float32Array(count),
     varianceSums: new Float32Array(count),
     depthSums: new Float32Array(count),
@@ -1355,6 +1358,7 @@ function makeVolume(bounds, options) {
     // observations.
     colorWeights: new Float32Array(count),
     robustlyDownweightedSamples: 0,
+    robustlyRejectedSamples: 0,
     motionDownweightedSamples: 0,
   };
 }
@@ -1507,8 +1511,17 @@ function integrateProjective(volume, frames, report) {
           // shelf, while retaining that view's genuinely new measured area.
           if (volume.viewpointCounts[index] >= 2 && previousWeight > 0.2) {
             const residual = Math.abs(delta);
-            const robustAgreement = residual > 0.42
-              ? clamp(0.42 / residual, 0.24, 1)
+            // Once independent views establish a local surface, a later TSDF
+            // sample that disagrees by almost a full truncation band is pose
+            // drift or another depth layer, not useful smoothing evidence.
+            // Reject it locally while retaining the frame's genuinely new
+            // regions elsewhere in the volume.
+            if (residual >= 0.82) {
+              volume.robustlyRejectedSamples++;
+              continue;
+            }
+            const robustAgreement = residual > 0.34
+              ? clamp(((0.82 - residual) / 0.48) ** 2, 0.08, 1)
               : 1;
             if (robustAgreement < 0.999)
               volume.robustlyDownweightedSamples++;
@@ -1524,17 +1537,30 @@ function integrateProjective(volume, frames, report) {
           if (!volume.viewpointCounts[index]) {
             volume.viewpointCounts[index] = 1;
             volume.firstViewIds[index] = frameIndex;
-          } else if (volume.viewpointCounts[index] === 1) {
+            volume.lastViewIds[index] = frameIndex;
+          } else {
             const firstCamera = frames[volume.firstViewIds[index]]?.camera;
+            const lastCamera = frames[volume.lastViewIds[index]]?.camera;
+            const distanceFrom = (camera) =>
+              camera
+                ? Math.hypot(
+                    frame.camera[0] - camera[0],
+                    frame.camera[1] - camera[1],
+                    frame.camera[2] - camera[2],
+                  )
+                : 0;
             if (
-              firstCamera &&
-              Math.hypot(
-                frame.camera[0] - firstCamera[0],
-                frame.camera[1] - firstCamera[1],
-                frame.camera[2] - firstCamera[2],
-              ) >= MIN_INDEPENDENT_VIEW_METERS
-            )
-              volume.viewpointCounts[index] = 2;
+              lastCamera &&
+              distanceFrom(lastCamera) >= MIN_INDEPENDENT_VIEW_METERS &&
+              (volume.viewpointCounts[index] !== 2 ||
+                distanceFrom(firstCamera) >= MIN_INDEPENDENT_VIEW_METERS)
+            ) {
+              volume.viewpointCounts[index] = Math.min(
+                32,
+                volume.viewpointCounts[index] + 1,
+              );
+              volume.lastViewIds[index] = frameIndex;
+            }
           }
           if (Math.abs(signedDistance) <= volume.voxelSize * 1.15) {
             const colorProjection = projectColorWorld(
@@ -2934,10 +2960,10 @@ export function stabilizeMeasuredWallSectors(mesh, walls = [], voxelSize = 0.03)
   // supported wall by more than one voxel. The cap keeps nearby furniture and
   // recessed surfaces out of the correction; no vertices or triangles are
   // created by this operation.
-  // The retained frame core already passed strict bidirectional depth checks,
-  // so a broad, wall-like patch may be corrected across several noisy voxels.
-  // The 10 cm cap still keeps ordinary shelves and furniture fronts separate.
-  const distanceLimit = clamp(voxelSize * 4, 0.065, 0.1);
+  // Correct ordinary depth ripple, but never collapse a nearby second sheet
+  // onto the wall. The previous 10 cm radius could merge pose-drift layers or
+  // shallow trim with the fitted plane and create coincident triangles.
+  const distanceLimit = clamp(voxelSize * 2.6, 0.045, 0.065);
   const extentMargin = Math.max(0.025, voxelSize * 1.2);
   let stabilizedVertexCount = 0;
   for (let vertex = 0; vertex < positions.length / 3; vertex++) {
@@ -2949,7 +2975,7 @@ export function stabilizeMeasuredWallSectors(mesh, walls = [], voxelSize = 0.03)
       const alignment = Math.abs(
         normals[offset] * normal.x + normals[offset + 2] * normal.z,
       );
-      if (alignment < 0.72) return;
+      if (alignment < 0.8) return;
       const distance =
         positions[offset] * normal.x +
         positions[offset + 2] * normal.z -
@@ -2970,8 +2996,8 @@ export function stabilizeMeasuredWallSectors(mesh, walls = [], voxelSize = 0.03)
         best = { normal, distance };
     });
     if (!best) continue;
-    positions[offset] -= best.normal.x * best.distance;
-    positions[offset + 2] -= best.normal.z * best.distance;
+    positions[offset] -= best.normal.x * best.distance * 0.9;
+    positions[offset + 2] -= best.normal.z * best.distance * 0.9;
     stabilizedVertexCount++;
   }
   return {
@@ -3204,13 +3230,13 @@ export function imageColorStatistics(frame) {
   };
 }
 
-export function imageSharpness(frame) {
+function imageDetailMetrics(frame) {
   if (
     !frame?.colorImage?.length ||
     frame.colorWidth < 3 ||
     frame.colorHeight < 3
   )
-    return 0;
+    return { sharpness: 0, focus: 0 };
   const channels = frame.colorChannels || 4;
   const luminanceAt = (x, y) => {
     const offset = (y * frame.colorWidth + x) * channels;
@@ -3222,20 +3248,38 @@ export function imageSharpness(frame) {
   };
   const step = Math.max(1, Math.floor(Math.min(frame.colorWidth, frame.colorHeight) / 120));
   let detail = 0;
+  let focus = 0;
   let clipped = 0;
   let samples = 0;
   for (let y = 1; y < frame.colorHeight - 1; y += step)
     for (let x = 1; x < frame.colorWidth - 1; x += step) {
       const center = luminanceAt(x, y);
-      detail +=
-        Math.abs(luminanceAt(x + 1, y) - center) +
-        Math.abs(luminanceAt(x, y + 1) - center);
+      const left = luminanceAt(x - 1, y);
+      const right = luminanceAt(x + 1, y);
+      const above = luminanceAt(x, y - 1);
+      const below = luminanceAt(x, y + 1);
+      detail += Math.abs(right - center) + Math.abs(below - center);
+      // A first derivative can still rate a broad motion-blurred edge highly.
+      // Laplacian energy measures the high-frequency focus that survives only
+      // in a genuinely sharp camera frame.
+      focus += Math.abs(center * 4 - left - right - above - below);
       if (center < 5 || center > 250) clipped++;
       samples++;
     }
-  if (!samples) return 0;
+  if (!samples) return { sharpness: 0, focus: 0 };
   const clippingPenalty = 1 - Math.min(0.75, clipped / samples);
-  return (detail / samples) * clippingPenalty;
+  return {
+    sharpness: (detail / samples) * clippingPenalty,
+    focus: (focus / samples) * clippingPenalty,
+  };
+}
+
+export function imageSharpness(frame) {
+  return imageDetailMetrics(frame).sharpness;
+}
+
+export function imageFocus(frame) {
+  return imageDetailMetrics(frame).focus;
 }
 
 function texturePixel(frame, projection) {
@@ -3399,11 +3443,26 @@ export function overlapTextureColorScales(frames) {
     });
   }
   return {
-    scales: logarithms.map((channels, index) =>
-      connected[index]
-        ? channels.map((value) => clamp(Math.exp(value), 0.72, 1.38))
-        : null,
-    ),
+    scales: logarithms.map((channels, index) => {
+      if (!connected[index]) return null;
+      // Exposure may legitimately vary substantially between views, but
+      // solving each RGB channel independently can turn a neutral wall pink,
+      // green, or blue when a correspondence lands on a colored/specular
+      // object. Preserve the shared exposure correction and tightly bound only
+      // the chromatic deviation around it.
+      const exposureLog =
+        channels[0] * 0.2126 +
+        channels[1] * 0.7152 +
+        channels[2] * 0.0722;
+      return channels.map((value) => {
+        const chromaLog = clamp(
+          value - exposureLog,
+          Math.log(0.94),
+          Math.log(1.06),
+        );
+        return clamp(Math.exp(exposureLog + chromaLog), 0.72, 1.38);
+      });
+    }),
     pairCount: edges.length,
   };
 }
@@ -3427,6 +3486,43 @@ export function textureColorDifference(first, second) {
     0,
   );
   return clamp(luminanceDifference * 0.65 + chromaDifference * 0.35, 0, 2);
+}
+
+export function textureProjectionStretch(points, projections, width, height) {
+  if (
+    points?.length !== 3 ||
+    projections?.length !== 3 ||
+    projections.some((projection) => !projection) ||
+    !width ||
+    !height
+  )
+    return null;
+  const worldEdges = [];
+  const pixelEdges = [];
+  for (const [first, second] of [[0, 1], [1, 2], [2, 0]]) {
+    worldEdges.push(
+      Math.hypot(
+        points[first][0] - points[second][0],
+        points[first][1] - points[second][1],
+        points[first][2] - points[second][2],
+      ),
+    );
+    pixelEdges.push(
+      Math.hypot(
+        (projections[first].u - projections[second].u) * width,
+        (projections[first].v - projections[second].v) * height,
+      ),
+    );
+  }
+  if (worldEdges.some((edge) => edge < 0.00001)) return null;
+  const scales = pixelEdges.map((edge, index) => edge / worldEdges[index]);
+  const minimumScale = Math.min(...scales);
+  const maximumScale = Math.max(...scales);
+  return {
+    anisotropy: maximumScale / Math.max(0.00001, minimumScale),
+    minimumScale,
+    maximumScale,
+  };
 }
 
 function projectedTextureDetail(frame, projection) {
@@ -3467,15 +3563,40 @@ function projectedTextureDetail(frame, projection) {
 }
 
 function buildAtlas(frames, precomputedCalibration = null) {
-  const images = frames.filter((frame) => frame.colorImage?.length && frame.colorWidth && frame.colorHeight);
-  if (!images.length) return null;
-  images.forEach((frame) => {
-    frame.textureSharpness =
-      Number(frame.colorSharpness) > 0
-        ? Number(frame.colorSharpness)
-        : imageSharpness(frame);
+  const candidates = frames.filter(
+    (frame) =>
+      frame.colorImage?.length && frame.colorWidth && frame.colorHeight,
+  );
+  if (!candidates.length) return null;
+  candidates.forEach((frame) => {
+    // Recompute both metrics from the owned snapshot. Live capture used a
+    // different four-neighbor scale, which made blurred frames look roughly
+    // twice as sharp when compared with restored or worker-side frames.
+    const detail = imageDetailMetrics(frame);
+    frame.textureSharpness = detail.sharpness;
+    frame.textureFocus = detail.focus;
+    frame.textureQuality =
+      detail.sharpness * Math.sqrt(Math.max(0.5, detail.focus));
     frame.textureColorStatistics = imageColorStatistics(frame);
   });
+  const rankedQuality = candidates
+    .map((frame) => frame.textureQuality)
+    .sort((left, right) => left - right);
+  const upperQuality =
+    rankedQuality[Math.floor(rankedQuality.length * 0.75)] || 0;
+  const qualityFloor = Math.max(10, upperQuality * 0.56);
+  let images = candidates.filter(
+    (frame) => frame.textureQuality >= qualityFloor,
+  );
+  const minimumImages = Math.min(3, candidates.length);
+  if (images.length < minimumImages) {
+    const strongest = new Set(
+      [...candidates]
+        .sort((left, right) => right.textureQuality - left.textureQuality)
+        .slice(0, minimumImages),
+    );
+    images = candidates.filter((frame) => strongest.has(frame));
+  }
   const rankedSharpness = images
     .map((frame) => frame.textureSharpness)
     .sort((left, right) => left - right);
@@ -3602,6 +3723,8 @@ function buildAtlas(frames, precomputedCalibration = null) {
     columns,
     frames: images,
     referenceSharpness,
+    rejectedBlurryFrames: candidates.length - images.length,
+    textureQualityFloor: qualityFloor,
     photometricPairCount: overlapCalibration.pairCount,
     photometricNormalization: overlapCalibration.pairCount
       ? "overlap-correspondence-color-calibration"
@@ -3703,6 +3826,7 @@ function texturedMesh(mesh, frames, precomputedCalibration = null) {
   const atlas = buildAtlas(frames, precomputedCalibration);
   const sharedNormals = computeNormals(mesh);
   if (!atlas) return { ...mesh, normals: sharedNormals, textureCoverage: 0 };
+  const textureCandidateRejections = { stretched: 0, grazing: 0 };
   const projectionPositions =
     mesh.textureProjectionPositions?.length === mesh.positions.length
       ? mesh.textureProjectionPositions
@@ -3719,6 +3843,11 @@ function texturedMesh(mesh, frames, precomputedCalibration = null) {
   );
   for (let index = 0; index < mesh.indices.length; index += 3) {
     const triangle = [mesh.indices[index], mesh.indices[index + 1], mesh.indices[index + 2]];
+    const triangleProjectionPoints = triangle.map((vertex) => [
+      projectionPositions[vertex * 3],
+      projectionPositions[vertex * 3 + 1],
+      projectionPositions[vertex * 3 + 2],
+    ]);
     const center = triangle.reduce((value, vertex) => ({
       x: value.x + projectionPositions[vertex * 3] / 3,
       y: value.y + projectionPositions[vertex * 3 + 1] / 3,
@@ -3787,6 +3916,16 @@ function texturedMesh(mesh, frames, precomputedCalibration = null) {
       ));
       if (colorProjections.some((value) =>
         !value || value.u < 0.01 || value.v < 0.01 || value.u > 0.99 || value.v > 0.99)) return;
+      const projectionStretch = textureProjectionStretch(
+        triangleProjectionPoints,
+        colorProjections,
+        frame.colorWidth,
+        frame.colorHeight,
+      );
+      if (!projectionStretch || projectionStretch.anisotropy > 4.2) {
+        textureCandidateRejections.stretched++;
+        return;
+      }
       const vertexDepthProjections = triangle.map((vertex) => projectWorld(
         frame,
         projectionPositions[vertex * 3],
@@ -3833,6 +3972,14 @@ function texturedMesh(mesh, frames, precomputedCalibration = null) {
       const dy = frame.transformMatrix[13] - center.y;
       const dz = frame.transformMatrix[14] - center.z;
       const distance = Math.hypot(dx, dy, dz) || 1;
+      const faceFacing = Math.abs(
+        (faceNormal.x * dx + faceNormal.y * dy + faceNormal.z * dz) /
+          distance,
+      );
+      if (faceFacing < 0.22) {
+        textureCandidateRejections.grazing++;
+        return;
+      }
       const facing = Math.abs((normal.x * dx + normal.y * dy + normal.z * dz) / distance);
       const sharpness = clamp(
         frame.textureSharpness / atlas.referenceSharpness,
@@ -4086,6 +4233,10 @@ function texturedMesh(mesh, frames, precomputedCalibration = null) {
     texturePatchCount,
     textureCalibrationPairs: atlas.photometricPairCount,
     photometricNormalization: atlas.photometricNormalization,
+    rejectedBlurryTextureFrames: atlas.rejectedBlurryFrames,
+    textureQualityFloor: atlas.textureQualityFloor,
+    rejectedStretchedTextureCandidates: textureCandidateRejections.stretched,
+    rejectedGrazingTextureCandidates: textureCandidateRejections.grazing,
   };
 }
 
@@ -4145,6 +4296,9 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   }
   if (options.completionMode === "surface" && overlapping.length >= 3) {
     const strictDiagnostics = {};
+    const preferCoherentCore =
+      !!options.requireCoherentSurfaceCore ||
+      !!options.preferCoherentSurfaceCore;
     const consistent = validateFrameOverlap(overlapping, strictDiagnostics, {
       minimumAgreeing: 16,
       minimumAgreementRatio: 0.5,
@@ -4152,8 +4306,8 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       minimumDirectionalAgreementRatio: 0.38,
       maximumMedianError: 0.045,
       maximumUpperError: 0.09,
-      requireBidirectional: !!options.requireCoherentSurfaceCore,
-      selectionMode: options.requireCoherentSurfaceCore
+      requireBidirectional: preferCoherentCore,
+      selectionMode: preferCoherentCore
         ? "anchor-core"
         : "connected-component",
     });
@@ -4165,6 +4319,9 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       applied: enoughConsistentFrames,
       fallbackToGeneralOverlap:
         !enoughConsistentFrames && !options.requireCoherentSurfaceCore,
+      preferredWithoutBlocking:
+        !!options.preferCoherentSurfaceCore &&
+        !options.requireCoherentSurfaceCore,
       rejectedAsIncoherent:
         !enoughConsistentFrames && !!options.requireCoherentSurfaceCore,
     };
@@ -4199,7 +4356,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   if (localLayerConsensus.diagnostics)
     alignment.localLayerConsensus = localLayerConsensus.diagnostics;
   const stages = {
-    algorithmVersion: 31,
+    algorithmVersion: 32,
     completionMode: options.completionMode === "surface" ? "surface" : "room",
     reconstructionProfile: options.reconstructionProfile || "quality",
     supportMode: "translated-camera-viewpoints",
@@ -4296,6 +4453,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   const confirmedVoxels = integrateProjective(volume, usable, report);
   stages.robustFusion = {
     robustlyDownweightedSamples: volume.robustlyDownweightedSamples,
+    robustlyRejectedSamples: volume.robustlyRejectedSamples,
     motionDownweightedSamples: volume.motionDownweightedSamples,
   };
   if (confirmedVoxels < 120)

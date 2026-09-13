@@ -24,6 +24,7 @@ export function depthFrameQuality({
   validSamples = 0,
   totalSamples = 0,
   nearRatio = 0,
+  obstructionRatio = nearRatio,
   linearSpeed = 0,
   angularSpeed = 0,
 } = {}) {
@@ -35,7 +36,7 @@ export function depthFrameQuality({
     return { accepted: false, reason: "moving-too-fast", validRatio };
   if (validRatio < 0.2)
     return { accepted: false, reason: "sparse-depth", validRatio };
-  if (nearRatio > 0.3)
+  if (obstructionRatio > 0.3)
     return { accepted: false, reason: "near-field-obstruction", validRatio };
   return { accepted: true, reason: "accepted", validRatio };
 }

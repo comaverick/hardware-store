@@ -86,3 +86,18 @@ test("rejects fast, sparse, and obstructed depth frames before fusion", () => {
     angularSpeed: 0.2,
   }).accepted).toBe(true);
 });
+
+test("accepts useful close-range depth while still rejecting a true obstruction", () => {
+  expect(depthFrameQuality({
+    validSamples: 800,
+    totalSamples: 1000,
+    nearRatio: 0.72,
+    obstructionRatio: 0.08,
+  }).accepted).toBe(true);
+  expect(depthFrameQuality({
+    validSamples: 800,
+    totalSamples: 1000,
+    nearRatio: 0.72,
+    obstructionRatio: 0.42,
+  }).reason).toBe("near-field-obstruction");
+});
