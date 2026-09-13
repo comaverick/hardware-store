@@ -12,12 +12,12 @@ export function parseRoomImport(value) {
   const parsed = JSON.parse(value);
   if (parsed?.capture?.keyframes || parsed?.capture?.version)
     throw new Error(
-      "This is a scan-diagnostics file, not a saved room. Open the room from Saved rooms, or import a scanspace-room.json export.",
+      "This is a scan-diagnostics file, not a ScanSpace scan. Import a saved scan or room export instead.",
     );
   const room = parsed?.room || parsed;
   if (!room || !Array.isArray(room.floorPolygon))
     throw new Error(
-      "This file does not contain a ScanSpace room. Choose a scanspace-room.json export.",
+      "This file does not contain a ScanSpace scan or room. Choose a saved ScanSpace export.",
     );
   return normalizeRoom(room);
 }

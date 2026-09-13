@@ -191,7 +191,7 @@ export default function ScannerPanel({
       onEnd: () => {
         setActive(false);
         if (!finished.current)
-          setError("Scan ended before a room was built. Start the scan again.");
+          setError("Scan ended before a result was built. Start the scan again.");
       },
     });
     scanner.current = s;
@@ -390,7 +390,7 @@ export default function ScannerPanel({
               : resolve(e.data.result);
           worker.current.onerror = () =>
             reject(
-              new Error("Room reconstruction failed. Keep scanning the room."),
+              new Error("Surface reconstruction failed. Keep scanning the area."),
             );
           worker.current.postMessage({
             points,
@@ -452,7 +452,7 @@ export default function ScannerPanel({
   async function finishSurface() {
     if (!surfaceReadiness.ready) {
       setError(
-        `Keep scanning this surface before finishing: ${surfaceReadiness.missing.join(", ")}.`,
+        `Keep scanning this area before finishing: ${surfaceReadiness.missing.join(", ")}.`,
       );
       return;
     }
@@ -493,7 +493,7 @@ export default function ScannerPanel({
         ceilingObserved: false,
         pointCount: acceptedPoints.length,
         reason:
-          "Validated multi-view surface. A complete room boundary was not requested.",
+          "Validated multi-view surface. ScanSpace saved the surfaces you captured.",
         cloud: scanCloud,
         mesh: fused.mesh,
         fusionMode: "multi-view",
@@ -517,6 +517,16 @@ export default function ScannerPanel({
       setBusy(false);
     }
   }
+  async function finishScan() {
+    if (!surfaceReadiness.ready) {
+      setError(
+        `Keep scanning before finishing this scan: ${surfaceReadiness.missing.join(", ")}.`,
+      );
+      return;
+    }
+    if (readiness.ready) return finish();
+    return finishSurface();
+  }
   return (
     <div className={`ss-scanner ${active ? "is-scanning" : ""}`}>
       <canvas className="ss-xr-canvas" ref={canvas} />
@@ -530,7 +540,7 @@ export default function ScannerPanel({
                 : stats.depthActive
                   ? "Depth scanning"
                   : "Looking for depth"
-              : "Bring your room into ScanSpace."}
+              : "Bring your space into ScanSpace."}
           </h2>
           <p>
             {active
@@ -541,9 +551,9 @@ export default function ScannerPanel({
                   : !stats.tracking
                     ? "Tracking lost. Move slowly toward an area you already scanned."
                     : stats.depthActive
-                      ? "Move slowly around the room. ScanSpace finds the floor, walls, and ceiling automatically."
-                      : "Move slowly around the room while ScanSpace looks for depth."
-              : "Your room stays on this phone during scanning. Depth and captured colors depend on the capabilities granted by your browser."}
+                      ? "Move slowly across the surfaces you want to capture. ScanSpace records what you show it."
+                      : "Move slowly across the area while ScanSpace looks for depth."
+              : "Your scan stays on this phone during capture. Depth and captured colors depend on the capabilities granted by your browser."}
           </p>
         </div>
         {!active && !busy && (
@@ -602,7 +612,7 @@ export default function ScannerPanel({
                 {busy
                   ? "Capture is paused during reconstruction."
                   : partial
-                    ? "Capture is paused after validation. Keep scanning will resume the camera."
+                    ? "Capture is paused after validation. Keep scanning to add more coverage."
                   : stats.depthCurrent
                     ? "Depth frames are being received."
                     : stats.depthActive
@@ -614,31 +624,26 @@ export default function ScannerPanel({
               </p>
               <p className="ss-scan-hint">
                 {partial
-                  ? "The existing capture is still available; no wall was generated."
+                  ? "Your captured views are still available; nothing was discarded."
                   : captureGuidance(stats, busy)}{" "}
                 Mint coverage marks areas confirmed from multiple saved views.
                 Keep moving until the visible surface is evenly tinted; clear
                 gaps still need another angle.
               </p>
-              {!busy && !partial && !readiness.ready && (
-                <p className="ss-scan-hint">
-                  Needed before a complete room scan: {readiness.missing.join(", ")}.
-                </p>
-              )}
               {!busy && !partial && !surfaceReadiness.ready && (
                 <p className="ss-scan-hint">
-                  Needed for one measured surface: {surfaceReadiness.missing.join(", ")}.
+                  Keep scanning until this area has enough stable coverage: {surfaceReadiness.missing.join(", ")}.
                 </p>
               )}
               {stats.cloudCompactions > 0 && (
                 <p className="ss-scan-hint">
-                  Capture density was optimized to retain room coverage.
+                  Capture density was optimized to retain your scan coverage.
                 </p>
               )}
               {stats.full && (
                 <p className="ss-error">
-                  Capture density is at its safe limit. If completion is still
-                  unavailable, restart and scan with steadier overlap.
+                  Capture density is at its safe limit. If the scan still
+                  cannot be finished, restart and scan with steadier overlap.
                 </p>
               )}
               {!partial ? (
@@ -648,31 +653,25 @@ export default function ScannerPanel({
                   </button>
                   <button
                     className="ss-primary"
-                    disabled={busy || !readiness.ready}
-                    onClick={() => finish()}
-                  >
-                    Finish room scan
-                  </button>
-                  <button
                     disabled={busy || !surfaceReadiness.ready}
-                    onClick={finishSurface}
+                    onClick={finishScan}
                   >
-                    Finish scanned surface
+                    Finish scan
                   </button>
                 </div>
               ) : (
                 <section className="ss-partial-capture" role="status">
-                  <strong>Scan is not ready to finish</strong>
+                  <strong>Scan needs more coverage</strong>
                   <p>
                     {partial.pointCount.toLocaleString()} points across{" "}
-                    {partial.coverage}% of the view sweep. No result was created
-                    because the measured geometry did not pass validation.
+                    {partial.coverage}% of the view sweep. Add another angle so
+                    the captured geometry can be used.
                   </p>
                   <p>
                     Horizontal camera-position spread: {Math.round(
-                      (partial.cameraBaseline || 0) * 100,
-                    )} cm. Move sideways, not only in place, before trying
-                    completion again.
+                    (partial.cameraBaseline || 0) * 100,
+                    )} cm. Move sideways, not only in place, before finishing
+                    again.
                   </p>
                   <p className="ss-partial-reason">{partial.reason}</p>
                   <div className="ss-actions">

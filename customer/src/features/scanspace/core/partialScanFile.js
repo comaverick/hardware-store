@@ -1,5 +1,8 @@
+export const SCAN_FILE_FORMAT = "scanspace-scan";
+// Kept so exports created before the unified scan UI continue to open.
 export const PARTIAL_SCAN_FORMAT = "scanspace-partial-surface";
-export const MAX_PARTIAL_SCAN_IMPORT_BYTES = 64 * 1024 * 1024;
+export const MAX_SCAN_FILE_IMPORT_BYTES = 64 * 1024 * 1024;
+export const MAX_PARTIAL_SCAN_IMPORT_BYTES = MAX_SCAN_FILE_IMPORT_BYTES;
 
 const MAX_ARRAY_BYTES = 32 * 1024 * 1024;
 // Base64 adds about one third to the binary size. Keeping portable mesh data
@@ -22,19 +25,19 @@ function encodeArray(value, type) {
 
 function decodeArray(value, expectedType, label) {
   if (!value || value.type !== expectedType || typeof value.data !== "string")
-    throw new Error(`The incomplete scan has invalid ${label} data.`);
+    throw new Error(`The scan file has invalid ${label} data.`);
   let binary;
   try {
     binary = atob(value.data);
   } catch {
-    throw new Error(`The incomplete scan has damaged ${label} data.`);
+    throw new Error(`The scan file has damaged ${label} data.`);
   }
   const Type = ARRAY_TYPES[expectedType];
   if (
     binary.length > MAX_ARRAY_BYTES ||
     binary.length % Type.BYTES_PER_ELEMENT !== 0
   )
-    throw new Error(`The incomplete scan has invalid ${label} data.`);
+    throw new Error(`The scan file has invalid ${label} data.`);
   const bytes = new Uint8Array(binary.length);
   for (let offset = 0; offset < binary.length; offset += 32768) {
     const end = Math.min(offset + 32768, binary.length);
@@ -51,7 +54,7 @@ function finite(value, fallback = 0) {
 function validateFiniteArray(value, label) {
   for (let index = 0; index < value.length; index++)
     if (!Number.isFinite(value[index]))
-      throw new Error(`The incomplete scan has invalid ${label} coordinates.`);
+      throw new Error(`The scan file has invalid ${label} coordinates.`);
 }
 
 function boundsFromPositions(positions) {
@@ -146,15 +149,15 @@ function decodeMesh(mesh) {
     ? decodeArray(mesh.normals, "f32", "mesh normal")
     : null;
   if (!positions.length || positions.length % 3 || colors.length !== positions.length)
-    throw new Error("The incomplete scan has inconsistent mesh geometry.");
+    throw new Error("The scan file has inconsistent mesh geometry.");
   if (indices.length % 3 || (normals && normals.length !== positions.length))
-    throw new Error("The incomplete scan has inconsistent mesh geometry.");
+    throw new Error("The scan file has inconsistent mesh geometry.");
   validateFiniteArray(positions, "mesh");
   if (normals) validateFiniteArray(normals, "mesh normal");
   const vertexCount = positions.length / 3;
   for (let index = 0; index < indices.length; index++)
     if (indices[index] >= vertexCount)
-      throw new Error("The incomplete scan contains an invalid mesh index.");
+      throw new Error("The scan file contains an invalid mesh index.");
   const bounds = boundsFromPositions(positions);
   return {
     version: 3,
@@ -175,7 +178,7 @@ function decodeCloud(cloud) {
   const positions = decodeArray(cloud.positions, "f32", "point position");
   const colors = decodeArray(cloud.colors, "u8", "point color");
   if (!positions.length || positions.length % 3 || colors.length !== positions.length)
-    throw new Error("The incomplete scan has inconsistent point-cloud data.");
+    throw new Error("The scan file has inconsistent point-cloud data.");
   validateFiniteArray(positions, "point-cloud");
   const bounds = boundsFromPositions(positions);
   return {
@@ -205,11 +208,13 @@ function safeReviewWarning(warning) {
   };
 }
 
-export function looksLikePartialScan(beginning = "") {
-  return /^\s*\{\s*"format"\s*:\s*"scanspace-partial-surface"/i.test(
+export function looksLikeScanFile(beginning = "") {
+  return /^\s*\{\s*"format"\s*:\s*"scanspace-(?:scan|partial-surface)"/i.test(
     beginning,
   );
 }
+
+export const looksLikePartialScan = looksLikeScanFile;
 
 export function serializePartialScan(scan) {
   if (!scan?.mesh && !scan?.cloud)
@@ -220,12 +225,12 @@ export function serializePartialScan(scan) {
       "This measured mesh is too large to export without its point-cloud preview.",
     );
   return JSON.stringify({
-    format: PARTIAL_SCAN_FORMAT,
+    format: SCAN_FILE_FORMAT,
     version: 1,
     exportedAt: new Date().toISOString(),
     scan: {
-      name: String(scan.name || "Incomplete ScanSpace scan").slice(0, 120),
-      reason: String(scan.reason || "Room boundary is incomplete.").slice(0, 500),
+      name: String(scan.name || "ScanSpace scan").slice(0, 120),
+      reason: String(scan.reason || "Captured measured surfaces.").slice(0, 500),
       pointCount: finite(scan.pointCount ?? scan.cloud?.count, 0),
       captureQuality: scan.captureQuality || null,
       measuredGapWarning: !!scan.measuredGapWarning,
@@ -244,25 +249,28 @@ export function parsePartialScan(value) {
   try {
     parsed = JSON.parse(value);
   } catch {
-    throw new Error("This incomplete scan file is not valid JSON.");
+    throw new Error("This scan file is not valid JSON.");
   }
-  if (parsed?.format !== PARTIAL_SCAN_FORMAT || parsed?.version !== 1)
-    throw new Error("This is not a supported ScanSpace incomplete scan.");
+  if (
+    ![SCAN_FILE_FORMAT, PARTIAL_SCAN_FORMAT].includes(parsed?.format) ||
+    parsed?.version !== 1
+  )
+    throw new Error("This is not a supported ScanSpace scan file.");
   const source = parsed.scan;
   const mesh = decodeMesh(source?.mesh);
   const cloud = decodeCloud(source?.cloud);
   if (!mesh && !cloud)
-    throw new Error("This incomplete scan does not contain measured geometry.");
+    throw new Error("This scan file does not contain measured geometry.");
   return {
     version: 2,
     kind: "validated-measured-surface",
     imported: true,
-    name: String(source.name || "Imported incomplete scan").slice(0, 120),
+    name: String(source.name || "Imported ScanSpace scan").slice(0, 120),
     walls: [],
     floorObserved: false,
     ceilingObserved: false,
     pointCount: finite(source.pointCount ?? cloud?.count, cloud?.count || 0),
-    reason: String(source.reason || "Room boundary is incomplete.").slice(0, 500),
+    reason: String(source.reason || "Captured measured surfaces.").slice(0, 500),
     cloud,
     mesh,
     fusionMode: "portable-import",
@@ -282,9 +290,15 @@ export function downloadPartialScan(scan) {
   );
   const link = document.createElement("a");
   link.href = url;
-  link.download = `scanspace-incomplete-${new Date()
+  link.download = `scanspace-scan-${new Date()
     .toISOString()
     .replace(/[:.]/g, "-")}.json`;
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 0);
 }
+
+// Public names for the unified scan flow. The older names above remain as
+// compatibility aliases for files and callers created before this UI change.
+export const serializeScan = serializePartialScan;
+export const parseScanFile = parsePartialScan;
+export const downloadScan = downloadPartialScan;

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import PartialScanScene from "./PartialScanScene";
 import { downloadDepthCapture } from "../core/captureDebug";
-import { downloadPartialScan } from "../core/partialScanFile";
+import { downloadScan } from "../core/partialScanFile";
 import {
   MIN_CAMERA_BASELINE_METERS,
   MIN_DIRECTION_COVERAGE,
@@ -18,8 +18,8 @@ export default function PartialScanReview({
   return (
     <section className="ss-partial-review">
       <header>
-        <span className="ss-kicker">Measured wall result</span>
-        <h2>Your captured 3D surface.</h2>
+        <span className="ss-kicker">Scan result</span>
+        <h2>Your captured scan.</h2>
         <p>
           This view is built from the camera colors and depth points that were
           actually captured. Missing areas remain open instead of becoming
@@ -30,10 +30,10 @@ export default function PartialScanReview({
         (quality.coverage < MIN_DIRECTION_COVERAGE ||
           quality.cameraBaseline < MIN_CAMERA_BASELINE_METERS) && (
           <p className="ss-notice">
-            This is a limited viewing sector, not a room-shaped capture: {quality.coverage}%
-            heading coverage and {Math.round(quality.cameraBaseline * 100)} cm
-            of horizontal camera-position spread. Only part of the room was covered;
-            curved walls can also indicate unreliable depth.
+            This scan covers {quality.coverage}% of the heading sweep with {Math.round(
+              quality.cameraBaseline * 100,
+            )} cm of horizontal camera-position spread. ScanSpace only shows
+            the surfaces you captured; curved walls can indicate unreliable depth.
             For the next scan, move sideways while keeping each wall in view.
           </p>
         )}
@@ -76,7 +76,7 @@ export default function PartialScanReview({
               0}%
           </strong>
           {scan.mesh
-            ? "surface texture coverage — not room coverage"
+            ? "captured surface color coverage"
             : "captured point color coverage"}
         </span>
       </div>
@@ -88,9 +88,9 @@ export default function PartialScanReview({
         </p>
       )}
       <p className="ss-notice">
-        This incomplete scan can be exported and opened on another device. To
-        unlock the room editor and material estimates, complete a closed room
-        footprint manually. Structural detection status: {scan.reason}
+        This scan can be exported and opened on another device. Continue with
+        measurements whenever you want to turn the captured surfaces into a
+        room layout. Structural detection status: {scan.reason}
       </p>
       {exportError && (
         <p role="alert" className="ss-error">
@@ -102,16 +102,16 @@ export default function PartialScanReview({
           type="button"
           onClick={() => {
             try {
-              downloadPartialScan(scan);
+              downloadScan(scan);
               setExportError("");
             } catch (reason) {
               setExportError(
-                reason.message || "The incomplete scan could not be exported.",
+                reason.message || "The scan could not be exported.",
               );
             }
           }}
         >
-          Export incomplete scan
+          Export scan
         </button>
         {scan.debugCapture && (
           <button type="button" onClick={() =>
@@ -130,7 +130,7 @@ export default function PartialScanReview({
           type="button"
           onClick={onCompleteManually}
         >
-          Complete room manually
+          Continue with measurements
         </button>
       </div>
     </section>

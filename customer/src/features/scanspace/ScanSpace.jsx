@@ -19,9 +19,9 @@ import {
 import { detectCapabilities } from "./core/depth";
 import { downloadDepthCapture } from "./core/captureDebug";
 import {
-  looksLikePartialScan,
-  MAX_PARTIAL_SCAN_IMPORT_BYTES,
-  parsePartialScan,
+  looksLikeScanFile,
+  MAX_SCAN_FILE_IMPORT_BYTES,
+  parseScanFile,
 } from "./core/partialScanFile";
 import { useScanSpace, sampleRoom } from "./store";
 import {
@@ -123,30 +123,30 @@ export default function ScanSpace() {
     if (!file) return;
     try {
       const beginning = await file.slice(0, 65536).text();
-      const partial = looksLikePartialScan(beginning);
+      const scanFile = looksLikeScanFile(beginning);
       if (looksLikeScanDiagnostics(file.name, beginning))
         throw new Error(
-          "This is a scan-diagnostics file, not a saved room. Open the room from Saved rooms, or import a scanspace-room.json export.",
+          "This is a scan-diagnostics file, not a ScanSpace scan. Import a saved scan or room export instead.",
         );
-      const limit = partial
-        ? MAX_PARTIAL_SCAN_IMPORT_BYTES
+      const limit = scanFile
+        ? MAX_SCAN_FILE_IMPORT_BYTES
         : MAX_ROOM_IMPORT_BYTES;
       if (file.size > limit)
         throw new Error(
-          partial
-            ? "Incomplete scan files can be up to 64 MB."
+          scanFile
+            ? "Scan files can be up to 64 MB."
             : "Saved room files can be up to 10 MB.",
         );
       const contents = await file.text();
-      if (partial) {
-        setSurfaceScan(parsePartialScan(contents));
+      if (scanFile) {
+        setSurfaceScan(parseScanFile(contents));
         setStage("surface");
         setError("");
       } else {
         openRoom(parseRoomImport(contents));
       }
     } catch (reason) {
-      setError(reason.message || "The saved room could not be opened.");
+      setError(reason.message || "The ScanSpace file could not be opened.");
     } finally {
       input.value = "";
     }
@@ -198,7 +198,7 @@ export default function ScanSpace() {
                 disabled={!capabilities?.ar}
               >
                 <Camera size={21} />
-                Scan my room
+                Scan a space
                 <ArrowRight size={18} />
               </button>
               <button
@@ -237,7 +237,7 @@ export default function ScanSpace() {
               )}
               <label className="ss-import">
                 <UploadSimple size={17} />
-                Import saved scan or room
+                Import scan
                 <input
                   type="file"
                   accept="application/json,.json"
@@ -326,7 +326,7 @@ export default function ScanSpace() {
       )}
       {stage === "surface" && surfaceScan && (
         <Suspense
-          fallback={<div className="ss-loading">Opening measured surface…</div>}
+          fallback={<div className="ss-loading">Opening scan result…</div>}
         >
           <PartialScanReview
             scan={surfaceScan}
@@ -378,8 +378,8 @@ export default function ScanSpace() {
                 {capture.stats.depthFrames} depth frames ·{" "}
                 {capture.stats.pointCount.toLocaleString()} points ·{" "}
                 {capture.partial
-                  ? `Partial scan · ${capture.stats.coverage || 0}% view sweep · `
-                  : "Depth outline complete · "}
+                  ? `Captured sweep · ${capture.stats.coverage || 0}% view coverage · `
+                  : "Measured outline · "}
                 {capture.ceilingMeasured
                   ? "Ceiling observed"
                   : "Ceiling height estimated"}
@@ -387,8 +387,8 @@ export default function ScanSpace() {
               {capture.partial && (
                 <p>
                   ScanSpace inferred {capture.inferredWallCount || "some"}{" "}
-                  unscanned wall boundaries from the measured surfaces. Recheck
-                  the room outline before relying on material estimates.
+                  room boundaries from the captured surfaces. Recheck the room
+                  outline before relying on material estimates.
                 </p>
               )}
               <p>
@@ -402,7 +402,7 @@ export default function ScanSpace() {
                   setStage("scan");
                 }}
               >
-                Rescan room
+                Scan again
               </button>
             </div>
           )}
