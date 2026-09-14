@@ -901,6 +901,22 @@ test("resamples different camera image sizes into valid atlas tiles", () => {
   expect(Math.min(...result.mesh.texture.data)).toBeGreaterThan(0);
 });
 
+test("keeps softer retained camera views available for texture coverage", () => {
+  const frames = [0, 0.04, 0.08, -0.04, -0.08].map((x) =>
+    planeKeyframe(x),
+  );
+  frames[2].colorImage = new Uint8Array(
+    Array.from({ length: 64 }, (_, index) => {
+      const value = (index + Math.floor(index / 8)) % 2 ? 25 : 230;
+      return [value, value, value, 255];
+    }).flat(),
+  );
+  const result = fuseRgbdKeyframes(frames);
+  expect(result.mesh?.kind).toBe("projective-tsdf-surface-net");
+  expect(result.diagnostics.lowQualityTextureFrames).toBeGreaterThan(0);
+  expect(result.diagnostics.rejectedBlurryTextureFrames).toBe(0);
+});
+
 test("a bad first frame cannot force a valid overlapping sequence into fallback", () => {
   const result = fuseRgbdKeyframes(
     [planeKeyframe(8), planeKeyframe(0), planeKeyframe(0.08), planeKeyframe(-0.08)],
@@ -1080,6 +1096,29 @@ test("partial-surface consistency does not accept a gradual drift chain", () => 
     result.diagnostics.alignment.surfaceConsistency.selectedFrameIds.length,
   ).toBeLessThan(frames.length);
   expect(result.diagnostics.fusedFrameIds.length).toBeLessThan(frames.length);
+});
+
+test("preferred surface consistency preserves a broad connected scan path", () => {
+  const frames = [0, 1.4, 2.8, 4.2, 5.6, 7, 8.4, 9.8].map((cameraX) =>
+    planeKeyframe(cameraX),
+  );
+  const result = fuseRgbdKeyframes(frames, {
+    completionMode: "surface",
+    preferCoherentSurfaceCore: true,
+    maxDimension: 48,
+  });
+  expect(result.mesh?.kind).toBe("projective-tsdf-surface-net");
+  expect(result.diagnostics.alignment.surfaceConsistency.selectionMode).toBe(
+    "anchor-core",
+  );
+  expect(
+    result.diagnostics.alignment.surfaceConsistency.selectedRatio,
+  ).toBeLessThan(0.8);
+  expect(result.diagnostics.alignment.surfaceConsistency.applied).toBe(false);
+  expect(
+    result.diagnostics.alignment.surfaceConsistency.fallbackToGeneralOverlap,
+  ).toBe(true);
+  expect(result.diagnostics.fusedFrameIds).toHaveLength(frames.length);
 });
 
 test("suppresses a minority reflective strip before surface fusion", () => {

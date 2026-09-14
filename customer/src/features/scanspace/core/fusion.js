@@ -3585,23 +3585,23 @@ function buildAtlas(frames, precomputedCalibration = null) {
   const upperQuality =
     rankedQuality[Math.floor(rankedQuality.length * 0.75)] || 0;
   const qualityFloor = Math.max(10, upperQuality * 0.56);
-  let images = candidates.filter(
-    (frame) => frame.textureQuality >= qualityFloor,
-  );
-  const minimumImages = Math.min(3, candidates.length);
-  if (images.length < minimumImages) {
-    const strongest = new Set(
-      [...candidates]
-        .sort((left, right) => right.textureQuality - left.textureQuality)
-        .slice(0, minimumImages),
-    );
-    images = candidates.filter((frame) => strongest.has(frame));
-  }
+  const lowQualityFrames = candidates.filter(
+    (frame) => frame.textureQuality < qualityFloor,
+  ).length;
+  // A globally softer frame may still be the only camera that saw one end of
+  // the scan. Removing it here turned otherwise measured walls and ceilings
+  // into the constant gray fallback. Capture already bounds the atlas and
+  // selects the best low-motion image from each section of the scan path, so
+  // keep every retained view as a coverage fallback. Per-triangle scoring
+  // below still prefers the sharpest valid view wherever cameras overlap.
+  const images = candidates;
   const rankedSharpness = images
     .map((frame) => frame.textureSharpness)
     .sort((left, right) => left - right);
   const referenceSharpness =
     rankedSharpness[Math.floor(rankedSharpness.length / 2)] || 1;
+  const referenceQuality =
+    rankedQuality[Math.floor(rankedQuality.length / 2)] || 1;
   // Normalize differently sized/oriented keyframe copies into equal atlas
   // tiles. UVs remain normalized per frame, so this resampling preserves
   // correspondence while keeping atlas addressing uniform.
@@ -3723,7 +3723,9 @@ function buildAtlas(frames, precomputedCalibration = null) {
     columns,
     frames: images,
     referenceSharpness,
-    rejectedBlurryFrames: candidates.length - images.length,
+    referenceQuality,
+    lowQualityFrames,
+    rejectedBlurryFrames: 0,
     textureQualityFloor: qualityFloor,
     photometricPairCount: overlapCalibration.pairCount,
     photometricNormalization: overlapCalibration.pairCount
@@ -3986,6 +3988,11 @@ function texturedMesh(mesh, frames, precomputedCalibration = null) {
         0.35,
         1.65,
       );
+      const quality = clamp(
+        frame.textureQuality / atlas.referenceQuality,
+        0.2,
+        1.8,
+      );
       const motionPenalty = clamp(
         (frame.linearSpeed || 0) / 0.75 +
           (frame.angularSpeed || 0) / 0.8,
@@ -4027,7 +4034,8 @@ function texturedMesh(mesh, frames, precomputedCalibration = null) {
         score:
           facing * 2 +
           1 / distance +
-          sharpness * 0.72 +
+          sharpness * 0.28 +
+          quality * 0.62 +
           localSharpness * 0.48 -
           worstAgreement * 5 -
           Math.max(0, farthestRecovery - 1) * 0.18 -
@@ -4234,6 +4242,7 @@ function texturedMesh(mesh, frames, precomputedCalibration = null) {
     textureCalibrationPairs: atlas.photometricPairCount,
     photometricNormalization: atlas.photometricNormalization,
     rejectedBlurryTextureFrames: atlas.rejectedBlurryFrames,
+    lowQualityTextureFrames: atlas.lowQualityFrames,
     textureQualityFloor: atlas.textureQualityFloor,
     rejectedStretchedTextureCandidates: textureCandidateRejections.stretched,
     rejectedGrazingTextureCandidates: textureCandidateRejections.grazing,
@@ -4311,9 +4320,47 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
         ? "anchor-core"
         : "connected-component",
     });
-    const enoughConsistentFrames =
+    const enoughStrictlyConsistentFrames =
       consistent.length >= 3 &&
       consistent.length >= Math.ceil(overlapping.length * 0.4);
+    const consistentSet = new Set(consistent);
+    const consistentIndices = overlapping
+      .map((frame, index) => (consistentSet.has(frame) ? index : -1))
+      .filter((index) => index >= 0);
+    const selectedRatio = consistent.length / Math.max(1, overlapping.length);
+    const temporalSpanRatio =
+      overlapping.length <= 1 || !consistentIndices.length
+        ? consistentIndices.length
+        : (consistentIndices[consistentIndices.length - 1] -
+            consistentIndices[0]) /
+          (overlapping.length - 1);
+    let longestRejectedRun = 0;
+    let rejectedRun = 0;
+    overlapping.forEach((frame) => {
+      if (consistentSet.has(frame)) rejectedRun = 0;
+      else {
+        rejectedRun++;
+        longestRejectedRun = Math.max(longestRejectedRun, rejectedRun);
+      }
+    });
+    const maximumPreferredRejectedRun = Math.max(
+      2,
+      Math.ceil(overlapping.length * 0.12),
+    );
+    // An anchor core proves local agreement, not full-scan coverage. Only use
+    // the preferred (non-required) core when it represents almost the entire
+    // connected capture path. Otherwise preserve the ordinary connected set
+    // and let TSDF/local-layer consensus reject inconsistent measurements.
+    const preferredCoveragePreserved =
+      selectedRatio >= 0.8 &&
+      temporalSpanRatio >= 0.9 &&
+      longestRejectedRun <= maximumPreferredRejectedRun;
+    const preferredOnly =
+      !!options.preferCoherentSurfaceCore &&
+      !options.requireCoherentSurfaceCore;
+    const enoughConsistentFrames =
+      enoughStrictlyConsistentFrames &&
+      (!preferredOnly || preferredCoveragePreserved);
     alignment.surfaceConsistency = {
       ...strictDiagnostics,
       applied: enoughConsistentFrames,
@@ -4322,6 +4369,11 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       preferredWithoutBlocking:
         !!options.preferCoherentSurfaceCore &&
         !options.requireCoherentSurfaceCore,
+      preferredCoveragePreserved,
+      selectedRatio,
+      temporalSpanRatio,
+      longestRejectedRun,
+      maximumPreferredRejectedRun,
       rejectedAsIncoherent:
         !enoughConsistentFrames && !!options.requireCoherentSurfaceCore,
     };
@@ -4356,7 +4408,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   if (localLayerConsensus.diagnostics)
     alignment.localLayerConsensus = localLayerConsensus.diagnostics;
   const stages = {
-    algorithmVersion: 32,
+    algorithmVersion: 33,
     completionMode: options.completionMode === "surface" ? "surface" : "room",
     reconstructionProfile: options.reconstructionProfile || "quality",
     supportMode: "translated-camera-viewpoints",
@@ -4785,6 +4837,10 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       texturePatchCount: mesh.texturePatchCount || 0,
       textureCalibrationPairs: mesh.textureCalibrationPairs || 0,
       photometricNormalization: mesh.photometricNormalization || "none",
+      rejectedBlurryTextureFrames:
+        mesh.rejectedBlurryTextureFrames || 0,
+      lowQualityTextureFrames: mesh.lowQualityTextureFrames || 0,
+      textureQualityFloor: mesh.textureQualityFloor || 0,
     },
   };
 }

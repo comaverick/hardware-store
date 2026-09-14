@@ -722,10 +722,12 @@ export class RoomScanner {
     this.lastMeshPose = pose;
     this.stats.fusionKeyframes = this.keyframes.length;
   }
-  // Keep the atlas below the portable-export and mobile-GPU limits. With the
-  // higher-detail 720px snapshots, twenty portrait tiles still fit while a
-  // fifth atlas row would make exports unnecessarily large.
-  compactTextureKeyframes(maximum = 20, retained = 18) {
+  // Keep the atlas below the portable-export and mobile-GPU limits while
+  // retaining one strong image from every section of the scan path. Fifteen
+  // camera tiles plus the fallback tile fit a compact 4x4 atlas; this avoids
+  // both a costly fifth row and a later global quality filter that could erase
+  // the only texture view of a measured wall or ceiling.
+  compactTextureKeyframes(maximum = 15, retained = 15) {
     const textured = this.keyframes
       .map((frame, index) => (frame.colorImage?.length ? index : -1))
       .filter((index) => index >= 0);
