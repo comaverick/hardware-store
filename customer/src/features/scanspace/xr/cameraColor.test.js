@@ -25,6 +25,7 @@ test("color quality distinguishes detail from a flat frame", () => {
   const flatQuality = measureColorFrameQuality(flat, 8, 8);
   const checkerQuality = measureColorFrameQuality(checker, 8, 8);
   expect(checkerQuality.sharpness).toBeGreaterThan(flatQuality.sharpness);
+  expect(checkerQuality.focus).toBeGreaterThan(flatQuality.focus);
   expect(flatQuality.clippedRatio).toBe(0);
 });
 
@@ -37,4 +38,5 @@ test("color quality reports clipped camera content", () => {
   const quality = measureColorFrameQuality(pixels, 4, 4);
   expect(quality.clippedRatio).toBe(1);
   expect(quality.sharpness).toBe(0);
+  expect(quality.focus).toBe(0);
 });

@@ -1,5 +1,6 @@
 import {
   createRgbdKeyframe,
+  closestProjectiveDepthAgreement,
   depthPosition,
   filterDepth,
   fillSmallMeshHoles,
@@ -11,6 +12,7 @@ import {
   overlapTextureColorScales,
   sampleProjectiveDepth,
   sampleLooksLikeVerticalPatch,
+  selectFusionKeyframes,
   meshFragmentationIsUnacceptable,
   meshOutsideRectangularRoomModel,
   meshWallStructureDiagnostics,
@@ -81,6 +83,50 @@ test("subpixel sampling does not blend across an occlusion or missing depth", ()
   expect(sampleProjectiveDepth(frame, 0.6, 0.4)).toBe(2);
 });
 
+test("texture visibility cannot jump from a measured foreground pixel to its background neighbor", () => {
+  const frame = {
+    columns: 3,
+    rows: 3,
+    filteredDepth: new Float32Array([
+      2, 2, 2,
+      2, 1, 2,
+      2, 2, 2,
+    ]),
+    measuredMask: new Uint8Array(9).fill(1),
+  };
+  expect(
+    closestProjectiveDepthAgreement(frame, { u: 0.5, v: 0.5, depth: 2 }),
+  ).toMatchObject({ depth: 1, difference: 1, radius: 0 });
+});
+
+test("texture visibility recovers a missing pixel only from a depth cluster", () => {
+  const frame = {
+    columns: 3,
+    rows: 3,
+    filteredDepth: new Float32Array([
+      0, 2, 0,
+      0, 0, 0,
+      0, 0, 0,
+    ]),
+    measuredMask: new Uint8Array([
+      0, 1, 0,
+      0, 0, 0,
+      0, 0, 0,
+    ]),
+  };
+  expect(
+    closestProjectiveDepthAgreement(frame, { u: 0.5, v: 0.5, depth: 2 }),
+  ).toBeNull();
+  frame.filteredDepth[3] = 2.01;
+  expect(
+    closestProjectiveDepthAgreement(frame, { u: 0.5, v: 0.5, depth: 2 }),
+  ).toBeNull();
+  frame.measuredMask[3] = 1;
+  expect(
+    closestProjectiveDepthAgreement(frame, { u: 0.5, v: 0.5, depth: 2 }),
+  ).toMatchObject({ difference: 0, depth: 2, support: 2 });
+});
+
 function planeKeyframe(
   cameraX = 0,
   withColor = true,
@@ -131,6 +177,32 @@ function planeKeyframe(
       : null,
   });
 }
+
+test("fusion thinning preserves every bounded color view before depth-only frames", () => {
+  const colorIndices = [4, 19, 37, 52];
+  const frames = Array.from({ length: 60 }, (_, index) => {
+    const transform = new Matrix4().makeRotationX(
+      ((index % 12) - 6) * 0.045,
+    );
+    transform.setPosition(index * 0.015, 1.6, 0);
+    return {
+      frameId: index,
+      transformMatrix: new Float32Array(transform.elements),
+      camera: new Float32Array([index * 0.015, 1.6, 0]),
+      timestamp: index * 400,
+      colorImage: colorIndices.includes(index)
+        ? new Uint8Array([120, 120, 120, 255])
+        : null,
+    };
+  });
+  const selected = selectFusionKeyframes(frames, 12);
+  expect(selected).toHaveLength(12);
+  expect(
+    colorIndices.every((frameId) =>
+      selected.some((frame) => frame.frameId === frameId),
+    ),
+  ).toBe(true);
+});
 
 test("stores a compact transferable RGB-D keyframe instead of a frame mesh", () => {
   const frame = createRgbdKeyframe(grid(), {
@@ -915,6 +987,22 @@ test("keeps softer retained camera views available for texture coverage", () => 
   expect(result.mesh?.kind).toBe("projective-tsdf-surface-net");
   expect(result.diagnostics.lowQualityTextureFrames).toBeGreaterThan(0);
   expect(result.diagnostics.rejectedBlurryTextureFrames).toBe(0);
+  const selectedTiles = new Set();
+  const selectedTileCounts = new Map();
+  for (let vertex = 0; vertex < result.mesh.colors.length / 3; vertex++) {
+    if (result.mesh.colors[vertex * 3] !== 255) continue;
+    const tileX = Math.floor(result.mesh.uvs[vertex * 2] * 3);
+    const tileY = Math.floor(result.mesh.uvs[vertex * 2 + 1] * 2);
+    const tile = tileY * 3 + tileX;
+    selectedTiles.add(tile);
+    selectedTileCounts.set(tile, (selectedTileCounts.get(tile) || 0) + 1);
+  }
+  // All views remain available, but the detailed frame wins everywhere that
+  // it has the same valid depth coverage as the softer frames.
+  expect(selectedTiles.has(2)).toBe(true);
+  expect(selectedTileCounts.get(2)).toBeGreaterThan(
+    (selectedTileCounts.get(4) || 0) * 20,
+  );
 });
 
 test("a bad first frame cannot force a valid overlapping sequence into fallback", () => {

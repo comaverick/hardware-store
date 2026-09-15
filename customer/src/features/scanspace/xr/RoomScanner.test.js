@@ -1,11 +1,17 @@
 import { PerspectiveCamera, Matrix4 } from "three";
 import {
   coveragePreviewSize,
+  DEPTH_TYPE_PREFERENCE,
   KEYFRAME_RETENTION_TRIGGER,
   MAX_FUSION_KEYFRAMES,
   RoomScanner,
   selectKeyframesForRetention,
+  selectTextureKeyframesForRetention,
 } from "./RoomScanner";
+
+test("raw depth is preferred before device-smoothed depth", () => {
+  expect(DEPTH_TYPE_PREFERENCE).toEqual(["raw", "smooth"]);
+});
 
 test("stationary unsaved frames cannot turn the preview green", () => {
   const scanner = new RoomScanner({ onUpdate: () => {} });
@@ -66,13 +72,13 @@ test("higher-resolution texture snapshots stay bounded without dropping depth fr
   expect(scanner.keyframes).toHaveLength(25);
   expect(scanner.keyframes.every((frame) => frame.depths[0] === 2)).toBe(true);
   expect(scanner.stats.textureKeyframes).toBe(15);
-  expect(scanner.keyframes[0].colorImage).not.toBeNull();
+  expect(scanner.keyframes[0].colorImage).toBeNull();
   expect(
     scanner.keyframes.slice(-2).some((frame) => frame.colorImage !== null),
   ).toBe(true);
 });
 
-test("texture compaction keeps the sharpest low-motion frame in each scan sector", () => {
+test("texture compaction keeps sharper low-motion images among redundant poses", () => {
   const scanner = new RoomScanner({ onUpdate: () => {} });
   const flat = new Uint8Array(Array(64).fill([120, 120, 120, 255]).flat());
   const checker = new Uint8Array(
@@ -91,10 +97,10 @@ test("texture compaction keeps the sharpest low-motion frame in each scan sector
   }));
   scanner.compactTextureKeyframes(4, 3);
   expect(scanner.stats.textureKeyframes).toBe(3);
-  expect(scanner.keyframes[0].colorImage).not.toBeNull();
   expect(scanner.keyframes[2].colorImage).not.toBeNull();
-  expect(scanner.keyframes[3].colorImage).not.toBeNull();
-  expect(scanner.keyframes[4].colorImage).toBeNull();
+  expect(
+    scanner.keyframes.filter((frame) => frame.colorImage !== null),
+  ).toHaveLength(3);
 });
 
 test("texture compaction does not force blurred endpoint images into the atlas", () => {
@@ -120,6 +126,154 @@ test("texture compaction does not force blurred endpoint images into the atlas",
   expect(scanner.keyframes[5].colorImage).toBeNull();
 });
 
+test("texture retention lets a later novel view displace a redundant early view", () => {
+  const textureFrame = (frameId, x, yaw, quality) => {
+    const matrix = new Matrix4()
+      .makeRotationY(yaw)
+      .setPosition(x, 1.6, 0);
+    return {
+      frameId,
+      camera: new Float32Array([x, 1.6, 0]),
+      transformMatrix: new Float32Array(matrix.elements),
+      viewTransformMatrix: new Float32Array(matrix.elements),
+      colorImage: new Uint8Array([120, 120, 120, 255]),
+      colorWidth: 1,
+      colorHeight: 1,
+      colorChannels: 4,
+      colorSharpness: quality,
+      colorFocus: quality,
+    };
+  };
+  const frames = [
+    textureFrame("early-blur", 0, 0, 1),
+    textureFrame("early-clear", 0.01, 0.01, 12),
+    textureFrame("later-new-wall", 0.45, Math.PI / 2, 2),
+  ];
+  const retained = selectTextureKeyframesForRetention(frames, 2).map(
+    (index) => frames[index].frameId,
+  );
+  expect(retained).toContain("early-clear");
+  expect(retained).toContain("later-new-wall");
+  expect(retained).not.toContain("early-blur");
+});
+
+test("motion-unreliable depth frames keep sampled RGB but omit the atlas image", () => {
+  const scanner = new RoomScanner({ onUpdate: () => {} });
+  scanner.addSavedPreview = () => {};
+  const camera = new PerspectiveCamera(60, 1, 0.1, 20);
+  const matrix = new Matrix4().makeTranslation(0, 1.6, 0);
+  const view = {
+    projectionMatrix: camera.projectionMatrix.elements,
+    transform: {
+      position: { x: 0, y: 1.6, z: 0 },
+      orientation: { x: 0, y: 0, z: 0, w: 1 },
+      matrix: matrix.elements,
+    },
+  };
+  const points = Array.from({ length: 6 }, (_, index) => ({
+    x: (index % 3) * 0.05,
+    y: 1.4 + Math.floor(index / 3) * 0.05,
+    z: -2,
+    depth: 2,
+    color: [30, 80, 140],
+    gridX: index % 3,
+    gridY: Math.floor(index / 3),
+  }));
+  const colorAt = Object.assign(() => [30, 80, 140], {
+    sharpness: 20,
+    focus: 18,
+    clippedRatio: 0,
+    snapshot: jest.fn(() => ({
+      data: new Uint8Array(16).fill(120),
+      width: 2,
+      height: 2,
+      channels: 4,
+    })),
+  });
+  scanner.captureKeyframe(
+    points,
+    view,
+    3,
+    2,
+    500,
+    colorAt,
+    scanner.keyframePose(view),
+    { width: 3, height: 2 },
+    { linearSpeed: 0.3, angularSpeed: 0.1 },
+  );
+  expect(scanner.keyframes).toHaveLength(1);
+  expect(scanner.keyframes[0].colorImage).toBeNull();
+  expect(Array.from(scanner.keyframes[0].colorMask)).toEqual(
+    Array(6).fill(1),
+  );
+  expect(colorAt.snapshot).not.toHaveBeenCalled();
+});
+
+test("an accepted stationary revisit refreshes texture without adding geometry", () => {
+  const scanner = new RoomScanner({ onUpdate: () => {} });
+  scanner.session = {
+    depthUsage: "cpu-optimized",
+    depthDataFormat: "float32",
+    depthType: "raw",
+  };
+  scanner.binding = {};
+  scanner.renderer = { getContext: () => ({}), resetState: () => {} };
+  const texture = (quality, value) =>
+    Object.assign(() => [value, value, value], {
+      sharpness: quality,
+      focus: quality,
+      clippedRatio: 0,
+      snapshot: () => ({
+        data: new Uint8Array(16).fill(value),
+        width: 2,
+        height: 2,
+        channels: 4,
+        sharpness: quality,
+        focus: quality,
+        clippedRatio: 0,
+      }),
+    });
+  scanner.colorReader = {
+    read: jest
+      .fn()
+      .mockReturnValueOnce(texture(1, 80))
+      .mockReturnValueOnce(texture(20, 160)),
+  };
+  const add = jest.spyOn(scanner.cloud, "add");
+  const camera = new PerspectiveCamera(60, 0.5, 0.1, 20);
+  const matrix = new Matrix4().makeTranslation(0, 1.6, 0);
+  const view = {
+    camera: { width: 360, height: 720 },
+    projectionMatrix: camera.projectionMatrix.elements,
+    transform: {
+      position: { x: 0, y: 1.6, z: 0 },
+      orientation: { x: 0, y: 0, z: 0, w: 1 },
+      matrix: matrix.elements,
+    },
+  };
+  const depth = {
+    width: 120,
+    height: 240,
+    getDepthInMeters: () => 2,
+  };
+  const frame = { getDepthInformation: () => depth };
+  scanner.captureDepthFrame(500, frame, view);
+  // Stay inside the same geometry-keyframe pose, but prove that the refreshed
+  // camera image keeps the exact later color pose instead of borrowing the
+  // original depth pose.
+  view.transform.position.x = 0.02;
+  view.transform.matrix = new Matrix4().makeTranslation(0.02, 1.6, 0).elements;
+  scanner.captureDepthFrame(1000, frame, view);
+  expect(scanner.colorReader.read).toHaveBeenCalledTimes(2);
+  expect(scanner.keyframes).toHaveLength(1);
+  expect(add).toHaveBeenCalledTimes(1);
+  expect(scanner.stats.textureRefreshes).toBe(1);
+  expect(scanner.keyframes[0].colorFocus).toBe(20);
+  expect(scanner.keyframes[0].colorImage[0]).toBe(160);
+  expect(scanner.keyframes[0].transformMatrix[12]).toBeCloseTo(0);
+  expect(scanner.keyframes[0].viewTransformMatrix[12]).toBeCloseTo(0.02);
+});
+
 test("keyframe retention preserves a bounded spatial path instead of dropping every other view", () => {
   const frames = Array.from({ length: KEYFRAME_RETENTION_TRIGGER + 8 }, (_, index) => ({
     frameId: index,
@@ -141,6 +295,31 @@ test("keyframe retention preserves a bounded spatial path instead of dropping ev
   expect(retained.map((frame) => frame.frameId)).not.toEqual(
     frames.filter((_, index) => index % 2 === 0).slice(0, MAX_FUSION_KEYFRAMES).map((frame) => frame.frameId),
   );
+});
+
+test("geometry compaction preserves the bounded texture-view set", () => {
+  const texturedIds = new Set([
+    1, 4, 7, 11, 16, 21, 27, 32, 38, 43, 49, 54, 60, 66, 70,
+  ]);
+  const frames = Array.from(
+    { length: KEYFRAME_RETENTION_TRIGGER + 8 },
+    (_, index) => ({
+      frameId: index,
+      camera: new Float32Array([index * 0.025, 1.6, 0]),
+      transformMatrix: new Float32Array([
+        1, 0, 0, 0,
+        0, 1, 0, 0,
+        0, 0, 1, 0,
+        index * 0.025, 1.6, 0, 1,
+      ]),
+      timestamp: index * 400,
+      colorImage: texturedIds.has(index) ? new Uint8Array([index]) : null,
+    }),
+  );
+  const retained = selectKeyframesForRetention(frames, MAX_FUSION_KEYFRAMES);
+  const retainedIds = new Set(retained.map((frame) => frame.frameId));
+  expect(retained).toHaveLength(MAX_FUSION_KEYFRAMES);
+  texturedIds.forEach((frameId) => expect(retainedIds.has(frameId)).toBe(true));
 });
 
 test("a transient depth read error is recorded without permanently pausing capture", () => {

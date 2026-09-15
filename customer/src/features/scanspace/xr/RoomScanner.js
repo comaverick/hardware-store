@@ -38,6 +38,8 @@ export function coveragePreviewSize(voxelSize = 0.08) {
 
 export const MAX_FUSION_KEYFRAMES = 60;
 export const KEYFRAME_RETENTION_TRIGGER = 64;
+export const MAX_TEXTURE_KEYFRAMES = 15;
+export const DEPTH_TYPE_PREFERENCE = Object.freeze(["raw", "smooth"]);
 
 function keyframePoseForRetention(frame) {
   const camera = frame?.camera;
@@ -61,6 +63,132 @@ function keyframePoseForRetention(frame) {
   };
 }
 
+function textureKeyframePoseForRetention(frame) {
+  const camera = frame?.camera;
+  const matrix =
+    frame?.viewTransformMatrix?.length === 16
+      ? frame.viewTransformMatrix
+      : frame?.transformMatrix;
+  const position =
+    matrix?.length >= 15 &&
+    [matrix[12], matrix[13], matrix[14]].every(Number.isFinite)
+      ? [matrix[12], matrix[13], matrix[14]]
+      : camera?.length >= 3 &&
+          [camera[0], camera[1], camera[2]].every(Number.isFinite)
+        ? [camera[0], camera[1], camera[2]]
+        : [0, 0, 0];
+  const direction = matrix?.length >= 11
+    ? [-matrix[8], -matrix[9], -matrix[10]]
+    : [0, 0, -1];
+  const length = Math.hypot(...direction) || 1;
+  return {
+    position,
+    direction: direction.map((value) => value / length),
+    timestamp: Number(frame?.timestamp) || 0,
+  };
+}
+
+function textureQualityScore(frame) {
+  const storedSharpness = Number(frame?.colorSharpness) || 0;
+  const storedFocus = Number(frame?.colorFocus) || 0;
+  const sharpness = storedSharpness || imageSharpness(frame);
+  const focus = storedFocus || imageFocus(frame);
+  const clipping = Math.min(
+    0.8,
+    Math.max(0, Number(frame?.colorClippedRatio) || 0),
+  );
+  const motion =
+    (Number(frame?.textureLinearSpeed ?? frame?.linearSpeed) || 0) /
+      MAX_COLOR_CAPTURE_LINEAR_SPEED +
+    (Number(frame?.textureAngularSpeed ?? frame?.angularSpeed) || 0) /
+      MAX_COLOR_CAPTURE_ANGULAR_SPEED;
+  return (
+    (sharpness * Math.sqrt(Math.max(0.1, focus)) * (1 - clipping)) /
+    (1 + motion)
+  );
+}
+
+function texturePoseDistance(left, right) {
+  const spatial = Math.hypot(
+    left.position[0] - right.position[0],
+    left.position[1] - right.position[1],
+    left.position[2] - right.position[2],
+  );
+  const dot = Math.max(
+    -1,
+    Math.min(
+      1,
+      left.direction[0] * right.direction[0] +
+        left.direction[1] * right.direction[1] +
+        left.direction[2] * right.direction[2],
+    ),
+  );
+  const angular = Math.acos(dot);
+  // Twelve centimetres or about twelve degrees are both meaningful texture
+  // viewpoint changes. Normalize them to the same retention scale.
+  return Math.hypot(spatial / 0.12, angular / 0.21);
+}
+
+// Continuously remove the most redundant texture view instead of dividing the
+// history into fixed time buckets. A later view of a new wall or ceiling then
+// displaces an older duplicate, while a sharper view wins between near-equal
+// poses. Depth keyframes are never removed by this texture-only selection.
+export function selectTextureKeyframesForRetention(
+  frames,
+  maximum = MAX_TEXTURE_KEYFRAMES,
+) {
+  const textured = (frames || [])
+    .map((frame, index) => (frame?.colorImage?.length ? index : -1))
+    .filter((index) => index >= 0);
+  const limit = Math.max(1, Math.floor(maximum));
+  if (textured.length <= limit) return textured;
+  const poses = new Map(
+    textured.map((index) => [
+      index,
+      textureKeyframePoseForRetention(frames[index]),
+    ]),
+  );
+  const qualities = new Map(
+    textured.map((index) => [index, textureQualityScore(frames[index])]),
+  );
+  const rankedQuality = [...qualities.values()].sort((a, b) => a - b);
+  const referenceQuality =
+    rankedQuality[Math.floor(rankedQuality.length / 2)] || 1;
+  const retained = textured.slice();
+  while (retained.length > limit) {
+    let removePosition = 0;
+    let lowestUtility = Infinity;
+    let lowestQuality = Infinity;
+    retained.forEach((index, position) => {
+      let nearest = Infinity;
+      retained.forEach((other) => {
+        if (other === index) return;
+        nearest = Math.min(
+          nearest,
+          texturePoseDistance(poses.get(index), poses.get(other)),
+        );
+      });
+      const normalizedQuality = Math.max(
+        0,
+        Math.min(3, qualities.get(index) / referenceQuality),
+      );
+      const utility = Math.min(4, nearest) + normalizedQuality * 0.35;
+      const quality = qualities.get(index);
+      if (
+        utility < lowestUtility - 1e-6 ||
+        (Math.abs(utility - lowestUtility) <= 1e-6 &&
+          quality < lowestQuality)
+      ) {
+        lowestUtility = utility;
+        lowestQuality = quality;
+        removePosition = position;
+      }
+    });
+    retained.splice(removePosition, 1);
+  }
+  return retained.sort((left, right) => left - right);
+}
+
 // Retain the viewpoints that provide the most spatial and directional
 // coverage. Keeping every other frame is tempting, but a scan path can spend
 // different amounts of time on each wall; index decimation then drops a whole
@@ -76,7 +204,21 @@ export function selectKeyframesForRetention(
   const poses = frames.map(keyframePoseForRetention);
   const timestamps = poses.map((pose, index) => pose.timestamp || index);
   const timestampSpan = Math.max(1, timestamps[timestamps.length - 1] - timestamps[0]);
-  const selected = new Set([0, frames.length - 1]);
+  // Texture retention has already reduced live captures to a small,
+  // pose-diverse set. Seed geometry compaction with those frames so the
+  // 60-frame worker bound cannot silently discard the only color view of a
+  // wall or ceiling. Oversized imported/debug sets are reduced with the same
+  // texture selector before the remaining slots are filled by depth novelty.
+  const textured = frames
+    .map((frame, index) => (frame?.colorImage?.length ? index : -1))
+    .filter((index) => index >= 0);
+  const selected = new Set(
+    textured.length <= limit
+      ? textured
+      : selectTextureKeyframesForRetention(frames, limit),
+  );
+  if (selected.size < limit) selected.add(0);
+  if (selected.size < limit) selected.add(frames.length - 1);
   while (selected.size < limit) {
     let bestIndex = -1;
     let bestScore = -Infinity;
@@ -157,9 +299,11 @@ export class RoomScanner {
       fusionKeyframeCompactions: 0,
       textureKeyframes: 0,
       colorSharpness: 0,
+      colorFocus: 0,
       colorClippedRatio: 0,
       colorFrameReliable: true,
       colorFramesSkippedForMotion: 0,
+      textureRefreshes: 0,
       acceptedDepthFrames: 0,
       rejectedDepthFrames: 0,
       frameQuality: "waiting",
@@ -209,7 +353,9 @@ export class RoomScanner {
         depthSensing: {
           usagePreference: ["cpu-optimized"],
           dataFormatPreference: ["float32", "luminance-alpha"],
-          depthTypeRequest: ["smooth", "raw"],
+          // Raw depth preserves real wall/ceiling boundaries. Smooth depth is
+          // still accepted as a fallback for devices that expose only it.
+          depthTypeRequest: DEPTH_TYPE_PREFERENCE,
           matchDepthView: true,
         },
         domOverlay: { root: this.overlay },
@@ -357,10 +503,9 @@ export class RoomScanner {
       const keyframeEligible = this.shouldCaptureKeyframe(keyframePose);
       let colorAt = null;
       if (
-        keyframeEligible &&
         this.binding &&
         view.camera &&
-        !this.colorFailed
+        time >= (this.colorRetryAt || 0)
       ) {
         try {
           this.colorReader ??= createCameraColorReader(
@@ -370,11 +515,19 @@ export class RoomScanner {
           if (colorAt) {
             this.stats.colorActive = true;
             this.stats.colorSharpness = colorAt.sharpness || 0;
+            this.stats.colorFocus = colorAt.focus || 0;
             this.stats.colorClippedRatio = colorAt.clippedRatio || 0;
+            this.stats.colorFrameReliable =
+              this.isColorFrameReliable(motion);
+            this.colorFailures = 0;
           }
         } catch (error) {
           this.colorFailures = (this.colorFailures || 0) + 1;
-          this.colorFailed = this.colorFailures >= 3;
+          // Camera textures are frame-scoped and can fail transiently during
+          // tracking changes. Back off briefly, then recover automatically
+          // instead of turning the rest of the scan permanently gray.
+          this.colorRetryAt =
+            time + Math.min(2000, 250 * 2 ** (this.colorFailures - 1));
           this.recordCaptureError(error, "Captured color unavailable");
         } finally {
           this.renderer.resetState();
@@ -445,6 +598,14 @@ export class RoomScanner {
               keyframePose,
               depth,
               motion,
+            );
+          else
+            this.refreshNearbyTextureKeyframe(
+              colorAt,
+              keyframePose,
+              view,
+              motion,
+              time,
             );
           // Feedback counts only views actually retained for fusion, with
           // the full image grid as denominator (including missing depth).
@@ -640,6 +801,101 @@ export class RoomScanner {
     if (moved > 0.35) return false;
     return consistency.medianDistance > 0.06 && consistency.upperDistance > 0.095;
   }
+  isColorFrameReliable(motion = {}) {
+    return (
+      (Number(motion.linearSpeed) || 0) <=
+        MAX_COLOR_CAPTURE_LINEAR_SPEED &&
+      (Number(motion.angularSpeed) || 0) <=
+        MAX_COLOR_CAPTURE_ANGULAR_SPEED
+    );
+  }
+  refreshNearbyTextureKeyframe(
+    colorAt,
+    pose,
+    view,
+    motion = {},
+    timestamp = 0,
+  ) {
+    if (
+      !colorAt?.snapshot ||
+      !this.isColorFrameReliable(motion) ||
+      !this.keyframes.length
+    )
+      return false;
+    const current = textureKeyframePoseForRetention({
+      camera: new Float32Array([
+        pose.position.x,
+        pose.position.y,
+        pose.position.z,
+      ]),
+      viewTransformMatrix: view.transform.matrix,
+      timestamp,
+    });
+    const nearby = this.keyframes
+      .map((frame, index) => {
+        const retained = textureKeyframePoseForRetention(frame);
+        const spatial = Math.hypot(
+          current.position[0] - retained.position[0],
+          current.position[1] - retained.position[1],
+          current.position[2] - retained.position[2],
+        );
+        const directionDot = Math.max(
+          -1,
+          Math.min(
+            1,
+            current.direction[0] * retained.direction[0] +
+              current.direction[1] * retained.direction[1] +
+              current.direction[2] * retained.direction[2],
+          ),
+        );
+        return { frame, index, spatial, angular: Math.acos(directionDot) };
+      })
+      // Reusing a texture from a meaningfully different camera pose would
+      // itself create ghosting. Only a near-stationary revisit may refresh it.
+      .filter(({ spatial, angular }) => spatial <= 0.04 && angular <= 0.07)
+      .sort(
+        (left, right) =>
+          left.spatial / 0.04 + left.angular / 0.07 -
+          (right.spatial / 0.04 + right.angular / 0.07),
+      );
+    const candidateQuality = textureQualityScore({
+      colorSharpness: colorAt.sharpness,
+      colorFocus: colorAt.focus,
+      colorClippedRatio: colorAt.clippedRatio,
+      textureLinearSpeed: motion.linearSpeed,
+      textureAngularSpeed: motion.angularSpeed,
+    });
+    const target = nearby.find(({ frame }) => {
+      if (!frame.colorImage?.length) return true;
+      const previousQuality = textureQualityScore(frame);
+      return candidateQuality > previousQuality * 1.12;
+    });
+    if (!target) return false;
+    const snapshot = colorAt.snapshot();
+    if (!snapshot?.data?.length) return false;
+    Object.assign(target.frame, {
+      colorImage: snapshot.data,
+      colorWidth: snapshot.width,
+      colorHeight: snapshot.height,
+      colorChannels: snapshot.channels || 4,
+      // The replacement image belongs to this exact XR view. Keep its camera
+      // matrices separate from the original depth pose so texture projection
+      // stays aligned without moving the geometry that was already accepted.
+      viewProjectionMatrix: new Float32Array(view.projectionMatrix),
+      viewTransformMatrix: new Float32Array(view.transform.matrix),
+      colorSharpness:
+        Number(colorAt.sharpness ?? snapshot.sharpness) || 0,
+      colorFocus: Number(colorAt.focus ?? snapshot.focus) || 0,
+      colorClippedRatio:
+        Number(colorAt.clippedRatio ?? snapshot.clippedRatio) || 0,
+      textureLinearSpeed: Number(motion.linearSpeed) || 0,
+      textureAngularSpeed: Number(motion.angularSpeed) || 0,
+      textureRefreshedAt: Number(timestamp) || 0,
+    });
+    this.stats.textureRefreshes++;
+    this.compactTextureKeyframes();
+    return !!target.frame.colorImage?.length;
+  }
   captureKeyframe(
     points,
     view,
@@ -651,13 +907,13 @@ export class RoomScanner {
     depth = null,
     motion = {},
   ) {
-    const colorFrameReliable =
-      (Number(motion.linearSpeed) || 0) <=
-        MAX_COLOR_CAPTURE_LINEAR_SPEED &&
-      (Number(motion.angularSpeed) || 0) <=
-        MAX_COLOR_CAPTURE_ANGULAR_SPEED;
-    const keepColor = !colorAt || colorFrameReliable;
-    const colorSnapshot = keepColor ? colorAt?.snapshot?.() || null : null;
+    const colorFrameReliable = this.isColorFrameReliable(motion);
+    // Per-depth RGB is cheap and remains useful to the fusion fallback even
+    // when motion makes a full camera image unsuitable for the texture atlas.
+    // Only the high-resolution image is withheld in that case.
+    const colorSnapshot = colorFrameReliable
+      ? colorAt?.snapshot?.() || null
+      : null;
     this.stats.colorFrameReliable = !colorAt || colorFrameReliable;
     if (colorAt && !colorFrameReliable)
       this.stats.colorFramesSkippedForMotion++;
@@ -677,7 +933,7 @@ export class RoomScanner {
       camera: pose.position,
       timestamp,
       colorImage: colorSnapshot,
-      keepColor,
+      keepColor: !!colorAt,
       colorSharpness:
         Number(colorAt?.sharpness ?? colorSnapshot?.sharpness) || 0,
       colorClippedRatio:
@@ -686,6 +942,14 @@ export class RoomScanner {
       angularSpeed: motion.angularSpeed,
     });
     if (!keyframe) return;
+    keyframe.colorFocus =
+      Number(colorAt?.focus ?? colorSnapshot?.focus) || 0;
+    keyframe.textureLinearSpeed = colorSnapshot
+      ? Number(motion.linearSpeed) || 0
+      : 0;
+    keyframe.textureAngularSpeed = colorSnapshot
+      ? Number(motion.angularSpeed) || 0
+      : 0;
     const capturedPositions = (this.keyframePositions ||= []);
     capturedPositions.forEach((position) => {
       this.stats.cameraBaseline = Math.max(
@@ -727,58 +991,21 @@ export class RoomScanner {
   // camera tiles plus the fallback tile fit a compact 4x4 atlas; this avoids
   // both a costly fifth row and a later global quality filter that could erase
   // the only texture view of a measured wall or ceiling.
-  compactTextureKeyframes(maximum = 15, retained = 15) {
+  compactTextureKeyframes(
+    maximum = MAX_TEXTURE_KEYFRAMES,
+    retained = MAX_TEXTURE_KEYFRAMES,
+  ) {
     const textured = this.keyframes
       .map((frame, index) => (frame.colorImage?.length ? index : -1))
       .filter((index) => index >= 0);
     if (textured.length > maximum) {
-      const retentionScore = (frame) => {
-        const motion =
-          (Number(frame.linearSpeed) || 0) / 0.55 +
-          (Number(frame.angularSpeed) || 0) / 0.65;
-        const sharpness = imageSharpness(frame);
-        const focus = imageFocus(frame);
-        const clipping = Math.min(
-          0.75,
-          Math.max(0, Number(frame.colorClippedRatio) || 0),
-        );
-        return (
-          (sharpness * Math.sqrt(Math.max(0.5, focus)) * (1 - clipping)) /
-          (1 + motion * 1.05)
-        );
-      };
-      const keep = new Set();
-      const targetCount = Math.max(1, Math.min(retained, textured.length));
-      if (targetCount === 1) {
-        keep.add(
-          textured.reduce((best, candidate) =>
-            retentionScore(this.keyframes[candidate]) >
-            retentionScore(this.keyframes[best])
-              ? candidate
-              : best,
-          ),
-        );
-      } else {
-        // Divide the entire path into temporal sectors and keep each sector's
-        // sharpest low-motion image. Forcing the first and last images kept
-        // autofocus/motion failures even when a clear neighbor saw the same
-        // area.
-        const sectors = targetCount;
-        for (let sector = 0; sector < sectors; sector++) {
-          const start = Math.floor((sector * textured.length) / sectors);
-          const end = Math.floor(((sector + 1) * textured.length) / sectors);
-          const candidates = textured.slice(start, Math.max(start + 1, end));
-          if (!candidates.length) continue;
-          keep.add(
-            candidates.reduce((best, candidate) =>
-              retentionScore(this.keyframes[candidate]) >
-              retentionScore(this.keyframes[best])
-                ? candidate
-                : best,
-            ),
-          );
-        }
-      }
+      const targetCount = Math.max(
+        1,
+        Math.min(maximum, retained, textured.length),
+      );
+      const keep = new Set(
+        selectTextureKeyframesForRetention(this.keyframes, targetCount),
+      );
       textured.forEach((index) => {
         if (!keep.has(index)) this.keyframes[index].colorImage = null;
       });

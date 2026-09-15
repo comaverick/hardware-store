@@ -126,47 +126,93 @@ function frameCameraPosition(frame) {
   return [0, 0, 0];
 }
 
-// The old index-based decimator could throw away an entire wall when capture
-// intervals were uneven. Sample by travelled camera distance instead, which
-// preserves physical coverage while keeping the worker's bounded frame count.
-function selectEvenly(values, limit) {
+// Keep the scanner's bounded color set intact, then spend the remaining
+// fusion budget on the least-represented camera poses. A distance-only path
+// sample dropped ceiling/floor views captured while the user rotated in place
+// and could independently discard four of the scanner's fifteen RGB frames.
+export function selectFusionKeyframes(values, limit) {
   if (values.length <= limit) return values;
-  const positions = values.map(frameCameraPosition);
-  const cumulative = [0];
-  for (let index = 1; index < positions.length; index++)
-    cumulative.push(
-      cumulative[index - 1] +
-        Math.hypot(
-          positions[index][0] - positions[index - 1][0],
-          positions[index][1] - positions[index - 1][1],
-          positions[index][2] - positions[index - 1][2],
-        ),
-    );
-  const total = cumulative[cumulative.length - 1];
-  if (!(total > 0))
-    return Array.from({ length: limit }, (_, index) =>
-      values[Math.floor((index * (values.length - 1)) / (limit - 1))],
-    );
+  const boundedLimit = Math.max(2, Math.floor(limit));
+  const poses = values.map((frame, index) => {
+    const position = frameCameraPosition(frame);
+    const matrix = frame?.transformMatrix;
+    const direction = matrix?.length >= 11
+      ? [-matrix[8], -matrix[9], -matrix[10]]
+      : [0, 0, -1];
+    const directionLength = Math.hypot(...direction) || 1;
+    return {
+      position,
+      direction: direction.map((value) => value / directionLength),
+      time: Number(frame?.timestamp) || index,
+    };
+  });
   const selected = new Set();
-  for (let index = 0; index < limit; index++) {
-    const target = (index * total) / (limit - 1);
+  const colored = values
+    .map((frame, index) => (frame.colorImage?.length ? index : -1))
+    .filter((index) => index >= 0);
+  const novelty = (candidate) => {
+    if (!selected.size) return Infinity;
+    const pose = poses[candidate];
+    let nearest = Infinity;
+    selected.forEach((chosen) => {
+      const other = poses[chosen];
+      const spatial = Math.hypot(
+        pose.position[0] - other.position[0],
+        pose.position[1] - other.position[1],
+        pose.position[2] - other.position[2],
+      );
+      const directionDot = clamp(
+        pose.direction[0] * other.direction[0] +
+          pose.direction[1] * other.direction[1] +
+          pose.direction[2] * other.direction[2],
+        -1,
+        1,
+      );
+      const angular = Math.acos(directionDot);
+      nearest = Math.min(nearest, spatial + angular * 0.42);
+    });
+    return nearest;
+  };
+  const addMostNovel = (candidates) => {
     let best = -1;
-    let bestDistance = Infinity;
-    for (let candidate = 0; candidate < cumulative.length; candidate++) {
-      if (selected.has(candidate)) continue;
-      const distance = Math.abs(cumulative[candidate] - target);
-      if (distance < bestDistance) {
+    let bestNovelty = -Infinity;
+    candidates.forEach((candidate) => {
+      if (selected.has(candidate)) return;
+      const score = novelty(candidate);
+      if (score > bestNovelty) {
         best = candidate;
-        bestDistance = distance;
+        bestNovelty = score;
       }
-    }
+    });
     if (best >= 0) selected.add(best);
+    return best >= 0;
+  };
+  // Normal capture stores at most fifteen RGB frames, below both worker
+  // budgets. Keep every one. The fallback handles imported/debug captures
+  // with a larger color set by selecting pose-diverse color views first.
+  if (colored.length <= boundedLimit) colored.forEach((index) => selected.add(index));
+  else {
+    selected.add(
+      colored.reduce((best, candidate) =>
+        (Number(values[candidate].colorSharpness) || 0) >
+        (Number(values[best].colorSharpness) || 0)
+          ? candidate
+          : best,
+      ),
+    );
+    while (selected.size < boundedLimit) {
+      if (!addMostNovel(colored)) break;
+    }
   }
-  for (let index = 0; selected.size < limit && index < values.length; index++)
-    selected.add(index);
+  if (selected.size < boundedLimit) selected.add(0);
+  if (selected.size < boundedLimit) selected.add(values.length - 1);
+  const everyIndex = values.map((_, index) => index);
+  while (selected.size < boundedLimit) {
+    if (!addMostNovel(everyIndex)) break;
+  }
   return [...selected]
     .sort((left, right) => left - right)
-    .slice(0, limit)
+    .slice(0, boundedLimit)
     .map((index) => values[index]);
 }
 
@@ -1466,6 +1512,21 @@ function integrateProjective(volume, frames, report) {
       0.2,
       1,
     );
+    // A stable revisit may replace the camera image without replacing the
+    // original depth keyframe. Weight that image by its own capture motion;
+    // depth-only/coarse-RGB frames still use the original depth-frame motion.
+    const hasTextureImage = !!frame.colorImage?.length;
+    const colorLinearSpeed = hasTextureImage
+      ? Number(frame.textureLinearSpeed ?? frame.linearSpeed) || 0
+      : Number(frame.linearSpeed) || 0;
+    const colorAngularSpeed = hasTextureImage
+      ? Number(frame.textureAngularSpeed ?? frame.angularSpeed) || 0
+      : Number(frame.angularSpeed) || 0;
+    const colorMotionReliability = clamp(
+      1 / (1 + colorLinearSpeed / 0.45 + colorAngularSpeed / 0.6),
+      0.2,
+      1,
+    );
     for (let z = 0; z < depth; z++) {
       const worldZ = volume.origin.z + (z + 0.5) * volume.voxelSize;
       for (let y = 0; y < height; y++) {
@@ -1590,7 +1651,7 @@ function integrateProjective(volume, frames, report) {
                 0.8,
               );
               const colorSampleWeight = clamp(
-                motionReliability *
+                colorMotionReliability *
                   (1 - frameClipping * 0.65) *
                   (clippedPixel ? 0.16 : darkPixel ? 0.35 : 1),
                 0.08,
@@ -1864,15 +1925,28 @@ function extractSurfaceNet(volume, report, options = {}) {
             y: first.y + (second.y - first.y) * amount,
             z: first.z + (second.z - first.z) * amount,
             color: first.color.map((channel, index) => channel + (second.color[index] - channel) * amount),
+            reliableEndpoints: reliable(first) && reliable(second),
           });
         });
         if (!intersections.length) continue;
-        const vertex = intersections.reduce(
+        // A cell can contain a weak boundary crossing next to several
+        // repeatedly measured crossings. Averaging all of them equally lets
+        // a single interpolated shelf/window edge bend the entire surface-net
+        // vertex. Prefer fully reliable crossings when at least two establish
+        // the local surface; retain the old boundary fallback when they do not.
+        const reliableIntersections = intersections.filter(
+          (intersection) => intersection.reliableEndpoints,
+        );
+        const vertexIntersections =
+          reliableIntersections.length >= 2
+            ? reliableIntersections
+            : intersections;
+        const vertex = vertexIntersections.reduce(
           (sum, point) => ({
-            x: sum.x + point.x / intersections.length,
-            y: sum.y + point.y / intersections.length,
-            z: sum.z + point.z / intersections.length,
-            color: sum.color.map((channel, index) => channel + point.color[index] / intersections.length),
+            x: sum.x + point.x / vertexIntersections.length,
+            y: sum.y + point.y / vertexIntersections.length,
+            z: sum.z + point.z / vertexIntersections.length,
+            color: sum.color.map((channel, index) => channel + point.color[index] / vertexIntersections.length),
           }),
           { x: 0, y: 0, z: 0, color: [0, 0, 0] },
         );
@@ -3791,44 +3865,69 @@ function projectedTexturePenalty(frame, projections) {
   );
 }
 
-function closestProjectiveDepthAgreement(frame, projection, radiusLimit = 2) {
+export function closestProjectiveDepthAgreement(
+  frame,
+  projection,
+  radiusLimit = 2,
+) {
   if (!projection) return null;
   const center = gridIndex(frame, projection.u, projection.v);
   const centerX = center % frame.columns;
   const centerY = Math.floor(center / frame.columns);
-  let closestDifference = Infinity;
-  let closestDepth = 0;
-  let closestRadius = Infinity;
+  const centerDepth = frame.filteredDepth[center];
+  const centerMeasured =
+    !frame.measuredMask?.length || !!frame.measuredMask[center];
+  // A real center measurement owns this camera ray. Searching neighboring
+  // pixels for a numerically closer background depth can jump across a thin
+  // shelf/window edge and smear that background texture through the
+  // foreground object.
+  if (centerDepth && centerMeasured)
+    return {
+      difference: Math.abs(centerDepth - projection.depth),
+      depth: centerDepth,
+      radius: 0,
+      support: 1,
+    };
+  const candidates = [];
   for (let offsetY = -radiusLimit; offsetY <= radiusLimit; offsetY++)
     for (let offsetX = -radiusLimit; offsetX <= radiusLimit; offsetX++) {
       const radius = Math.abs(offsetX) + Math.abs(offsetY);
-      if (radius > radiusLimit) continue;
+      if (!radius || radius > radiusLimit) continue;
       const x = centerX + offsetX;
       const y = centerY + offsetY;
       if (x < 0 || y < 0 || x >= frame.columns || y >= frame.rows) continue;
-      const measured = frame.filteredDepth[y * frame.columns + x];
+      const neighborIndex = y * frame.columns + x;
+      if (frame.measuredMask?.length && !frame.measuredMask[neighborIndex])
+        continue;
+      const measured = frame.filteredDepth[neighborIndex];
       if (!measured) continue;
-      const difference = Math.abs(measured - projection.depth);
-      if (difference < closestDifference) {
-        closestDifference = difference;
-        closestDepth = measured;
-        closestRadius = radius;
-      }
+      candidates.push({
+        difference: Math.abs(measured - projection.depth),
+        depth: measured,
+        radius,
+      });
     }
-  return closestDepth
-    ? {
-        difference: closestDifference,
-        depth: closestDepth,
-        radius: closestRadius,
-      }
-    : null;
+  if (!candidates.length) return null;
+  candidates.sort((left, right) => left.difference - right.difference);
+  const closest = candidates[0];
+  const agreement = Math.max(0.05, closest.depth * 0.025);
+  const support = candidates.filter(
+    (candidate) => Math.abs(candidate.depth - closest.depth) <= agreement,
+  ).length;
+  // Recover a missing center only from a small local cluster, never one
+  // isolated neighbor from the other side of a depth discontinuity.
+  return support >= 2 ? { ...closest, support } : null;
 }
 
 function texturedMesh(mesh, frames, precomputedCalibration = null) {
   const atlas = buildAtlas(frames, precomputedCalibration);
   const sharedNormals = computeNormals(mesh);
   if (!atlas) return { ...mesh, normals: sharedNormals, textureCoverage: 0 };
-  const textureCandidateRejections = { stretched: 0, grazing: 0 };
+  const textureCandidateRejections = {
+    stretched: 0,
+    grazing: 0,
+    softWhenClearAvailable: 0,
+  };
   const projectionPositions =
     mesh.textureProjectionPositions?.length === mesh.positions.length
       ? mesh.textureProjectionPositions
@@ -3970,9 +4069,16 @@ function texturedMesh(mesh, frames, precomputedCalibration = null) {
       const farthestRecovery = Math.max(
         ...allDepthAgreements.map((agreement) => agreement.radius),
       );
-      const dx = frame.transformMatrix[12] - center.x;
-      const dy = frame.transformMatrix[13] - center.y;
-      const dz = frame.transformMatrix[14] - center.z;
+      // Score color visibility from the camera that actually captured the
+      // texture. A stable later frame may have refreshed this image while its
+      // original depth pose remains unchanged for geometry/occlusion checks.
+      const textureTransform =
+        frame.viewTransformMatrix?.length === 16
+          ? frame.viewTransformMatrix
+          : frame.transformMatrix;
+      const dx = textureTransform[12] - center.x;
+      const dy = textureTransform[13] - center.y;
+      const dz = textureTransform[14] - center.z;
       const distance = Math.hypot(dx, dy, dz) || 1;
       const faceFacing = Math.abs(
         (faceNormal.x * dx + faceNormal.y * dy + faceNormal.z * dz) /
@@ -3994,8 +4100,8 @@ function texturedMesh(mesh, frames, precomputedCalibration = null) {
         1.8,
       );
       const motionPenalty = clamp(
-        (frame.linearSpeed || 0) / 0.75 +
-          (frame.angularSpeed || 0) / 0.8,
+        (Number(frame.textureLinearSpeed ?? frame.linearSpeed) || 0) / 0.75 +
+          (Number(frame.textureAngularSpeed ?? frame.angularSpeed) || 0) / 0.8,
         0,
         1.5,
       );
@@ -4031,12 +4137,15 @@ function texturedMesh(mesh, frames, precomputedCalibration = null) {
         projections: colorProjections,
         sampledColor,
         recoveredTexture: farthestRecovery > 1,
+        qualityPreferred:
+          frame.textureQuality >= atlas.textureQualityFloor &&
+          frameClippingPenalty <= 0.2,
         score:
-          facing * 2 +
-          1 / distance +
+          facing * 1.45 +
+          Math.min(2, 1 / distance) * 0.65 +
           sharpness * 0.28 +
-          quality * 0.62 +
-          localSharpness * 0.48 -
+          quality * 1.05 +
+          localSharpness * 0.55 -
           worstAgreement * 5 -
           Math.max(0, farthestRecovery - 1) * 0.18 -
           motionPenalty * 0.68 -
@@ -4044,8 +4153,22 @@ function texturedMesh(mesh, frames, precomputedCalibration = null) {
           frameClippingPenalty * 0.8,
       });
     });
-    candidates.sort((left, right) => right.score - left.score);
-    const viableCandidates = candidates.slice(0, 4);
+    // Keep softer frames as a coverage fallback, but never let camera
+    // distance or a patch-coherence bonus choose one over a clear valid view
+    // of the same triangle. This is the distinction the v33 keep-all atlas
+    // was missing: availability is not the same as preference.
+    const clearCandidates = candidates.filter(
+      (candidate) => candidate.qualityPreferred,
+    );
+    if (clearCandidates.length)
+      textureCandidateRejections.softWhenClearAvailable +=
+        candidates.length - clearCandidates.length;
+    const viableCandidates = (clearCandidates.length
+      ? clearCandidates
+      : candidates
+    )
+      .sort((left, right) => right.score - left.score)
+      .slice(0, 4);
     const record = {
       triangle,
       faceNormal,
@@ -4197,11 +4320,13 @@ function texturedMesh(mesh, frames, precomputedCalibration = null) {
   const indices = [];
   let texturedTriangles = 0;
   let recoveredTextureTriangles = 0;
+  let softTextureFallbackTriangles = 0;
   records.forEach((record) => {
     const triangle = record.triangle;
     const best = record.candidates[record.selected] || null;
     if (best) texturedTriangles++;
     if (best?.recoveredTexture) recoveredTextureTriangles++;
+    if (best && !best.qualityPreferred) softTextureFallbackTriangles++;
     triangle.forEach((vertex, corner) => {
       const target = positions.length / 3;
       positions.push(mesh.positions[vertex * 3], mesh.positions[vertex * 3 + 1], mesh.positions[vertex * 3 + 2]);
@@ -4237,6 +4362,7 @@ function texturedMesh(mesh, frames, precomputedCalibration = null) {
     texture: { data: atlas.data, width: atlas.width, height: atlas.height },
     textureCoverage: mesh.indices.length ? Math.round(texturedTriangles / (mesh.indices.length / 3) * 100) : 0,
     recoveredTextureTriangles,
+    softTextureFallbackTriangles,
     textureProjectionMode,
     texturePatchCount,
     textureCalibrationPairs: atlas.photometricPairCount,
@@ -4246,6 +4372,8 @@ function texturedMesh(mesh, frames, precomputedCalibration = null) {
     textureQualityFloor: atlas.textureQualityFloor,
     rejectedStretchedTextureCandidates: textureCandidateRejections.stretched,
     rejectedGrazingTextureCandidates: textureCandidateRejections.grazing,
+    rejectedSoftTextureCandidates:
+      textureCandidateRejections.softWhenClearAvailable,
   };
 }
 
@@ -4395,10 +4523,19 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     };
     overlapping = [];
   }
-  const selected = selectEvenly(
+  const textureFramesBeforeSelection = overlapping.reduce(
+    (count, frame) => count + (frame.colorImage?.length ? 1 : 0),
+    0,
+  );
+  const selected = selectFusionKeyframes(
     overlapping,
     options.maxKeyframes ||
       (options.completionMode === "surface" ? 48 : 40),
+  );
+  alignment.textureFramesBeforeSelection = textureFramesBeforeSelection;
+  alignment.textureFramesAfterSelection = selected.reduce(
+    (count, frame) => count + (frame.colorImage?.length ? 1 : 0),
+    0,
   );
   const localLayerConsensus =
     options.completionMode === "surface"
@@ -4408,7 +4545,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   if (localLayerConsensus.diagnostics)
     alignment.localLayerConsensus = localLayerConsensus.diagnostics;
   const stages = {
-    algorithmVersion: 33,
+    algorithmVersion: 34,
     completionMode: options.completionMode === "surface" ? "surface" : "room",
     reconstructionProfile: options.reconstructionProfile || "quality",
     supportMode: "translated-camera-viewpoints",
@@ -4833,6 +4970,8 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       filledHoleTriangles: surface.filledHoleTriangles || 0,
       textureCoverage: mesh.textureCoverage,
       recoveredTextureTriangles: mesh.recoveredTextureTriangles || 0,
+      softTextureFallbackTriangles:
+        mesh.softTextureFallbackTriangles || 0,
       textureProjectionMode: mesh.textureProjectionMode || "mesh-positions",
       texturePatchCount: mesh.texturePatchCount || 0,
       textureCalibrationPairs: mesh.textureCalibrationPairs || 0,
@@ -4841,6 +4980,8 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
         mesh.rejectedBlurryTextureFrames || 0,
       lowQualityTextureFrames: mesh.lowQualityTextureFrames || 0,
       textureQualityFloor: mesh.textureQualityFloor || 0,
+      rejectedSoftTextureCandidates:
+        mesh.rejectedSoftTextureCandidates || 0,
     },
   };
 }

@@ -12,7 +12,7 @@ export function measureColorFrameQuality(
   channels = 4,
 ) {
   if (!pixels?.length || width < 3 || height < 3 || channels < 3)
-    return { sharpness: 0, clippedRatio: 1, samples: 0 };
+    return { sharpness: 0, focus: 0, clippedRatio: 1, samples: 0 };
   const luminanceAt = (x, y) => {
     const offset = (y * width + x) * channels;
     return (
@@ -23,21 +23,31 @@ export function measureColorFrameQuality(
   };
   const step = Math.max(1, Math.floor(Math.min(width, height) / 96));
   let detail = 0;
+  let focus = 0;
   let clipped = 0;
   let samples = 0;
   for (let y = 1; y < height - 1; y += step)
     for (let x = 1; x < width - 1; x += step) {
       const center = luminanceAt(x, y);
+      const left = luminanceAt(x - 1, y);
+      const right = luminanceAt(x + 1, y);
+      const above = luminanceAt(x, y - 1);
+      const below = luminanceAt(x, y + 1);
       detail +=
-        Math.abs(luminanceAt(x - 1, y) - center) +
-        Math.abs(luminanceAt(x + 1, y) - center) +
-        Math.abs(luminanceAt(x, y - 1) - center) +
-        Math.abs(luminanceAt(x, y + 1) - center);
+        Math.abs(left - center) +
+        Math.abs(right - center) +
+        Math.abs(above - center) +
+        Math.abs(below - center);
+      // First derivatives can rate a broad motion-blurred edge as detailed.
+      // Laplacian energy measures the high-frequency detail that survives
+      // only when the live camera is actually in focus.
+      focus += Math.abs(center * 4 - left - right - above - below);
       if (center < 6 || center > 249) clipped++;
       samples++;
     }
   return {
     sharpness: samples ? detail / samples : 0,
+    focus: samples && focus > 1e-9 ? focus / samples : 0,
     clippedRatio: samples ? clipped / samples : 1,
     samples,
   };
@@ -188,6 +198,7 @@ export function createCameraColorReader(gl, options = {}) {
       const quality = measureColorFrameQuality(pixels, width, height, 4);
       sample.quality = quality;
       sample.sharpness = quality.sharpness;
+      sample.focus = quality.focus;
       sample.clippedRatio = quality.clippedRatio;
       // The XR camera texture is frame-scoped. A selected keyframe must own a
       // copy so it can be projected onto the final mesh after the session ends.
@@ -197,6 +208,7 @@ export function createCameraColorReader(gl, options = {}) {
         height,
         channels: 4,
         sharpness: quality.sharpness,
+        focus: quality.focus,
         clippedRatio: quality.clippedRatio,
       });
       return sample;

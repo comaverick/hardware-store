@@ -32,13 +32,28 @@ const captureQualitySummary = (stats, fusion = null) => ({
   acceptedDepthFrames: stats.acceptedDepthFrames || 0,
   rejectedDepthFrames: stats.rejectedDepthFrames || 0,
   textureKeyframes: stats.textureKeyframes || 0,
+  depthType: stats.depthType || "Unavailable",
   colorSharpness: stats.colorSharpness || 0,
+  colorFocus: stats.colorFocus || 0,
   colorClippedRatio: stats.colorClippedRatio || 0,
   colorFramesSkippedForMotion: stats.colorFramesSkippedForMotion || 0,
+  textureRefreshes: stats.textureRefreshes || 0,
   floorOutlierSamples: fusion?.floorOutlierSamples || 0,
   floorOutlierRatio: fusion?.floorOutlierRatio || 0,
   removedBridgeTriangles: fusion?.removedBridgeTriangles || 0,
   longEdgeTriangleRatio: fusion?.meshBridgeDiagnostics?.longEdgeRatio || 0,
+  algorithmVersion: fusion?.algorithmVersion || 0,
+  preparedKeyframes: fusion?.preparedKeyframes || 0,
+  fusedKeyframes: fusion?.keyframes || 0,
+  textureFramesBeforeSelection:
+    fusion?.alignment?.textureFramesBeforeSelection || 0,
+  textureFramesAfterSelection:
+    fusion?.alignment?.textureFramesAfterSelection || 0,
+  lowQualityTextureFrames: fusion?.lowQualityTextureFrames || 0,
+  softTextureFallbackTriangles:
+    fusion?.softTextureFallbackTriangles || 0,
+  rejectedSoftTextureCandidates:
+    fusion?.rejectedSoftTextureCandidates || 0,
 });
 
 function CoverageCompass({ sectors = [], heading = 0 }) {
