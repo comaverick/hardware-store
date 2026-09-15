@@ -3239,6 +3239,49 @@ export function smoothPositions(mesh, passes = 2, voxelSize = 0.03) {
   return { ...mesh, positions };
 }
 
+// Plane fitting is only a proposal. Near folds/trim, independently snapping
+// vertices can invert a small triangle or crush it into a neighboring layer.
+// Roll back those moves, not the measured triangles. Recheck adjacent faces
+// after every rollback so correcting one face cannot break another.
+export function constrainSurfaceDeformation(mesh, proposed) {
+  const source = mesh.positions;
+  const positions = new Float32Array(proposed);
+  const adjacency = Array.from({ length: source.length / 3 }, () => []);
+  const triangleCount = mesh.indices.length / 3;
+  const queued = new Uint8Array(triangleCount).fill(1);
+  const queue = Array.from({ length: triangleCount }, (_, index) => index);
+  for (let index = 0; index < mesh.indices.length; index++)
+    adjacency[mesh.indices[index]].push(Math.floor(index / 3));
+  let revertedVertices = 0;
+  for (let cursor = 0; cursor < queue.length; cursor++) {
+    const triangleIndex = queue[cursor];
+    queued[triangleIndex] = 0;
+    const triangle = Array.from(mesh.indices.subarray(triangleIndex * 3, triangleIndex * 3 + 3));
+    const original = meshTriangleNormal(source, ...triangle);
+    const corrected = meshTriangleNormal(positions, ...triangle);
+    const originalArea = Math.hypot(...original);
+    const correctedArea = Math.hypot(...corrected);
+    const alignment = original.reduce((sum, value, axis) => sum + value * corrected[axis], 0);
+    // meshTriangleNormal returns an unnormalized cross product.
+    const safe = Number.isFinite(correctedArea) && originalArea > 1e-12 &&
+      correctedArea >= originalArea * 0.4 && correctedArea <= originalArea * 2.5 &&
+      alignment >= originalArea * correctedArea * 0.5;
+    if (safe) continue;
+    for (const vertex of triangle) {
+      const offset = vertex * 3;
+      if ([0, 1, 2].every((axis) => positions[offset + axis] === source[offset + axis])) continue;
+      positions.set(source.subarray(offset, offset + 3), offset);
+      revertedVertices++;
+      adjacency[vertex].forEach((neighbor) => {
+        if (queued[neighbor]) return;
+        queued[neighbor] = 1;
+        queue.push(neighbor);
+      });
+    }
+  }
+  return { positions, revertedVertices };
+}
+
 function computeNormals(mesh) {
   const normals = new Float32Array(mesh.positions.length);
   for (let index = 0; index < mesh.indices.length; index += 3) {
@@ -3257,16 +3300,6 @@ function computeNormals(mesh) {
     normals[index + 2] /= length;
   }
   return normals;
-}
-
-function imageLuminance(frame) {
-  let sum = 0;
-  let count = 0;
-  for (let index = 0; index < frame.colorImage.length; index += frame.colorChannels * 32) {
-    sum += frame.colorImage[index] * 0.2126 + frame.colorImage[index + 1] * 0.7152 + frame.colorImage[index + 2] * 0.0722;
-    count++;
-  }
-  return count ? sum / count : 128;
 }
 
 export function imageColorStatistics(frame) {
@@ -3395,6 +3428,20 @@ function usableCalibrationColor(color) {
   return luminance >= 14 && luminance <= 238 && minimum >= 5 && maximum <= 248;
 }
 
+function calibrationPixel(frame, point) {
+  if (frame.colorImage?.length)
+    return texturePixel(frame, projectColorWorld(frame, ...point));
+  // A depth-only keyframe still owns sampled camera RGB. Calibrate it too:
+  // these frames supply much of the fallback surface, so leaving them at raw
+  // exposure while correcting the atlas recreates the same color patches.
+  const projection = projectWorld(frame, ...point);
+  if (!projection) return null;
+  const index = gridIndex(frame, projection.u, projection.v);
+  if (!frame.measuredMask[index] || !frame.colorMask?.[index]) return null;
+  const offset = index * 3;
+  return Array.from(frame.colors.subarray(offset, offset + 3));
+}
+
 // Estimate per-camera color correction from pixels that correspond to the
 // same measured 3D points. This is more reliable than comparing whole images:
 // a frame aimed at a bright window and a frame aimed at a dark shelf can have
@@ -3405,7 +3452,10 @@ export function overlapTextureColorScales(frames) {
     for (let right = left + 1; right < frames.length; right++) {
       const first = frames[left];
       const second = frames[right];
-      if (!first.colorImage?.length || !second.colorImage?.length) continue;
+      if (
+        !(first.colorImage?.length || first.colorMask?.length) ||
+        !(second.colorImage?.length || second.colorMask?.length)
+      ) continue;
       const differences = [[], [], []];
       const sourceCount =
         first.filteredCount || first.filteredDepth?.length || 0;
@@ -3433,14 +3483,8 @@ export function overlapTextureColorScales(frames) {
             Math.max(0.045, targetDepth * 0.025)
         )
           continue;
-        const firstColor = texturePixel(
-          first,
-          projectColorWorld(first, ...point),
-        );
-        const secondColor = texturePixel(
-          second,
-          projectColorWorld(second, ...point),
-        );
+        const firstColor = calibrationPixel(first, point);
+        const secondColor = calibrationPixel(second, point);
         if (
           !usableCalibrationColor(firstColor) ||
           !usableCalibrationColor(secondColor)
@@ -3493,28 +3537,41 @@ export function overlapTextureColorScales(frames) {
             weight += edge.weight;
           }
         });
-        next[frameIndex][channel] = clamp(
+        const target = clamp(
           sum / weight,
           Math.log(0.72),
           Math.log(1.38),
         );
+        // Undamped Jacobi oscillates on pairs/chains of overlapping views,
+        // leaving a large exposure jump after a fixed number of iterations.
+        next[frameIndex][channel] =
+          (logarithms[frameIndex][channel] + target) * 0.5;
       }
     }
     next.forEach((values, index) => {
       logarithms[index] = values;
     });
   }
-  // Preserve the scene's overall brightness and color while removing the
-  // relative jump between overlapping cameras.
-  for (let channel = 0; channel < 3; channel++) {
-    const values = logarithms
-      .filter((_, index) => connected[index])
-      .map((entry) => entry[channel])
-      .sort((a, b) => a - b);
-    const center = values[Math.floor(values.length / 2)] || 0;
-    logarithms.forEach((entry, index) => {
-      if (connected[index]) entry[channel] -= center;
-    });
+  // Disconnected camera groups have no photometric relationship. Center each
+  // overlap component independently, including both middle values for pairs.
+  const visited = new Uint8Array(frames.length);
+  for (let start = 0; start < frames.length; start++) {
+    if (!connected[start] || visited[start]) continue;
+    const component = [start];
+    visited[start] = 1;
+    for (let cursor = 0; cursor < component.length; cursor++) {
+      edges.forEach(({ left, right }) => {
+        const neighbor = left === component[cursor] ? right : right === component[cursor] ? left : -1;
+        if (neighbor < 0 || visited[neighbor]) return;
+        visited[neighbor] = 1;
+        component.push(neighbor);
+      });
+    }
+    for (let channel = 0; channel < 3; channel++) {
+      const values = component.map((index) => logarithms[index][channel]).sort((a, b) => a - b);
+      const center = (values[Math.floor((values.length - 1) / 2)] + values[Math.floor(values.length / 2)]) / 2;
+      component.forEach((index) => { logarithms[index][channel] -= center; });
+    }
   }
   return {
     scales: logarithms.map((channels, index) => {
@@ -3560,6 +3617,32 @@ export function textureColorDifference(first, second) {
     0,
   );
   return clamp(luminanceDifference * 0.65 + chromaDifference * 0.35, 0, 2);
+}
+
+function calibratedTexturePixel(frame, projection) {
+  return texturePixel(frame, projection)?.map((value, channel) =>
+    clamp(Math.round(value * (frame.textureChannelScales?.[channel] || 1)), 0, 255),
+  );
+}
+
+// Compare the SAME shared edge in both cameras, not the two triangle centers
+// (which may lie on different colored objects). Include the midpoint so seams
+// crossing a narrow curtain stripe are not missed by endpoint-only scoring.
+function textureEdgeColors(candidate, corners) {
+  const a = candidate.projections[corners[0]];
+  const b = candidate.projections[corners[1]];
+  return [0, 0.5, 1].map((blend) => calibratedTexturePixel(candidate.frame, {
+    u: a.u + (b.u - a.u) * blend,
+    v: a.v + (b.v - a.v) * blend,
+  }));
+}
+
+function edgeColorDifference(first, second) {
+  return first.reduce((sum, color, index) => sum + textureColorDifference(color, second[index]), 0) / 3;
+}
+
+export function textureEdgeDifference(first, firstCorners, second, secondCorners) {
+  return edgeColorDifference(textureEdgeColors(first, firstCorners), textureEdgeColors(second, secondCorners));
 }
 
 export function textureProjectionStretch(points, projections, width, height) {
@@ -3689,22 +3772,6 @@ function buildAtlas(frames, precomputedCalibration = null) {
   const width = columns * strideX;
   const height = rows * strideY;
   const data = new Uint8Array(width * height * 4).fill(255);
-  const validStatistics = images
-    .map((frame) => frame.textureColorStatistics)
-    .filter(Boolean);
-  const median = (values) => {
-    const ranked = [...values].sort((left, right) => left - right);
-    return ranked[Math.floor(ranked.length / 2)];
-  };
-  const globalLuminance = validStatistics.length
-    ? median(validStatistics.map((stats) => stats.luminance))
-    : images.reduce((sum, frame) => sum + imageLuminance(frame), 0) /
-      images.length;
-  const globalChannels = [0, 1, 2].map((channel) =>
-    validStatistics.length
-      ? median(validStatistics.map((stats) => stats.channels[channel]))
-      : globalLuminance,
-  );
   // Reuse the calibration that was applied to TSDF vertex colours when the
   // caller already computed it for this exact frame set. Keeping atlas and
   // fallback colours on one exposure solution removes a subtle seam at
@@ -3715,37 +3782,20 @@ function buildAtlas(frames, precomputedCalibration = null) {
       const scale = precomputedCalibration.scales[index];
       if (scale?.length === 3) calibrationByFrame.set(frame, scale);
     });
-  const overlapCalibration = calibrationByFrame.size
+  const overlapCalibration = precomputedCalibration
     ? {
         scales: images.map((frame) => calibrationByFrame.get(frame) || null),
         pairCount: precomputedCalibration.pairCount || 0,
       }
     : overlapTextureColorScales(images);
   images.forEach((frame, tile) => {
-    const statistics = frame.textureColorStatistics;
-    const frameLuminance = statistics?.luminance || imageLuminance(frame);
-    const exposure = clamp(
-      globalLuminance / Math.max(24, frameLuminance),
-      0.86,
-      1.16,
-    );
-    const fallbackScales = [0, 1, 2].map((channel) => {
-      if (!statistics) return exposure;
-      const globalChromaticity =
-        globalChannels[channel] / Math.max(1, globalLuminance);
-      const frameChromaticity =
-        statistics.channels[channel] / Math.max(1, frameLuminance);
-      const whiteBalance = clamp(
-        globalChromaticity / Math.max(0.01, frameChromaticity),
-        0.94,
-        1.06,
-      );
-      return clamp(exposure * whiteBalance, 0.84, 1.18);
-    });
+    // A dark curtain and a white wall are different content, not evidence of
+    // an exposure error. Without shared measured points, preserve the camera
+    // color exactly, matching the uncalibrated fused-color fallback.
     const channelScales =
       calibrationByFrame.get(frame) ||
       overlapCalibration.scales[tile] ||
-      fallbackScales;
+      [1, 1, 1];
     frame.textureChannelScales = channelScales;
     const tileX = tile % columns;
     const tileY = Math.floor(tile / columns);
@@ -3804,7 +3854,7 @@ function buildAtlas(frames, precomputedCalibration = null) {
     photometricPairCount: overlapCalibration.pairCount,
     photometricNormalization: overlapCalibration.pairCount
       ? "overlap-correspondence-color-calibration"
-      : "median-bounded-exposure-white-balance",
+      : "original-camera-colors",
   };
 }
 
@@ -3919,7 +3969,7 @@ export function closestProjectiveDepthAgreement(
   return support >= 2 ? { ...closest, support } : null;
 }
 
-function texturedMesh(mesh, frames, precomputedCalibration = null) {
+export function texturedMesh(mesh, frames, precomputedCalibration = null) {
   const atlas = buildAtlas(frames, precomputedCalibration);
   const sharedNormals = computeNormals(mesh);
   if (!atlas) return { ...mesh, normals: sharedNormals, textureCoverage: 0 };
@@ -3928,20 +3978,14 @@ function texturedMesh(mesh, frames, precomputedCalibration = null) {
     grazing: 0,
     softWhenClearAvailable: 0,
   };
-  const projectionPositions =
-    mesh.textureProjectionPositions?.length === mesh.positions.length
-      ? mesh.textureProjectionPositions
-      : mesh.positions;
-  const textureProjectionMode =
-    projectionPositions === mesh.positions
-      ? "mesh-positions"
-      : "pre-correction-measured-positions";
+  // Project the surface we will actually display, not its pre-smoothing
+  // positions. Old UVs stretched image edges when the geometry moved and
+  // adjacent cameras then disagreed about where the same feature belonged.
+  const projectionPositions = mesh.positions;
+  const textureProjectionMode = "final-mesh-positions";
   atlas.frames.forEach((frame, textureId) => { frame.textureId = textureId; });
   const records = [];
-  const vertexTriangles = Array.from(
-    { length: mesh.positions.length / 3 },
-    () => [],
-  );
+  const edgeOwners = new Map();
   for (let index = 0; index < mesh.indices.length; index += 3) {
     const triangle = [mesh.indices[index], mesh.indices[index + 1], mesh.indices[index + 2]];
     const triangleProjectionPoints = triangle.map((vertex) => [
@@ -4124,18 +4168,9 @@ function texturedMesh(mesh, frames, precomputedCalibration = null) {
         0,
         1.8,
       );
-      const sampledColor = texturePixel(frame, colorProjection)?.map(
-        (channel, index) =>
-          clamp(
-            channel * (frame.textureChannelScales?.[index] || 1),
-            0,
-            255,
-          ),
-      );
       candidates.push({
         frame,
         projections: colorProjections,
-        sampledColor,
         recoveredTexture: farthestRecovery > 1,
         qualityPreferred:
           frame.textureQuality >= atlas.textureQualityFloor &&
@@ -4174,46 +4209,71 @@ function texturedMesh(mesh, frames, precomputedCalibration = null) {
       faceNormal,
       candidates: viableCandidates,
       selected: 0,
+      neighbors: [],
+      seams: [],
     };
     const recordIndex = records.length;
     records.push(record);
-    triangle.forEach((vertex) => vertexTriangles[vertex].push(recordIndex));
+    triangle.forEach((vertex, corner) => {
+      const nextCorner = (corner + 1) % 3;
+      const next = triangle[nextCorner];
+      const key = vertex < next ? `${vertex},${next}` : `${next},${vertex}`;
+      const corners = vertex < next ? [corner, nextCorner] : [nextCorner, corner];
+      const owner = edgeOwners.get(key);
+      if (!owner) {
+        edgeOwners.set(key, { recordIndex, corners });
+        return;
+      }
+      const neighbor = records[owner.recordIndex];
+      const alignment = record.faceNormal.x * neighbor.faceNormal.x +
+        record.faceNormal.y * neighbor.faceNormal.y + record.faceNormal.z * neighbor.faceNormal.z;
+      // No voting across sharp folds, opposite sheets, or a lone shared vertex.
+      if (alignment < 0.75) return;
+      record.neighbors.push(owner.recordIndex);
+      neighbor.neighbors.push(recordIndex);
+      const seam = {
+        left: owner.recordIndex, right: recordIndex,
+        columns: record.candidates.length,
+        differences: new Float32Array(neighbor.candidates.length * record.candidates.length),
+      };
+      if (seam.differences.length) {
+        // Sample each candidate once per edge, not once per candidate pair.
+        // This keeps the seam pass bounded on phone-sized meshes.
+        const leftColors = neighbor.candidates.map((candidate) => textureEdgeColors(candidate, owner.corners));
+        const rightColors = record.candidates.map((candidate) => textureEdgeColors(candidate, corners));
+        neighbor.candidates.forEach((left, leftIndex) => {
+          record.candidates.forEach((right, rightIndex) => {
+            seam.differences[leftIndex * seam.columns + rightIndex] =
+              left.frame === right.frame ? 0 : edgeColorDifference(leftColors[leftIndex], rightColors[rightIndex]);
+          });
+        });
+      }
+      record.seams.push(seam);
+      neighbor.seams.push(seam);
+    });
   }
-  records.forEach((record, recordIndex) => {
-    const neighbors = new Set();
-    record.triangle.forEach((vertex) =>
-      vertexTriangles[vertex].forEach((neighborIndex) => {
-        if (neighborIndex !== recordIndex) neighbors.add(neighborIndex);
-      }),
-    );
-    record.neighbors = [...neighbors];
-  });
+  edgeOwners.clear();
   const coherentCandidateBonus = (
     record,
     candidate,
+    candidateIndex,
     sameCameraWeight,
     colorWeight,
   ) => {
     let sameCameraVotes = 0;
     let colorDifference = 0;
-    let comparedColors = 0;
-    record.neighbors.forEach((neighborIndex) => {
-      const neighbor = records[neighborIndex];
+    record.seams.forEach((seam) => {
+      const isLeft = records[seam.left] === record;
+      const neighbor = records[isLeft ? seam.right : seam.left];
       const neighborCandidate = neighbor.candidates[neighbor.selected];
       if (!neighborCandidate) return;
       if (neighborCandidate.frame.textureId === candidate.frame.textureId)
         sameCameraVotes++;
-      if (!neighborCandidate.sampledColor || !candidate.sampledColor) return;
-      colorDifference += textureColorDifference(
-        candidate.sampledColor,
-        neighborCandidate.sampledColor,
-      );
-      comparedColors++;
+      const row = isLeft ? candidateIndex : neighbor.selected;
+      const column = isLeft ? neighbor.selected : candidateIndex;
+      colorDifference += seam.differences[row * seam.columns + column];
     });
-    return (
-      sameCameraVotes * sameCameraWeight -
-      (colorDifference / Math.max(1, comparedColors)) * colorWeight
-    );
+    return sameCameraVotes * sameCameraWeight - colorDifference * colorWeight;
   };
   // Neighboring triangles prefer the same one of their valid top-four
   // camera views. Four passes remove most per-triangle exposure seams without
@@ -4226,7 +4286,7 @@ function texturedMesh(mesh, frames, precomputedCalibration = null) {
       record.candidates.forEach((candidate, candidateIndex) => {
         const score =
           candidate.score +
-          coherentCandidateBonus(record, candidate, 0.68, 0.75);
+          coherentCandidateBonus(record, candidate, candidateIndex, 0.68, 1.5);
         if (score > selectedScore) {
           selected = candidateIndex;
           selectedScore = score;
@@ -4305,7 +4365,7 @@ function texturedMesh(mesh, frames, precomputedCalibration = null) {
       record.candidates.forEach((candidate, candidateIndex) => {
         const score =
           candidate.score +
-          coherentCandidateBonus(record, candidate, 0.82, 0.9);
+          coherentCandidateBonus(record, candidate, candidateIndex, 0.82, 1.8);
         if (score > selectedScore) {
           selected = candidateIndex;
           selectedScore = score;
@@ -4321,6 +4381,29 @@ function texturedMesh(mesh, frames, precomputedCalibration = null) {
   let texturedTriangles = 0;
   let recoveredTextureTriangles = 0;
   let softTextureFallbackTriangles = 0;
+  // Where a texture-valid triangle meets a color-only triangle, carry its
+  // measured corner color into the fallback. Keep the best observation, never
+  // average different camera images or propagate across gaps/folds.
+  const fallbackColors = new Uint8Array(mesh.colors);
+  const boundaryScores = new Float32Array(mesh.positions.length / 3).fill(-Infinity);
+  const fallbackVertices = new Uint8Array(boundaryScores.length);
+  records.forEach((record) => {
+    if (!record.candidates.length)
+      record.triangle.forEach((vertex) => { fallbackVertices[vertex] = 1; });
+  });
+  records.forEach((record) => {
+    const best = record.candidates[record.selected];
+    if (!best) return;
+    record.triangle.forEach((vertex, corner) => {
+      if (!fallbackVertices[vertex] || best.score <= boundaryScores[vertex]) return;
+      if (!record.neighbors.some((index) =>
+        !records[index].candidates.length && records[index].triangle.includes(vertex))) return;
+      const color = calibratedTexturePixel(best.frame, best.projections[corner]);
+      if (!color) return;
+      boundaryScores[vertex] = best.score;
+      fallbackColors.set(color.map(linearByte), vertex * 3);
+    });
+  });
   records.forEach((record) => {
     const triangle = record.triangle;
     const best = record.candidates[record.selected] || null;
@@ -4348,7 +4431,7 @@ function texturedMesh(mesh, frames, precomputedCalibration = null) {
           (tileX * atlas.strideX + atlas.strideX * 0.5) / atlas.width,
           (tileY * atlas.strideY + atlas.strideY * 0.5) / atlas.height,
         );
-        colors.push(mesh.colors[vertex * 3], mesh.colors[vertex * 3 + 1], mesh.colors[vertex * 3 + 2]);
+        colors.push(fallbackColors[vertex * 3], fallbackColors[vertex * 3 + 1], fallbackColors[vertex * 3 + 2]);
       }
       indices.push(target);
     });
@@ -4364,6 +4447,7 @@ function texturedMesh(mesh, frames, precomputedCalibration = null) {
     recoveredTextureTriangles,
     softTextureFallbackTriangles,
     textureProjectionMode,
+    fallbackBoundaryVertices: boundaryScores.reduce((count, score) => count + (Number.isFinite(score) ? 1 : 0), 0),
     texturePatchCount,
     textureCalibrationPairs: atlas.photometricPairCount,
     photometricNormalization: atlas.photometricNormalization,
@@ -4545,7 +4629,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   if (localLayerConsensus.diagnostics)
     alignment.localLayerConsensus = localLayerConsensus.diagnostics;
   const stages = {
-    algorithmVersion: 34,
+    algorithmVersion: 35,
     completionMode: options.completionMode === "surface" ? "surface" : "room",
     reconstructionProfile: options.reconstructionProfile || "quality",
     supportMode: "translated-camera-viewpoints",
@@ -4868,15 +4952,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
         issues: measuredSurfaceWarnings,
       }
     : null;
-  // Texture projection must refer to the measured surface that the cameras
-  // actually saw. Geometry smoothing and supported-plane stabilization move
-  // those same vertices slightly; projecting the corrected positions back
-  // into the original frames caused valid edge triangles to lose texture and
-  // made neighboring image patches appear disconnected.
-  surface = {
-    ...surface,
-    textureProjectionPositions: new Float32Array(surface.positions),
-  };
+  const measuredPositions = surface.positions;
   if (!surfaceCompletion && stages.rectangularRoomModelCompatible)
     surface = stabilizeDominantWalls(
         surface,
@@ -4905,6 +4981,12 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       volumeVoxelSize,
       5,
     );
+  const constrained = constrainSurfaceDeformation(
+    { ...surface, positions: measuredPositions },
+    surface.positions,
+  );
+  surface = { ...surface, positions: constrained.positions };
+  stages.revertedDeformationVertices = constrained.revertedVertices;
   wallStructure = meshWallStructureDiagnostics(surface);
   stages.wallStructure = wallStructure;
   stages.postStabilizationWallStructure = wallStructure;
@@ -4973,6 +5055,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       softTextureFallbackTriangles:
         mesh.softTextureFallbackTriangles || 0,
       textureProjectionMode: mesh.textureProjectionMode || "mesh-positions",
+      fallbackBoundaryVertices: mesh.fallbackBoundaryVertices || 0,
       texturePatchCount: mesh.texturePatchCount || 0,
       textureCalibrationPairs: mesh.textureCalibrationPairs || 0,
       photometricNormalization: mesh.photometricNormalization || "none",

@@ -54,6 +54,11 @@ const captureQualitySummary = (stats, fusion = null) => ({
     fusion?.softTextureFallbackTriangles || 0,
   rejectedSoftTextureCandidates:
     fusion?.rejectedSoftTextureCandidates || 0,
+  textureProjectionMode: fusion?.textureProjectionMode || null,
+  textureCalibrationPairs: fusion?.textureCalibrationPairs || 0,
+  photometricNormalization: fusion?.photometricNormalization || null,
+  fallbackBoundaryVertices: fusion?.fallbackBoundaryVertices || 0,
+  revertedDeformationVertices: fusion?.revertedDeformationVertices || 0,
 });
 
 function CoverageCompass({ sectors = [], heading = 0 }) {

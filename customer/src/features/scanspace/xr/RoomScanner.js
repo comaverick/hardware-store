@@ -41,6 +41,23 @@ export const KEYFRAME_RETENTION_TRIGGER = 64;
 export const MAX_TEXTURE_KEYFRAMES = 15;
 export const DEPTH_TYPE_PREFERENCE = Object.freeze(["raw", "smooth"]);
 
+function poseMotion(previous, pose, timestamp) {
+  if (!previous || timestamp <= previous.timestamp)
+    return { linearSpeed: 0, angularSpeed: 0 };
+  const seconds = Math.max(0.001, (timestamp - previous.timestamp) / 1000);
+  const a = pose.orientation;
+  const b = previous.pose.orientation;
+  const dot = Math.min(1, Math.abs(a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w));
+  return {
+    linearSpeed: Math.hypot(
+      pose.position.x - previous.pose.position.x,
+      pose.position.y - previous.pose.position.y,
+      pose.position.z - previous.pose.position.z,
+    ) / seconds,
+    angularSpeed: (2 * Math.acos(dot)) / seconds,
+  };
+}
+
 function keyframePoseForRetention(frame) {
   const camera = frame?.camera;
   const matrix = frame?.transformMatrix;
@@ -500,6 +517,10 @@ export class RoomScanner {
     try {
       const keyframePose = this.keyframePose(view);
       const motion = this.measureFrameMotion(keyframePose, time);
+      if (this.cameraMotion?.timestamp === time) {
+        motion.textureLinearSpeed = this.cameraMotion.linearSpeed;
+        motion.textureAngularSpeed = this.cameraMotion.angularSpeed;
+      }
       const keyframeEligible = this.shouldCaptureKeyframe(keyframePose);
       let colorAt = null;
       if (
@@ -652,6 +673,8 @@ export class RoomScanner {
       this.stats.tracking = !!pose;
       this.hit = null;
       if (pose) {
+        const view = pose.views[0];
+        if (view) this.recordCameraMotion(this.keyframePose(view), time);
         this.observer = {
           x: pose.transform.position.x,
           z: pose.transform.position.z,
@@ -675,7 +698,6 @@ export class RoomScanner {
         }
         if (!this.paused && time - (this.lastCapture || 0) > 400) {
           this.lastCapture = time;
-          const view = pose.views[0];
           this.captureDepthFrame(time, frame, view);
           if (frame.detectedPlanes) {
             for (const plane of this.planes.keys())
@@ -686,6 +708,10 @@ export class RoomScanner {
             this.stats.planes = this.planes.size;
           }
         }
+      } else {
+        this.lastCameraPose = null;
+        this.cameraMotion = null;
+        this.cameraMotionWindow = [];
       }
       if (time - (this.lastPublish || 0) > 800) {
         this.stats.depthCurrent =
@@ -739,24 +765,24 @@ export class RoomScanner {
   measureFrameMotion(pose, timestamp) {
     const previous = this.lastDepthPose;
     this.lastDepthPose = { pose, timestamp };
-    if (!previous || timestamp <= previous.timestamp)
-      return { linearSpeed: 0, angularSpeed: 0 };
-    const seconds = Math.max(0.001, (timestamp - previous.timestamp) / 1000);
-    const linearDistance = Math.hypot(
-      pose.position.x - previous.pose.position.x,
-      pose.position.y - previous.pose.position.y,
-      pose.position.z - previous.pose.position.z,
+    return poseMotion(previous, pose, timestamp);
+  }
+  recordCameraMotion(pose, timestamp) {
+    // The 400 ms depth interval aliases hand shake: moving away and back can
+    // appear perfectly stationary. Track every XR view for image quality only;
+    // do not change depth acceptance or introduce a completion requirement.
+    const motion = poseMotion(this.lastCameraPose, pose, timestamp);
+    this.lastCameraPose = { pose, timestamp };
+    this.cameraMotionWindow = (this.cameraMotionWindow || []).filter(
+      (sample) => sample.timestamp > timestamp - 100 && sample.timestamp < timestamp,
     );
-    const a = pose.orientation;
-    const b = previous.pose.orientation;
-    const dot = Math.min(
-      1,
-      Math.abs(a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w),
-    );
-    return {
-      linearSpeed: linearDistance / seconds,
-      angularSpeed: (2 * Math.acos(dot)) / seconds,
+    this.cameraMotionWindow.push({ ...motion, timestamp });
+    this.cameraMotion = {
+      timestamp,
+      linearSpeed: Math.max(...this.cameraMotionWindow.map((sample) => sample.linearSpeed)),
+      angularSpeed: Math.max(...this.cameraMotionWindow.map((sample) => sample.angularSpeed)),
     };
+    return this.cameraMotion;
   }
   shouldCaptureKeyframe(pose) {
     if (this.lastMeshPose) {
@@ -803,9 +829,9 @@ export class RoomScanner {
   }
   isColorFrameReliable(motion = {}) {
     return (
-      (Number(motion.linearSpeed) || 0) <=
+      (Number(motion.textureLinearSpeed ?? motion.linearSpeed) || 0) <=
         MAX_COLOR_CAPTURE_LINEAR_SPEED &&
-      (Number(motion.angularSpeed) || 0) <=
+      (Number(motion.textureAngularSpeed ?? motion.angularSpeed) || 0) <=
         MAX_COLOR_CAPTURE_ANGULAR_SPEED
     );
   }
@@ -833,7 +859,10 @@ export class RoomScanner {
     });
     const nearby = this.keyframes
       .map((frame, index) => {
-        const retained = textureKeyframePoseForRetention(frame);
+        // Bound every refresh against the immutable depth pose. Comparing
+        // against the last refreshed image allowed many 4 cm steps to chain
+        // into a texture captured far from its occlusion/depth observation.
+        const retained = keyframePoseForRetention(frame);
         const spatial = Math.hypot(
           current.position[0] - retained.position[0],
           current.position[1] - retained.position[1],
@@ -862,8 +891,8 @@ export class RoomScanner {
       colorSharpness: colorAt.sharpness,
       colorFocus: colorAt.focus,
       colorClippedRatio: colorAt.clippedRatio,
-      textureLinearSpeed: motion.linearSpeed,
-      textureAngularSpeed: motion.angularSpeed,
+      textureLinearSpeed: motion.textureLinearSpeed ?? motion.linearSpeed,
+      textureAngularSpeed: motion.textureAngularSpeed ?? motion.angularSpeed,
     });
     const target = nearby.find(({ frame }) => {
       if (!frame.colorImage?.length) return true;
@@ -888,8 +917,8 @@ export class RoomScanner {
       colorFocus: Number(colorAt.focus ?? snapshot.focus) || 0,
       colorClippedRatio:
         Number(colorAt.clippedRatio ?? snapshot.clippedRatio) || 0,
-      textureLinearSpeed: Number(motion.linearSpeed) || 0,
-      textureAngularSpeed: Number(motion.angularSpeed) || 0,
+      textureLinearSpeed: Number(motion.textureLinearSpeed ?? motion.linearSpeed) || 0,
+      textureAngularSpeed: Number(motion.textureAngularSpeed ?? motion.angularSpeed) || 0,
       textureRefreshedAt: Number(timestamp) || 0,
     });
     this.stats.textureRefreshes++;
@@ -945,10 +974,10 @@ export class RoomScanner {
     keyframe.colorFocus =
       Number(colorAt?.focus ?? colorSnapshot?.focus) || 0;
     keyframe.textureLinearSpeed = colorSnapshot
-      ? Number(motion.linearSpeed) || 0
+      ? Number(motion.textureLinearSpeed ?? motion.linearSpeed) || 0
       : 0;
     keyframe.textureAngularSpeed = colorSnapshot
-      ? Number(motion.angularSpeed) || 0
+      ? Number(motion.textureAngularSpeed ?? motion.angularSpeed) || 0
       : 0;
     const capturedPositions = (this.keyframePositions ||= []);
     capturedPositions.forEach((position) => {

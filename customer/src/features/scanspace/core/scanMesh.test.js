@@ -930,7 +930,7 @@ test("allows validated multi-view surface fusion without a room heading sweep", 
   expect(result.diagnostics.measuredReviewWarning).toBeNull();
   expect(result.diagnostics.alignment.surfaceConsistency.applied).toBe(true);
   expect(result.diagnostics.textureProjectionMode).toBe(
-    "pre-correction-measured-positions",
+    "final-mesh-positions",
   );
   expect(result.diagnostics.fallback).toBeUndefined();
 });

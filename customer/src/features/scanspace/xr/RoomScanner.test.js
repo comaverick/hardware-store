@@ -13,6 +13,43 @@ test("raw depth is preferred before device-smoothed depth", () => {
   expect(DEPTH_TYPE_PREFERENCE).toEqual(["raw", "smooth"]);
 });
 
+test("short out-and-back camera motion is detected without changing depth acceptance", () => {
+  const scanner = new RoomScanner({ onUpdate: () => {} });
+  const pose = (x) => ({ position: { x, y: 1.6, z: 0 }, orientation: { x: 0, y: 0, z: 0, w: 1 } });
+  scanner.measureFrameMotion(pose(0), 500);
+  scanner.recordCameraMotion(pose(0), 850);
+  scanner.recordCameraMotion(pose(0.03), 875);
+  const cameraMotion = scanner.recordCameraMotion(pose(0), 900);
+  const depthMotion = scanner.measureFrameMotion(pose(0), 900);
+  expect(depthMotion.linearSpeed).toBe(0);
+  expect(cameraMotion.linearSpeed).toBeGreaterThan(1);
+  expect(scanner.isColorFrameReliable({ ...depthMotion, textureLinearSpeed: cameraMotion.linearSpeed })).toBe(false);
+  const settled = scanner.recordCameraMotion(pose(0), 1050);
+  expect(scanner.isColorFrameReliable(settled)).toBe(true);
+  expect(scanner.paused).toBe(false);
+});
+
+test("successive texture refreshes cannot drift away from the original depth pose", () => {
+  const scanner = new RoomScanner({ onUpdate: () => {} });
+  const camera = new PerspectiveCamera(60, 1, 0.1, 20);
+  const frame = {
+    transformMatrix: new Float32Array(new Matrix4().makeTranslation(0, 1.6, 0).elements),
+    viewTransformMatrix: new Float32Array(new Matrix4().makeTranslation(0.03, 1.6, 0).elements),
+    colorImage: new Uint8Array([80, 80, 80, 255]),
+    colorSharpness: 1, colorFocus: 1,
+  };
+  scanner.keyframes = [frame];
+  const color = Object.assign(() => [140, 140, 140], {
+    sharpness: 20, focus: 20,
+    snapshot: jest.fn(() => ({ width: 1, height: 1, data: new Uint8Array([140, 140, 140, 255]) })),
+  });
+  const pose = { position: { x: 0.06, y: 1.6, z: 0 }, orientation: { x: 0, y: 0, z: 0, w: 1 } };
+  const view = { projectionMatrix: camera.projectionMatrix.elements, transform: { matrix: new Matrix4().makeTranslation(0.06, 1.6, 0).elements } };
+  expect(scanner.refreshNearbyTextureKeyframe(color, pose, view, {}, 1000)).toBe(false);
+  expect(color.snapshot).not.toHaveBeenCalled();
+  expect(frame.viewTransformMatrix[12]).toBeCloseTo(0.03);
+});
+
 test("stationary unsaved frames cannot turn the preview green", () => {
   const scanner = new RoomScanner({ onUpdate: () => {} });
   scanner.renderer = { render: () => {} };
