@@ -267,6 +267,17 @@ test("retains a real depth edge supported by two agreeing neighbors", () => {
   expect(result.weakSupportedCount).toBeGreaterThan(0);
 });
 
+test("does not average a narrow foreground strip into its wall background", () => {
+  const depths = new Float32Array(25).fill(2);
+  [2, 7, 12, 17, 22].forEach((index) => {
+    depths[index] = 1.94;
+  });
+  const result = filterDepth({ columns: 5, rows: 5, depths });
+  expect(result.filtered[12]).toBeLessThan(1.96);
+  expect(result.filtered[12]).toBeGreaterThan(1.92);
+  expect(result.filtered[11]).toBeGreaterThan(1.98);
+});
+
 test("does not retain an isolated or depth-discontinuous sample", () => {
   const depths = new Float32Array(25);
   depths[12] = 2;

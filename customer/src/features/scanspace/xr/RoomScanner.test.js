@@ -311,6 +311,56 @@ test("an accepted stationary revisit refreshes texture without adding geometry",
   expect(scanner.keyframes[0].viewTransformMatrix[12]).toBeCloseTo(0.02);
 });
 
+test("a materially better stationary depth revisit replaces one keyframe", () => {
+  const scanner = new RoomScanner({ onUpdate: () => {} });
+  const camera = new PerspectiveCamera(60, 1, 0.1, 20);
+  const view = {
+    projectionMatrix: camera.projectionMatrix.elements,
+    transform: {
+      position: { x: 0, y: 1.6, z: 0 },
+      orientation: { x: 0, y: 0, z: 0, w: 1 },
+      matrix: new Matrix4().makeTranslation(0, 1.6, 0).elements,
+    },
+  };
+  const points = (missing = false) =>
+    Array.from({ length: 16 }, (_, index) => {
+      if (missing && index % 2) return null;
+      return {
+        x: (index % 4) * 0.05,
+        y: 1.4 + Math.floor(index / 4) * 0.05,
+        z: -2,
+        depth: 2,
+        gridX: index % 4,
+        gridY: Math.floor(index / 4),
+      };
+    }).filter(Boolean);
+  scanner.captureKeyframe(
+    points(true),
+    view,
+    4,
+    4,
+    500,
+    null,
+    scanner.keyframePose(view),
+    { width: 4, height: 4 },
+    { linearSpeed: 0, angularSpeed: 0 },
+  );
+  const replaced = scanner.refreshNearbyDepthKeyframe(
+    points(false),
+    view,
+    4,
+    4,
+    1000,
+    scanner.keyframePose(view),
+    { width: 4, height: 4 },
+    { linearSpeed: 0, angularSpeed: 0 },
+  );
+  expect(replaced).toBe(true);
+  expect(scanner.stats.depthRefreshes).toBe(1);
+  expect(scanner.keyframes).toHaveLength(1);
+  expect(scanner.keyframes[0].measuredDepthCount).toBeGreaterThan(0);
+});
+
 test("keyframe retention preserves a bounded spatial path instead of dropping every other view", () => {
   const frames = Array.from({ length: KEYFRAME_RETENTION_TRIGGER + 8 }, (_, index) => ({
     frameId: index,

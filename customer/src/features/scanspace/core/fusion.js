@@ -231,6 +231,16 @@ export function filterDepth(frame) {
       )
         continue;
       const range = Math.max(0.07, center * 0.045);
+      // The runtime's smoothed depth can put a foreground edge and its wall
+      // background inside the broad noise band above. Do not average those
+      // layers together: at two metres a six-centimetre shelf/curtain edge is
+      // already a real surface discontinuity, not sensor noise. Keep this
+      // threshold distance-aware, but substantially narrower than the full
+      // smoothing band used for a continuous wall.
+      const discontinuity = Math.max(
+        0.035,
+        Math.min(range * 0.62, center * 0.028),
+      );
       // Keep the measured centre dominant. A symmetric mean softens sensor
       // noise on a wall, but it also pulls a shelf edge toward the foreground
       // whenever one side of the 3x3 footprint contains a different layer.
@@ -249,6 +259,7 @@ export function filterDepth(frame) {
           const next = frame.depths[nextY * frame.columns + nextX];
           const difference = Math.abs(next - center);
           if (!Number.isFinite(next) || next <= 0 || difference > range) continue;
+          if (difference > discontinuity) continue;
           const contribution = Math.exp(-(difference * difference) / (2 * range * range));
           sum += next * contribution;
           weight += contribution;
@@ -1390,6 +1401,13 @@ function makeVolume(bounds, options) {
     voxelSize,
     values: new Float32Array(count),
     weights: new Uint8Array(count),
+    // `weights` records all TSDF contributions, including low-confidence
+    // repaired pixels. These two arrays preserve the distinction needed by
+    // meshing: only direct depth observations may establish independent
+    // surface support; a small enclosed repair may be derived from measured
+    // neighbours but never counts as another viewpoint.
+    measuredSupport: new Uint8Array(count),
+    derivedSupport: new Uint8Array(count),
     viewpointCounts: new Uint8Array(count),
     firstViewIds,
     lastViewIds,
@@ -1406,6 +1424,8 @@ function makeVolume(bounds, options) {
     robustlyDownweightedSamples: 0,
     robustlyRejectedSamples: 0,
     motionDownweightedSamples: 0,
+    repairedFusionSamples: 0,
+    measuredFusionSamples: 0,
   };
 }
 
@@ -1463,7 +1483,13 @@ export function sampleProjectiveDepth(frame, u, v) {
   const c = depths[i + frame.columns], d = depths[i + frame.columns + 1];
   if (!a || !b || !c || !d) return nearest;
   const min = Math.min(a, b, c, d);
-  if (Math.max(a, b, c, d) - min > Math.max(0.08, min * 0.06))
+  // Match filterDepth's layer boundary rule. A broad interpolation band can
+  // reintroduce the very foreground/background blending that filtering just
+  // removed, especially around a narrow shelf or curtain fold.
+  if (
+    Math.max(a, b, c, d) - min >
+    Math.max(0.035, Math.min(0.08, min * 0.028))
+  )
     return nearest;
   const tx = px - x, ty = py - y;
   return 1 / ((1 - ty) * ((1 - tx) / a + tx / b) +
@@ -1541,6 +1567,13 @@ function integrateProjective(volume, frames, report) {
           if (!measuredDepth) continue;
           const signedDistance = measuredDepth - projected.depth;
           const index = volumeIndex(volume, x, y, z);
+          // A repaired/interpolated depth value can help bridge a tiny hole,
+          // but it must not establish a second independent surface view. The
+          // nearest projected sample is the owner of this ray; preserve its
+          // measured provenance through fusion instead of treating every
+          // filtered value as equally trustworthy.
+          const directlyMeasured =
+            !frame.measuredMask?.length || !!frame.measuredMask[depthIndex];
           // A ray proves that the space in front of its measured surface is
           // empty. Space behind that surface is merely occluded and must not be
           // used to delete a legitimate back wall behind shelves or furniture.
@@ -1564,6 +1597,12 @@ function integrateProjective(volume, frames, report) {
           let sampleWeight =
             clamp(localConfidence * distanceWeight, 0.08, 1) *
             motionReliability;
+          if (!directlyMeasured) {
+            sampleWeight *= 0.22;
+            volume.repairedFusionSamples++;
+          } else {
+            volume.measuredFusionSamples++;
+          }
           if (motionReliability < 0.8)
             volume.motionDownweightedSamples++;
           // Once two observations establish a local TSDF value, use a Huber
@@ -1595,11 +1634,17 @@ function integrateProjective(volume, frames, report) {
           volume.weightSums[index] = nextWeight;
           volume.depthSums[index] += projected.depth * sampleWeight;
           volume.weights[index] = Math.min(32, previousViews + 1);
-          if (!volume.viewpointCounts[index]) {
+          if (directlyMeasured) {
+            volume.measuredSupport[index] = Math.min(
+              255,
+              volume.measuredSupport[index] + 1,
+            );
+          }
+          if (directlyMeasured && !volume.viewpointCounts[index]) {
             volume.viewpointCounts[index] = 1;
             volume.firstViewIds[index] = frameIndex;
             volume.lastViewIds[index] = frameIndex;
-          } else {
+          } else if (directlyMeasured) {
             const firstCamera = frames[volume.firstViewIds[index]]?.camera;
             const lastCamera = frames[volume.lastViewIds[index]]?.camera;
             const distanceFrom = (camera) =>
@@ -1638,7 +1683,11 @@ function integrateProjective(volume, frames, report) {
                   depthIndex,
                 )
               : null;
-            if (color) {
+            // Repaired depth does not own a trustworthy camera pixel. Do not
+            // paint its interpolated sample over a measured surface; the
+            // later local color propagation can fill a genuinely enclosed
+            // hole from compatible measured neighbours.
+            if (color && directlyMeasured) {
               const colorWeight = volume.colorWeights[index];
               const luminance =
                 color[0] * 0.2126 + color[1] * 0.7152 + color[2] * 0.0722;
@@ -1695,6 +1744,7 @@ function regularizeVolume(volume) {
   const [width, height, depth] = volume.dimensions;
   const sourceValues = new Float32Array(volume.values);
   const sourceWeights = new Uint8Array(volume.weights);
+  const sourceMeasuredSupport = new Uint8Array(volume.measuredSupport);
   const directions = [
     [-1, 0, 0], [1, 0, 0], [0, -1, 0],
     [0, 1, 0], [0, 0, -1], [0, 0, 1],
@@ -1710,7 +1760,11 @@ function regularizeVolume(volume) {
         let support = 0;
         directions.forEach(([dx, dy, dz]) => {
           const neighbor = volumeIndex(volume, x + dx, y + dy, z + dz);
-          if (sourceWeights[neighbor] < 2) return;
+          if (
+            sourceWeights[neighbor] < 2 ||
+            sourceMeasuredSupport[neighbor] < 1
+          )
+            return;
           support++;
           const value = sourceValues[neighbor];
           valueSum += value;
@@ -1723,7 +1777,7 @@ function regularizeVolume(volume) {
             colorCount++;
           }
         });
-        if (sourceWeights[index] >= 2 && support >= 4) {
+        if (sourceMeasuredSupport[index] >= 1 && sourceWeights[index] >= 2 && support >= 4) {
           // Bilateral TSDF regularization: do not average across a depth
           // transition (a shelf edge, doorway, or foreground object). The old
           // unconditional average turned those transitions into curved,
@@ -1737,7 +1791,7 @@ function regularizeVolume(volume) {
               centerValue * 0.84 +
               (agreeing.reduce((sum, value) => sum + value, 0) / agreeing.length) *
                 0.16;
-        } else if (!sourceWeights[index] && support >= 5) {
+        } else if (!sourceMeasuredSupport[index] && support >= 5) {
           // Repair only a one-voxel hole enclosed by measured neighbors. This
           // cannot bridge a doorway or a broad unscanned part of the room.
           const compatibleHole =
@@ -1747,6 +1801,10 @@ function regularizeVolume(volume) {
             volume.values[index] = valueSum / support;
             volume.weights[index] = 1;
             volume.weightSums[index] = 0.35;
+            // This is explicitly derived from surrounding measured voxels. It
+            // is eligible for a tiny enclosed mesh repair, but it cannot be
+            // mistaken for direct sensor evidence or an independent view.
+            volume.derivedSupport[index] = Math.min(255, support);
             if (colorCount) {
               const offset = index * 3;
               volume.colors[offset] = colorSum[0] / colorCount;
@@ -1773,7 +1831,12 @@ function propagateSurfaceColors(volume, passes = 2) {
       for (let y = 1; y < height - 1; y++)
         for (let x = 1; x < width - 1; x++) {
           const index = volumeIndex(volume, x, y, z);
-          if (!volume.weights[index] || sourceWeights[index]) continue;
+          if (
+            !volume.weights[index] ||
+            sourceWeights[index] ||
+            (!volume.measuredSupport[index] && !volume.derivedSupport[index])
+          )
+            continue;
           let support = 0;
           const sum = [0, 0, 0];
           directions.forEach(([dx, dy, dz]) => {
@@ -1807,6 +1870,8 @@ function volumeCorner(volume, x, y, z) {
     z: volume.origin.z + (z + 0.5) * volume.voxelSize,
     value: volume.values[index],
     weight: volume.weights[index],
+    measuredSupport: volume.measuredSupport[index],
+    derivedSupport: volume.derivedSupport[index],
     viewpoints: volume.viewpointCounts[index],
     variance: volume.weightSums[index] > 0
       ? Math.sqrt(Math.max(0, volume.varianceSums[index] / volume.weightSums[index])) * volume.truncation
@@ -1839,19 +1904,28 @@ function extractSurfaceNet(volume, report, options = {}) {
     highVariance: 0,
     freeSpace: 0,
   };
+  const hasSurfaceEvidence = (corner) =>
+    corner?.weight >= 1 &&
+    (corner.measuredSupport >= 1 || corner.derivedSupport >= 5);
   for (let z = 0; z < cellDepth; z++)
     for (let y = 0; y < cellHeight; y++)
       for (let x = 0; x < cellWidth; x++) {
         const corners = CUBE_CORNERS.map(([dx, dy, dz]) => volumeCorner(volume, x + dx, y + dy, z + dz));
         // An unknown corner is not evidence of empty space. Allow a supported
         // boundary cell, but intersect only edges with measured endpoints.
-        const known = corners.filter((corner) => corner.weight >= 1);
+        const known = corners.filter(
+          (corner) =>
+            corner.weight >= 1 &&
+            (corner.measuredSupport >= 1 || corner.derivedSupport >= 5),
+        );
         if (known.length < 4) {
           rejectionCounts.insufficientSupport++;
           continue;
         }
         const reliable = (corner) => {
           const closeRange = corner.meanDepth < 0.9;
+          const derivedHole =
+            corner.measuredSupport < 1 && corner.derivedSupport >= 5;
           const requiredViews = options.surfaceMode
             // Close-range phone depth is noisier, but three independent
             // observations are enough to reject a transient reading. The old
@@ -1874,12 +1948,18 @@ function extractSurfaceNet(volume, report, options = {}) {
             corner.freeSpaceVotes >= Math.max(3, corner.weight * 1.25);
           const repeatedVariance =
             corner.viewpoints >= (options.surfaceMode ? 3 : 2);
-          return (
-            corner.weight >= requiredViews &&
-            corner.viewpoints >= 2 &&
-            (!repeatedVariance || corner.variance <= varianceLimit) &&
-            !contradictedByFreeSpace
-          );
+          // A derived hole may participate only as a small enclosed repair;
+          // it is deliberately never assigned independent viewpoints. Direct
+          // samples retain the normal multi-view requirement.
+          return derivedHole
+            ? corner.weight >= 1 &&
+                (!repeatedVariance || corner.variance <= varianceLimit) &&
+                !contradictedByFreeSpace
+            : corner.weight >= requiredViews &&
+                corner.measuredSupport >= 1 &&
+                corner.viewpoints >= 2 &&
+                (!repeatedVariance || corner.variance <= varianceLimit) &&
+                !contradictedByFreeSpace;
         };
         const confirmed = corners.filter(
           reliable,
@@ -1913,7 +1993,7 @@ function extractSurfaceNet(volume, report, options = {}) {
         CUBE_EDGES.forEach(([firstIndex, secondIndex]) => {
           const first = corners[firstIndex];
           const second = corners[secondIndex];
-          if (first.weight < 1 || second.weight < 1) return;
+          if (!hasSurfaceEvidence(first) || !hasSurfaceEvidence(second)) return;
           // The cell already has four independently reliable corners. Do not
           // require both edge endpoints to pass the multi-view test: that
           // erased valid boundary triangles when one camera saw an edge or a
@@ -1968,7 +2048,7 @@ function extractSurfaceNet(volume, report, options = {}) {
       for (let x = 0; x < width - 1; x++) {
         const first = volumeCorner(volume, x, y, z);
         const second = volumeCorner(volume, x + 1, y, z);
-        if (first.weight >= 1 && second.weight >= 1 && (first.value < 0) !== (second.value < 0))
+        if (hasSurfaceEvidence(first) && hasSurfaceEvidence(second) && (first.value < 0) !== (second.value < 0))
           addQuad(cell(x, y - 1, z - 1), cell(x, y, z - 1), cell(x, y, z), cell(x, y - 1, z), first.value < 0);
       }
   for (let z = 1; z < depth - 1; z++)
@@ -1976,7 +2056,7 @@ function extractSurfaceNet(volume, report, options = {}) {
       for (let x = 1; x < width - 1; x++) {
         const first = volumeCorner(volume, x, y, z);
         const second = volumeCorner(volume, x, y + 1, z);
-        if (first.weight >= 1 && second.weight >= 1 && (first.value < 0) !== (second.value < 0))
+        if (hasSurfaceEvidence(first) && hasSurfaceEvidence(second) && (first.value < 0) !== (second.value < 0))
           addQuad(cell(x - 1, y, z - 1), cell(x - 1, y, z), cell(x, y, z), cell(x, y, z - 1), first.value < 0);
       }
   for (let z = 0; z < depth - 1; z++)
@@ -1984,7 +2064,7 @@ function extractSurfaceNet(volume, report, options = {}) {
       for (let x = 1; x < width - 1; x++) {
         const first = volumeCorner(volume, x, y, z);
         const second = volumeCorner(volume, x, y, z + 1);
-        if (first.weight >= 1 && second.weight >= 1 && (first.value < 0) !== (second.value < 0))
+        if (hasSurfaceEvidence(first) && hasSurfaceEvidence(second) && (first.value < 0) !== (second.value < 0))
           addQuad(cell(x - 1, y - 1, z), cell(x, y - 1, z), cell(x, y, z), cell(x - 1, y, z), first.value < 0);
       }
   return { positions: new Float32Array(positions), colors: new Uint8Array(colors), indices: new Uint32Array(indices), rejectionCounts };
@@ -3030,6 +3110,18 @@ export function stabilizeMeasuredWallSectors(mesh, walls = [], voxelSize = 0.03)
     return { ...mesh, stabilizedPlaneCount: 0, stabilizedVertexCount: 0 };
   const positions = new Float32Array(mesh.positions);
   const normals = computeNormals(mesh);
+  const adjacency = Array.from(
+    { length: positions.length / 3 },
+    () => new Set(),
+  );
+  for (let index = 0; index < mesh.indices.length; index += 3) {
+    const a = mesh.indices[index];
+    const b = mesh.indices[index + 1];
+    const c = mesh.indices[index + 2];
+    adjacency[a].add(b); adjacency[a].add(c);
+    adjacency[b].add(a); adjacency[b].add(c);
+    adjacency[c].add(a); adjacency[c].add(b);
+  }
   // Mobile depth noise and small pose drift can bow an otherwise well
   // supported wall by more than one voxel. The cap keeps nearby furniture and
   // recessed surfaces out of the correction; no vertices or triangles are
@@ -3067,9 +3159,29 @@ export function stabilizeMeasuredWallSectors(mesh, walls = [], voxelSize = 0.03)
       )
         return;
       if (!best || Math.abs(distance) < Math.abs(best.distance))
-        best = { normal, distance };
+        best = { normal, distance, wallOffset: wall.wallOffset };
     });
     if (!best) continue;
+    // A plane is safe to apply only when the immediate connected patch also
+    // agrees with it. Global proximity alone can flatten curtain folds,
+    // trim, or a shelf front that happens to sit within a few centimetres of
+    // the wall. Median residual keeps ordinary measured ripple eligible while
+    // rejecting isolated/edge-layer vertices.
+    const neighbourResiduals = [...adjacency[vertex]]
+      .map((neighbour) => {
+        const neighbourOffset = neighbour * 3;
+        return Math.abs(
+          positions[neighbourOffset] * best.normal.x +
+            positions[neighbourOffset + 2] * best.normal.z -
+            best.wallOffset,
+        );
+      })
+      .filter((value) => Number.isFinite(value));
+    if (neighbourResiduals.length < 2) continue;
+    neighbourResiduals.sort((left, right) => left - right);
+    const medianResidual =
+      neighbourResiduals[Math.floor(neighbourResiduals.length / 2)];
+    if (medianResidual > distanceLimit * 0.7) continue;
     positions[offset] -= best.normal.x * best.distance * 0.9;
     positions[offset + 2] -= best.normal.z * best.distance * 0.9;
     stabilizedVertexCount++;
@@ -3156,6 +3268,18 @@ export function stabilizeMeasuredHorizontalSurfaces(
 
   const positions = new Float32Array(mesh.positions);
   const normals = computeNormals(mesh);
+  const adjacency = Array.from(
+    { length: positions.length / 3 },
+    () => new Set(),
+  );
+  for (let index = 0; index < mesh.indices.length; index += 3) {
+    const a = mesh.indices[index];
+    const b = mesh.indices[index + 1];
+    const c = mesh.indices[index + 2];
+    adjacency[a].add(b); adjacency[a].add(c);
+    adjacency[b].add(a); adjacency[b].add(c);
+    adjacency[c].add(a); adjacency[c].add(b);
+  }
   const distanceLimit = Math.max(0.035, voxelSize * 1.55);
   let stabilizedHorizontalVertexCount = 0;
   for (let vertex = 0; vertex < positions.length / 3; vertex++) {
@@ -3169,6 +3293,14 @@ export function stabilizeMeasuredHorizontalSurfaces(
         closest = distance;
     });
     if (closest === null) continue;
+    const residuals = [...adjacency[vertex]]
+      .map((neighbour) => Math.abs(positions[neighbour * 3 + 1] - (positions[offset + 1] - closest)))
+      .sort((left, right) => left - right);
+    if (
+      residuals.length < 2 ||
+      residuals[Math.floor(residuals.length / 2)] > distanceLimit * 0.7
+    )
+      continue;
     positions[offset + 1] -= closest * 0.92;
     stabilizedHorizontalVertexCount++;
   }
@@ -4728,6 +4860,8 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     robustlyDownweightedSamples: volume.robustlyDownweightedSamples,
     robustlyRejectedSamples: volume.robustlyRejectedSamples,
     motionDownweightedSamples: volume.motionDownweightedSamples,
+    measuredFusionSamples: volume.measuredFusionSamples,
+    repairedFusionSamples: volume.repairedFusionSamples,
   };
   if (confirmedVoxels < 120)
     return failure("The captured views do not overlap enough for a reliable surface. Keep each wall visible while moving sideways.", {

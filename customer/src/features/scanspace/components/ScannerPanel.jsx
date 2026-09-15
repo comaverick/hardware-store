@@ -38,6 +38,7 @@ const captureQualitySummary = (stats, fusion = null) => ({
   colorClippedRatio: stats.colorClippedRatio || 0,
   colorFramesSkippedForMotion: stats.colorFramesSkippedForMotion || 0,
   textureRefreshes: stats.textureRefreshes || 0,
+  depthRefreshes: stats.depthRefreshes || 0,
   floorOutlierSamples: fusion?.floorOutlierSamples || 0,
   floorOutlierRatio: fusion?.floorOutlierRatio || 0,
   removedBridgeTriangles: fusion?.removedBridgeTriangles || 0,
@@ -50,6 +51,8 @@ const captureQualitySummary = (stats, fusion = null) => ({
   textureFramesAfterSelection:
     fusion?.alignment?.textureFramesAfterSelection || 0,
   lowQualityTextureFrames: fusion?.lowQualityTextureFrames || 0,
+  measuredFusionSamples: fusion?.robustFusion?.measuredFusionSamples || 0,
+  repairedFusionSamples: fusion?.robustFusion?.repairedFusionSamples || 0,
   softTextureFallbackTriangles:
     fusion?.softTextureFallbackTriangles || 0,
   rejectedSoftTextureCandidates:

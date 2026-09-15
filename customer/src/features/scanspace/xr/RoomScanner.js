@@ -321,6 +321,7 @@ export class RoomScanner {
       colorFrameReliable: true,
       colorFramesSkippedForMotion: 0,
       textureRefreshes: 0,
+      depthRefreshes: 0,
       acceptedDepthFrames: 0,
       rejectedDepthFrames: 0,
       frameQuality: "waiting",
@@ -620,7 +621,21 @@ export class RoomScanner {
               depth,
               motion,
             );
-          else
+          else {
+            // A stationary revisit may contain a better depth sample even
+            // though it is not a new independent viewpoint. Replace only the
+            // nearby keyframe when its measured support is materially better;
+            // texture refresh remains a separate decision below.
+            this.refreshNearbyDepthKeyframe(
+              framePoints,
+              view,
+              columns,
+              rows,
+              time,
+              keyframePose,
+              depth,
+              motion,
+            );
             this.refreshNearbyTextureKeyframe(
               colorAt,
               keyframePose,
@@ -628,6 +643,7 @@ export class RoomScanner {
               motion,
               time,
             );
+          }
           // Feedback counts only views actually retained for fusion, with
           // the full image grid as denominator (including missing depth).
           this.stats.currentConfirmedRatio =
@@ -925,6 +941,110 @@ export class RoomScanner {
     this.compactTextureKeyframes();
     return !!target.frame.colorImage?.length;
   }
+  refreshNearbyDepthKeyframe(
+    points,
+    view,
+    columns,
+    rows,
+    timestamp,
+    pose,
+    depth = null,
+    motion = {},
+  ) {
+    if (!points?.length || !this.keyframes.length) return false;
+    const current = keyframePoseForRetention({
+      camera: new Float32Array([pose.position.x, pose.position.y, pose.position.z]),
+      transformMatrix: view.transform.matrix,
+      timestamp,
+    });
+    const nearby = this.keyframes
+      .map((frame, index) => {
+        const retained = keyframePoseForRetention(frame);
+        const spatial = Math.hypot(
+          current.position[0] - retained.position[0],
+          current.position[1] - retained.position[1],
+          current.position[2] - retained.position[2],
+        );
+        const directionDot = Math.max(
+          -1,
+          Math.min(
+            1,
+            current.direction[0] * retained.direction[0] +
+              current.direction[1] * retained.direction[1] +
+              current.direction[2] * retained.direction[2],
+          ),
+        );
+        return { frame, index, spatial, angular: Math.acos(directionDot) };
+      })
+      .filter(({ spatial, angular }) => spatial <= 0.04 && angular <= 0.07)
+      .sort(
+        (left, right) =>
+          left.spatial / 0.04 + left.angular / 0.07 -
+          (right.spatial / 0.04 + right.angular / 0.07),
+      );
+    if (!nearby.length) return false;
+    const candidate = createRgbdKeyframe(points, {
+      columns,
+      rows,
+      projectionMatrix: view.projectionMatrix,
+      transformMatrix: view.transform.matrix,
+      viewProjectionMatrix: view.projectionMatrix,
+      viewTransformMatrix: view.transform.matrix,
+      geometryMode: "view-aligned-v1",
+      nativeDepthWidth: depth?.width || 0,
+      nativeDepthHeight: depth?.height || 0,
+      nativeDepthUvTransform: depth?.normDepthBufferFromNormView?.matrix,
+      camera: pose.position,
+      timestamp,
+      keepColor: false,
+      linearSpeed: motion.linearSpeed,
+      angularSpeed: motion.angularSpeed,
+    });
+    if (!candidate) return false;
+    const filtered = filterDepth(candidate);
+    const measuredCount = filtered.measuredMask.reduce(
+      (count, value) => count + value,
+      0,
+    );
+    const candidateQuality = Math.max(
+      0,
+      measuredCount - filtered.weakSupportedCount * 0.35,
+    );
+    candidate.depthQuality = candidateQuality;
+    candidate.measuredDepthCount = measuredCount;
+    const target = nearby.find(({ frame }) => {
+      const previousQuality = Number(frame.depthQuality) || frame.validCount || 0;
+      const previousMeasured =
+        Number(frame.measuredDepthCount) || frame.validCount || 0;
+      return (
+        candidateQuality >= Math.max(8, previousQuality * 1.08) ||
+        measuredCount >= previousMeasured + 12
+      );
+    });
+    if (!target) return false;
+    // Keep a previous sharp image only with its original camera pose. The
+    // replacement is close enough for geometry, but its color projection must
+    // not silently move with the new depth matrix.
+    if (target.frame.colorImage?.length) {
+      candidate.colorImage = target.frame.colorImage;
+      candidate.colorWidth = target.frame.colorWidth;
+      candidate.colorHeight = target.frame.colorHeight;
+      candidate.colorChannels = target.frame.colorChannels;
+      candidate.colorSharpness = target.frame.colorSharpness;
+      candidate.colorFocus = target.frame.colorFocus;
+      candidate.colorClippedRatio = target.frame.colorClippedRatio;
+      candidate.textureLinearSpeed = target.frame.textureLinearSpeed;
+      candidate.textureAngularSpeed = target.frame.textureAngularSpeed;
+      candidate.viewProjectionMatrix = target.frame.viewProjectionMatrix;
+      candidate.viewTransformMatrix = target.frame.viewTransformMatrix;
+    }
+    this.keyframes[target.index] = candidate;
+    this.stats.depthRefreshes++;
+    // Remove the old observation from the live splat preview as well as from
+    // final fusion. This rebuild is bounded by the same retained keyframes.
+    this.rebuildPreviewCloud();
+    return true;
+  }
   captureKeyframe(
     points,
     view,
@@ -971,6 +1091,15 @@ export class RoomScanner {
       angularSpeed: motion.angularSpeed,
     });
     if (!keyframe) return;
+    const filtered = filterDepth(keyframe);
+    keyframe.measuredDepthCount = filtered.measuredMask.reduce(
+      (count, value) => count + value,
+      0,
+    );
+    keyframe.depthQuality = Math.max(
+      0,
+      keyframe.measuredDepthCount - filtered.weakSupportedCount * 0.35,
+    );
     keyframe.colorFocus =
       Number(colorAt?.focus ?? colorSnapshot?.focus) || 0;
     keyframe.textureLinearSpeed = colorSnapshot
@@ -1059,6 +1188,10 @@ export class RoomScanner {
       });
     });
     this.cloud.add(points, frameId, frame.camera);
+  }
+  rebuildPreviewCloud() {
+    this.cloud = new VoxelCloud();
+    this.keyframes.forEach((frame, index) => this.addSavedPreview(frame, index));
   }
   togglePause() {
     if (this.originChanged) return;
