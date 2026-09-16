@@ -1,5 +1,6 @@
 import { Matrix4, PerspectiveCamera } from "three";
 import { consolidatePlanarSurfaces } from "./planarSurface";
+import { serializePartialScan, parsePartialScan } from "./partialScanFile";
 import {
   constrainSurfaceDeformation,
   overlapTextureColorScales,
@@ -32,6 +33,31 @@ const triangleMesh = () => ({
   positions: new Float32Array([-0.1, -0.1, -2, 0.1, -0.1, -2, -0.1, 0.1, -2]),
   indices: new Uint32Array([0, 1, 2]),
   colors: new Uint8Array(9).fill(30),
+});
+
+test("a locally sharp painting view wins over a globally sharper curtain view and round-trips unchanged", () => {
+  const frames = [cameraFrame(), cameraFrame()];
+  frames.forEach((frame, index) => {
+    frame.colorWidth = frame.colorHeight = 64;
+    frame.colorImage = new Uint8Array(64 * 64 * 4);
+    for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) {
+      const painting = x >= 20 && x < 44 && y >= 20 && y < 44;
+      const sharp = index ? painting : !painting;
+      const c = sharp ? (x + y) % 2 ? 70 : 210 : 140;
+      frame.colorImage.set([c, c, c, 255], (y * 64 + x) * 4);
+    }
+  });
+  const original = triangleMesh();
+  const result = texturedMesh(original, frames, { scales: [], pairCount: 0 });
+  expect(result.positions).toEqual(original.positions);
+  expect(result.indices).toEqual(original.indices);
+  expect(result.rejectedSoftTextureCandidates).toBeGreaterThan(0);
+  // Camera 1 is the second tile, despite its low whole-image sharpness.
+  for (let i = 0; i < result.uvs.length; i += 2) expect(result.uvs[i]).toBeGreaterThan(0.5);
+  const restored = parsePartialScan(serializePartialScan({ mesh: result }));
+  expect(restored.mesh.texture).toEqual(result.texture);
+  expect(restored.mesh.positions).toEqual(result.positions);
+  expect(restored.mesh.uvs).toEqual(result.uvs);
 });
 
 test("consolidated wall topology is textured at its corrected positions", () => {

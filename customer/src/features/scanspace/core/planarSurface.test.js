@@ -61,6 +61,45 @@ test('real curtain folds and narrow curved strips are not treated as flat walls'
   expect(result.planarConsolidation.planes).toHaveLength(0);
   expect(result.positions).toBe(source.positions);
 });
+test('shallow curtain folds inside the old flattening radius retain their measured depth', () => {
+  const source = sheet({ step: 0.025, z: (x) => 0.028 * Math.cos(x * Math.PI * 4) });
+  const result = consolidatePlanarSurfaces(source);
+  expect(result.planarConsolidation.protectedVertices).toBeGreaterThan(0);
+  const depths = Array.from(result.positions).filter((_, i) => i % 3 === 2);
+  expect(Math.max(...depths) - Math.min(...depths)).toBeGreaterThan(0.05);
+  expect(result.planarConsolidation.removedOverlapArea).toBeLessThan(0.01);
+});
+test('a raised picture retains depth without a visible back or side face', () => {
+  const source = sheet({ step: 0.025, z: (x, y) => x > 0.5 && x < 1.25 && y > 0.65 && y < 1.45 ? 0.03 : 0 });
+  const result = consolidatePlanarSurfaces(source);
+  const raised = [];
+  for (let i = 0; i < result.positions.length; i += 3)
+    if (result.positions[i] > 0.6 && result.positions[i] < 1.15 && result.positions[i + 1] > 0.75 && result.positions[i + 1] < 1.35) raised.push(result.positions[i + 2]);
+  expect(raised.length).toBeGreaterThan(0);
+  expect(Math.min(...raised)).toBeGreaterThan(0.029);
+  expect(result.planarConsolidation.protectedVertices).toBeGreaterThan(0);
+});
+test('independent measured views protect folds even after preliminary smoothing', () => {
+  const measured = sheet({ step: 0.025, z: (x) => 0.028 * Math.cos(x * Math.PI * 4) });
+  const smoothed = { ...measured, positions: measured.positions.slice() };
+  for (let i = 2; i < smoothed.positions.length; i += 3) smoothed.positions[i] *= 0.55;
+  const frames = [0, 0.08].map((x) => ({
+    positions: measured.positions, measuredMask: new Uint8Array(measured.positions.length / 3).fill(1),
+    filteredCount: measured.positions.length / 3, camera: [x, 1, 2],
+  }));
+  const result = consolidatePlanarSurfaces(smoothed, { sourcePositions: measured.positions, evidenceFrames: frames });
+  const depths = Array.from(result.positions).filter((_, i) => i % 3 === 2);
+  expect(Math.max(...depths) - Math.min(...depths)).toBeGreaterThan(0.052);
+  expect(result.planarConsolidation.protectedVertices).toBeGreaterThan(5000);
+});
+test('densely sampled duplicate wall layers still consolidate', () => {
+  const source = join(sheet({ step: 0.025 }), sheet({ step: 0.025, origin: [0, 0, 0.035] }));
+  const result = consolidatePlanarSurfaces(source);
+  expect(result.planarConsolidation.planes).toHaveLength(1);
+  expect(result.planarConsolidation.protectedVertices).toBe(0);
+  expect(result.planarConsolidation.removedOverlapArea).toBeGreaterThan(3.9);
+  expect(area(result)).toBeCloseTo(4, 3);
+});
 test('separate parallel surfaces and perpendicular corners retain their geometry', () => {
   const source = join(sheet(), sheet({ origin: [0, 0, 0.25] }), sheet({ rotate: true, origin: [2, 0, 0] }));
   const result = consolidatePlanarSurfaces(source);

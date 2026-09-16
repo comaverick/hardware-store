@@ -936,7 +936,7 @@ test("allows validated multi-view surface fusion without a room heading sweep", 
   expect(result.mesh?.kind).toBe("projective-tsdf-surface-net");
   expect(result.mesh?.triangleCount).toBeGreaterThan(0);
   expect(result.diagnostics.completionMode).toBe("surface");
-  expect(result.diagnostics.algorithmVersion).toBe(36);
+  expect(result.diagnostics.algorithmVersion).toBe(37);
   expect(result.diagnostics.planarConsolidation.planes.length).toBeGreaterThan(0);
   expect(result.diagnostics.globalSurfaceConsensus).toBeUndefined();
   expect(result.diagnostics.measuredSurfaceQuality.assessed).toBe(true);
@@ -947,6 +947,24 @@ test("allows validated multi-view surface fusion without a room heading sweep", 
     "final-mesh-positions",
   );
   expect(result.diagnostics.fallback).toBeUndefined();
+});
+
+test("independent texture observations cannot add depth support, warp or duplicate geometry", () => {
+  const frames = [planeKeyframe(0), planeKeyframe(0.08), planeKeyframe(-0.08)];
+  const options = { completionMode: "surface", maxDimension: 48, colorCalibration: false };
+  const before = fuseRgbdKeyframes(frames, options);
+  const photo = planeKeyframe(0.035);
+  const foregroundPhoto = planeKeyframe(0.035, true, false, false, 1);
+  const after = fuseRgbdKeyframes(frames, { ...options, textureKeyframes: [photo, foregroundPhoto] });
+  expect(after.diagnostics.independentTextureFrames).toBe(2);
+  expect(after.diagnostics.keyframes).toBe(before.diagnostics.keyframes);
+  expect(after.diagnostics.confirmedVoxels).toBe(before.diagnostics.confirmedVoxels);
+  expect(after.mesh.positions).toEqual(before.mesh.positions);
+  expect(after.mesh.indices).toEqual(before.mesh.indices);
+  expect(after.mesh.normals).toEqual(before.mesh.normals);
+  expect(after.observations).toEqual(before.observations);
+  const noGeometry = fuseRgbdKeyframes([], { ...options, textureKeyframes: [photo, foregroundPhoto] });
+  expect(noGeometry.mesh).toBeNull();
 });
 
 test("rejects a drifted pose without losing the consistent wall", () => {

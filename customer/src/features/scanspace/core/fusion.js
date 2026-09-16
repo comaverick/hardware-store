@@ -1,4 +1,6 @@
 import { consolidatePlanarSurfaces } from "./planarSurface.js";
+import { textureAtlasLayout, buildTextureDetailGrid, projectedPatchDetail,
+  detailPreservingCandidates } from "./textureDetail.js";
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const MIN_ROOM_DEPTH_METERS = 0.45;
@@ -3816,44 +3818,7 @@ export function textureProjectionStretch(points, projections, width, height) {
   };
 }
 
-function projectedTextureDetail(frame, projection) {
-  if (
-    !projection ||
-    !frame?.colorImage?.length ||
-    frame.colorWidth < 3 ||
-    frame.colorHeight < 3
-  )
-    return 0;
-  const x = clamp(
-    Math.round(projection.u * (frame.colorWidth - 1)),
-    1,
-    frame.colorWidth - 2,
-  );
-  const y = clamp(
-    Math.round((1 - projection.v) * (frame.colorHeight - 1)),
-    1,
-    frame.colorHeight - 2,
-  );
-  const luminanceAt = (sampleX, sampleY) => {
-    const offset =
-      (sampleY * frame.colorWidth + sampleX) * frame.colorChannels;
-    return (
-      frame.colorImage[offset] * 0.2126 +
-      frame.colorImage[offset + 1] * 0.7152 +
-      frame.colorImage[offset + 2] * 0.0722
-    );
-  };
-  const center = luminanceAt(x, y);
-  if (center < 6 || center > 249) return 0;
-  return (
-    Math.abs(luminanceAt(x - 1, y) - center) +
-    Math.abs(luminanceAt(x + 1, y) - center) +
-    Math.abs(luminanceAt(x, y - 1) - center) +
-    Math.abs(luminanceAt(x, y + 1) - center)
-  ) / 2;
-}
-
-function buildAtlas(frames, precomputedCalibration = null) {
+function buildAtlas(frames, precomputedCalibration = null, triangleCount = 0, options = {}) {
   const candidates = frames.filter(
     (frame) =>
       frame.colorImage?.length && frame.colorWidth && frame.colorHeight,
@@ -3869,6 +3834,7 @@ function buildAtlas(frames, precomputedCalibration = null) {
     frame.textureQuality =
       detail.sharpness * Math.sqrt(Math.max(0.5, detail.focus));
     frame.textureColorStatistics = imageColorStatistics(frame);
+    frame.textureDetailGrid = buildTextureDetailGrid(frame);
   });
   const rankedQuality = candidates
     .map((frame) => frame.textureQuality)
@@ -3896,15 +3862,9 @@ function buildAtlas(frames, precomputedCalibration = null) {
   // Normalize differently sized/oriented keyframe copies into equal atlas
   // tiles. UVs remain normalized per frame, so this resampling preserves
   // correspondence while keeping atlas addressing uniform.
-  const tileWidth = Math.max(...images.map((frame) => frame.colorWidth));
-  const tileHeight = Math.max(...images.map((frame) => frame.colorHeight));
-  const padding = 4;
-  const strideX = tileWidth + padding * 2;
-  const strideY = tileHeight + padding * 2;
-  const columns = Math.ceil(Math.sqrt(images.length + 1));
-  const rows = Math.ceil((images.length + 1) / columns);
-  const width = columns * strideX;
-  const height = rows * strideY;
+  const layout = textureAtlasLayout(images, triangleCount, options.maxTextureSize);
+  if (!layout) return null;
+  const { tileWidth, tileHeight, padding, strideX, strideY, columns, width, height } = layout;
   const data = new Uint8Array(width * height * 4).fill(255);
   // Reuse the calibration that was applied to TSDF vertex colours when the
   // caller already computed it for this exact frame set. Keeping atlas and
@@ -4103,8 +4063,8 @@ export function closestProjectiveDepthAgreement(
   return support >= 2 ? { ...closest, support } : null;
 }
 
-export function texturedMesh(mesh, frames, precomputedCalibration = null) {
-  const atlas = buildAtlas(frames, precomputedCalibration);
+export function texturedMesh(mesh, frames, precomputedCalibration = null, options = {}) {
+  const atlas = buildAtlas(frames, precomputedCalibration, mesh.indices.length / 3, options);
   const sharedNormals = computeNormals(mesh);
   if (!atlas) return { ...mesh, normals: sharedNormals, textureCoverage: 0 };
   const textureCandidateRejections = {
@@ -4296,14 +4256,19 @@ export function texturedMesh(mesh, frames, precomputedCalibration = null) {
         0,
         0.8,
       );
+      const local = projectedPatchDetail(frame, colorProjection);
       const localSharpness = clamp(
-        projectedTextureDetail(frame, colorProjection) /
+        local.detail /
           Math.max(1, atlas.referenceSharpness),
         0,
         1.8,
       );
       candidates.push({
         frame,
+        localFocus: local.focus,
+        localDetail: local.detail,
+        pixelDensity: projectionStretch.minimumScale * Math.min(1,
+          atlas.tileWidth / frame.colorWidth, atlas.tileHeight / frame.colorHeight),
         projections: colorProjections,
         recoveredTexture: farthestRecovery > 1,
         qualityPreferred:
@@ -4313,8 +4278,10 @@ export function texturedMesh(mesh, frames, precomputedCalibration = null) {
           facing * 1.45 +
           Math.min(2, 1 / distance) * 0.65 +
           sharpness * 0.28 +
-          quality * 1.05 +
-          localSharpness * 0.55 -
+          quality * 0.35 +
+          localSharpness * 0.7 +
+          Math.min(1.5, Math.sqrt(local.focus / 8)) * 0.6 +
+          clamp(Math.log2(Math.max(1, projectionStretch.minimumScale) / 128), -2, 2) * 0.3 -
           worstAgreement * 5 -
           Math.max(0, farthestRecovery - 1) * 0.18 -
           motionPenalty * 0.68 -
@@ -4322,20 +4289,11 @@ export function texturedMesh(mesh, frames, precomputedCalibration = null) {
           frameClippingPenalty * 0.8,
       });
     });
-    // Keep softer frames as a coverage fallback, but never let camera
-    // distance or a patch-coherence bonus choose one over a clear valid view
-    // of the same triangle. This is the distinction the v33 keep-all atlas
-    // was missing: availability is not the same as preference.
-    const clearCandidates = candidates.filter(
-      (candidate) => candidate.qualityPreferred,
-    );
-    if (clearCandidates.length)
-      textureCandidateRejections.softWhenClearAvailable +=
-        candidates.length - clearCandidates.length;
-    const viableCandidates = (clearCandidates.length
-      ? clearCandidates
-      : candidates
-    )
+    // Keep soft/flat patches when they are the only measured photo, but do not
+    // let a coherence vote override a substantially clearer local observation.
+    const clearCandidates = detailPreservingCandidates(candidates);
+    textureCandidateRejections.softWhenClearAvailable += candidates.length - clearCandidates.length;
+    const viableCandidates = clearCandidates
       .sort((left, right) => right.score - left.score)
       .slice(0, 4);
     const record = {
@@ -4763,7 +4721,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   if (localLayerConsensus.diagnostics)
     alignment.localLayerConsensus = localLayerConsensus.diagnostics;
   const stages = {
-    algorithmVersion: 36,
+    algorithmVersion: 37,
     completionMode: options.completionMode === "surface" ? "surface" : "room",
     reconstructionProfile: options.reconstructionProfile || "quality",
     supportMode: "translated-camera-viewpoints",
@@ -4841,10 +4799,18 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   // Calibrate overlapping camera exposures before color fusion as well as
   // atlas construction. Otherwise triangles that fall back to fused vertex
   // colors can still show the raw exposure jump that the atlas corrected.
+  // Texture-only observations never enter geometry or multi-view support.
+  const extraTextureFrames = options.poseRefinement === "validated" ? [] :
+    (options.textureKeyframes || []).slice(0, 15)
+      .filter((frame) => frame?.tracking !== false && !frame?.legacyGeometryAmbiguous)
+      .map((frame, index) => prepareFrame(frame, keyframes.length + index, options))
+      .filter(Boolean);
+  const textureFrames = [...usable, ...extraTextureFrames];
+  stages.independentTextureFrames = extraTextureFrames.length;
   const colorCalibration =
     options.colorCalibration === false
       ? { scales: [], pairCount: 0 }
-      : overlapTextureColorScales(usable);
+      : overlapTextureColorScales(textureFrames);
   if (colorCalibration?.scales?.length)
     usable.forEach((frame, index) => {
       if (colorCalibration.scales[index])
@@ -5113,7 +5079,11 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   // running it before texturing keeps photos aligned with the final geometry.
   if (surfaceCompletion) {
     volume = null; // release the dense TSDF before allocating patch topology
-    surface = consolidatePlanarSurfaces(surface, { voxelSize: volumeVoxelSize });
+    surface = consolidatePlanarSurfaces(surface, {
+      voxelSize: volumeVoxelSize,
+      sourcePositions: measuredPositions,
+      evidenceFrames: usable,
+    });
     stages.planarConsolidation = surface.planarConsolidation;
   }
   wallStructure = meshWallStructureDiagnostics(surface);
@@ -5137,7 +5107,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       },
     );
   report?.("texturing", 88);
-  const textured = texturedMesh(surface, usable, colorCalibration);
+  const textured = texturedMesh(surface, textureFrames, colorCalibration, options);
   const floorY = Number.isFinite(options.floorY) ? options.floorY : 0;
   const mesh = {
     version: 3,

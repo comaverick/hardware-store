@@ -315,6 +315,7 @@ export class RoomScanner {
       fusionKeyframes: 0,
       fusionKeyframeCompactions: 0,
       textureKeyframes: 0,
+      independentTextureCaptures: 0,
       colorSharpness: 0,
       colorFocus: 0,
       colorClippedRatio: 0,
@@ -540,7 +541,7 @@ export class RoomScanner {
             this.stats.colorFocus = colorAt.focus || 0;
             this.stats.colorClippedRatio = colorAt.clippedRatio || 0;
             this.stats.colorFrameReliable =
-              this.isColorFrameReliable(motion);
+              this.isColorFrameReliable(motion, colorAt);
             this.colorFailures = 0;
           }
         } catch (error) {
@@ -607,6 +608,11 @@ export class RoomScanner {
           this.stats.frameQuality = "pose-inconsistent";
           this.stats.currentConfirmedRatio = 0;
         } else {
+          // Retain RGB with its OWN same-frame depth and camera pose, even
+          // between geometry keyframes. These observations never enter TSDF
+          // fusion or the confirmed-coverage preview.
+          this.captureTextureObservation(framePoints, view, columns, rows,
+            time, colorAt, keyframePose, depth, motion);
           // Pose gating decides whether this accepted depth frame adds a
           // useful new viewpoint. Fast/sparse frames never reach fusion.
           if (keyframeEligible)
@@ -636,7 +642,7 @@ export class RoomScanner {
               depth,
               motion,
             );
-            this.refreshNearbyTextureKeyframe(
+            if (!this.textureKeyframes?.length) this.refreshNearbyTextureKeyframe(
               colorAt,
               keyframePose,
               view,
@@ -843,13 +849,59 @@ export class RoomScanner {
     if (moved > 0.35) return false;
     return consistency.medianDistance > 0.06 && consistency.upperDistance > 0.095;
   }
-  isColorFrameReliable(motion = {}) {
-    return (
+  isColorFrameReliable(motion = {}, colorAt = null) {
+    const settled = (
       (Number(motion.textureLinearSpeed ?? motion.linearSpeed) || 0) <=
         MAX_COLOR_CAPTURE_LINEAR_SPEED &&
       (Number(motion.textureAngularSpeed ?? motion.angularSpeed) || 0) <=
         MAX_COLOR_CAPTURE_ANGULAR_SPEED
     );
+    // Speed is a proxy for blur, not a measurement of it. A well-focused
+    // exposure during a slow sweep can be useful; fast/tracking jumps cannot.
+    return settled || (!!colorAt?.quality?.samples &&
+      colorAt.quality.samples >= 64 && colorAt.focus >= 2.5 &&
+      colorAt.sharpness >= 6 && colorAt.clippedRatio < 0.2 &&
+      (Number(motion.textureLinearSpeed ?? motion.linearSpeed) || 0) <= 0.45 &&
+      (Number(motion.textureAngularSpeed ?? motion.angularSpeed) || 0) <= 0.6);
+  }
+  captureTextureObservation(points, view, columns, rows, timestamp, colorAt,
+    pose, depth = null, motion = {}) {
+    if (!colorAt?.snapshot || !this.isColorFrameReliable(motion, colorAt) ||
+        timestamp - (this.lastTextureCandidateAt ?? -Infinity) < 200) return false;
+    this.lastTextureCandidateAt = timestamp;
+    const candidatePose = textureKeyframePoseForRetention({ viewTransformMatrix: view.transform.matrix });
+    const pool = this.textureKeyframes || [];
+    const quality = {
+      colorSharpness: colorAt.sharpness, colorFocus: colorAt.focus,
+      colorClippedRatio: colorAt.clippedRatio,
+      textureLinearSpeed: motion.textureLinearSpeed ?? motion.linearSpeed,
+      textureAngularSpeed: motion.textureAngularSpeed ?? motion.angularSpeed,
+    };
+    const nearby = pool.findIndex((frame) =>
+      texturePoseDistance(candidatePose, textureKeyframePoseForRetention(frame)) < 0.4);
+    if (nearby >= 0 && textureQualityScore(quality) <= textureQualityScore(pool[nearby]) * 1.08)
+      return false;
+    const snapshot = colorAt.snapshot();
+    if (!snapshot?.data?.length) return false;
+    const candidate = createRgbdKeyframe(points, {
+      columns, rows, timestamp, camera: pose.position,
+      projectionMatrix: view.projectionMatrix, transformMatrix: view.transform.matrix,
+      viewProjectionMatrix: view.projectionMatrix, viewTransformMatrix: view.transform.matrix,
+      geometryMode: "view-aligned-v1", keepColor: true, colorImage: snapshot,
+      nativeDepthWidth: depth?.width || 0, nativeDepthHeight: depth?.height || 0,
+      nativeDepthUvTransform: depth?.normDepthBufferFromNormView?.matrix,
+      ...quality,
+    });
+    if (!candidate) return false;
+    Object.assign(candidate, quality, { textureOnly: true });
+    if (nearby >= 0) pool.splice(nearby, 1, candidate);
+    else pool.push(candidate);
+    this.textureKeyframes = pool;
+    // Legacy depth frames can still own photos (restored diagnostic captures).
+    // Compact the union, never allocate a second unbounded image collection.
+    this.compactTextureKeyframes();
+    this.stats.independentTextureCaptures = (this.stats.independentTextureCaptures || 0) + 1;
+    return this.textureKeyframes.includes(candidate);
   }
   refreshNearbyTextureKeyframe(
     colorAt,
@@ -1056,11 +1108,11 @@ export class RoomScanner {
     depth = null,
     motion = {},
   ) {
-    const colorFrameReliable = this.isColorFrameReliable(motion);
+    const colorFrameReliable = this.isColorFrameReliable(motion, colorAt);
     // Per-depth RGB is cheap and remains useful to the fusion fallback even
     // when motion makes a full camera image unsuitable for the texture atlas.
     // Only the high-resolution image is withheld in that case.
-    const colorSnapshot = colorFrameReliable
+    const colorSnapshot = colorFrameReliable && !this.textureKeyframes?.length
       ? colorAt?.snapshot?.() || null
       : null;
     this.stats.colorFrameReliable = !colorAt || colorFrameReliable;
@@ -1153,22 +1205,27 @@ export class RoomScanner {
     maximum = MAX_TEXTURE_KEYFRAMES,
     retained = MAX_TEXTURE_KEYFRAMES,
   ) {
-    const textured = this.keyframes
+    const frames = [...this.keyframes, ...(this.textureKeyframes || [])];
+    const textured = frames
       .map((frame, index) => (frame.colorImage?.length ? index : -1))
       .filter((index) => index >= 0);
+    const largestImage = Math.max(1, ...textured.map((index) => frames[index].colorImage.byteLength));
+    const budgetCount = Math.max(1, Math.floor(24 * 1024 * 1024 / largestImage));
+    maximum = Math.min(maximum, budgetCount);
     if (textured.length > maximum) {
       const targetCount = Math.max(
         1,
         Math.min(maximum, retained, textured.length),
       );
       const keep = new Set(
-        selectTextureKeyframesForRetention(this.keyframes, targetCount),
+        selectTextureKeyframesForRetention(frames, targetCount),
       );
       textured.forEach((index) => {
-        if (!keep.has(index)) this.keyframes[index].colorImage = null;
+        if (!keep.has(index)) frames[index].colorImage = null;
       });
     }
-    this.stats.textureKeyframes = this.keyframes.reduce(
+    this.textureKeyframes = (this.textureKeyframes || []).filter((frame) => frame.colorImage?.length);
+    this.stats.textureKeyframes = frames.reduce(
       (count, frame) => count + (frame.colorImage?.length ? 1 : 0),
       0,
     );
@@ -1206,6 +1263,8 @@ export class RoomScanner {
     return {
       points: this.cloud.values(true),
       keyframes: this.keyframes,
+      textureKeyframes: this.textureKeyframes || [],
+      maxTextureSize: this.renderer?.capabilities?.maxTextureSize || 4096,
       floorY: this.floorY,
       observer: this.observer,
       stats: { ...this.stats },

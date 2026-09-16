@@ -2,8 +2,8 @@
 // Never attach the opaque texture to a framebuffer or retain it past the XR frame.
 // A little more source detail materially improves shelf edges and text while
 // staying below the portable-export limits used by ScanSpace.
-export const DEFAULT_COLOR_LONG_EDGE = 720;
-export const DEFAULT_COLOR_SHORT_EDGE = 360;
+export const DEFAULT_COLOR_LONG_EDGE = 1024;
+export const DEFAULT_COLOR_SHORT_EDGE = 512;
 
 export function measureColorFrameQuality(
   pixels,

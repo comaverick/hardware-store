@@ -290,7 +290,7 @@ export default function ScannerPanel({
     if (!raw.keyframes?.length) return { mesh: null, diagnostics: null };
     const transfer = preserveInput
       ? []
-      : raw.keyframes.flatMap((frame) =>
+      : [...new Set([...raw.keyframes, ...(raw.textureKeyframes || [])].flatMap((frame) =>
           [
             frame.positions,
             frame.depths,
@@ -306,8 +306,10 @@ export default function ScannerPanel({
           ]
             .filter(Boolean)
             .map((array) => array.buffer),
-        );
+        ))];
     const baseOptions = {
+      textureKeyframes: raw.textureKeyframes || [],
+      maxTextureSize: raw.maxTextureSize || 4096,
       floorY: raw.floorY,
       observer: raw.observer,
       headingCoverage: raw.stats.coverage || 0,

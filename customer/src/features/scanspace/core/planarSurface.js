@@ -161,7 +161,105 @@ function hasMeasuredThickness(group, available, plane) {
   });
 }
 
-function detectPlanes(records, distanceLimit, report) {
+// Look for spatially coherent relief BEFORE projection. A broad normal vote
+// alone cannot distinguish a shallow curtain or a picture from wall noise.
+// Cell means cancel overlapping noisy sheets; local steps/ridges survive.
+function protectMeasuredRelief(group, plane, sourcePositions, frames, protectedVertices) {
+  const [u, v] = basis(plane.n), size = 0.075, cells = new Map(), seen = new Set();
+  const keyAt = (p) => `${Math.floor(dot(u, p) / size)},${Math.floor(dot(v, p) / size)}`;
+  for (const r of group) for (let corner = 0; corner < 3; corner++) {
+    const id = r.ids[corner];
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const p = sourcePositions ? Array.from(sourcePositions.subarray(id * 3, id * 3 + 3)) : r.p[corner];
+    const key = keyAt(p), residual = dot(plane.n, p) - plane.d;
+    if (!cells.has(key)) cells.set(key, { key, xy: key.split(',').map(Number), sum: 0, count: 0, ids: [], views: new Map() });
+    const cell = cells.get(key);
+    cell.sum += residual; cell.count++; cell.ids.push(id);
+  }
+  for (const cell of cells.values()) cell.depth = cell.sum / cell.count;
+  // Independent per-view contrasts corroborate the shape without letting RGB
+  // edges (a flat striped wall, for example) invent geometric depth.
+  for (let frameId = 0; frameId < (frames?.length || 0); frameId++) {
+    const frame = frames[frameId];
+    const stride = Math.max(1, Math.ceil((frame.filteredCount || 0) / 1800));
+    for (let i = 0; i < frame.measuredMask.length; i += stride) {
+      if (!frame.measuredMask[i]) continue;
+      const p = Array.from(frame.positions.subarray(i * 3, i * 3 + 3));
+      const residual = dot(plane.n, p) - plane.d;
+      if (!Number.isFinite(residual) || Math.abs(residual) > 0.12) continue;
+      const cell = cells.get(keyAt(p));
+      if (!cell) continue;
+      const value = cell.views.get(frameId) || { sum: 0, count: 0 };
+      value.sum += residual; value.count++; cell.views.set(frameId, value);
+    }
+  }
+  const agrees = (a, b) => {
+    if (!frames?.length) return true; // conservative geometry-only inspection
+    const expected = a.depth - b.depth;
+    const supporting = [];
+    for (const [id, first] of a.views) {
+      const second = b.views.get(id);
+      if (!second) continue;
+      const difference = first.sum / first.count - second.sum / second.count;
+      if (difference * expected <= 0 || Math.abs(difference) < 0.009) continue;
+      supporting.push(id);
+    }
+    // Too little evidence is not permission to erase a coherent measured step.
+    if (supporting.length < 2) return a.views.size < 2 || b.views.size < 2;
+    return supporting.some((id) => supporting.some((other) => {
+      const p = frames[id].camera, q = frames[other].camera;
+      return p && q && Math.hypot(...sub(p, q)) >= 0.04;
+    }));
+  };
+  const seeds = new Set();
+  for (const cell of cells.values()) {
+    // A sparsely sampled cell can contain only one of two overlapping sheets.
+    // Alternating sheet occupancy is not a measured step or curtain ridge.
+    if (cell.count < 3) continue;
+    const [x, y] = cell.xy;
+    for (const [dx, dy] of [[1, 0], [0, 1]]) {
+      const before = cells.get(`${x - dx},${y - dy}`), after = cells.get(`${x + dx},${y + dy}`);
+      if (before?.count >= 3 && after?.count >= 3) {
+        const left = cell.depth - before.depth, right = cell.depth - after.depth;
+        if (left * right > 0 && Math.min(Math.abs(left), Math.abs(right)) > 0.006 &&
+            Math.abs(left + right) > 0.018 && agrees(cell, before) && agrees(cell, after)) {
+          seeds.add(cell.key); seeds.add(before.key); seeds.add(after.key);
+        }
+      }
+      if (after?.count >= 3 && Math.abs(cell.depth - after.depth) > 0.014 && agrees(cell, after)) {
+        seeds.add(cell.key); seeds.add(after.key);
+      }
+    }
+  }
+  // Grow along a raised front, not just its edge. A picture need not have a
+  // visible back or side face to retain its measured offset from the wall.
+  const depths = [...cells.values()].map((c) => c.depth).sort((a, b) => a - b);
+  const baseline = depths[Math.floor(depths.length / 2)] || 0;
+  const queue = [...seeds];
+  for (let i = 0; i < queue.length; i++) {
+    const cell = cells.get(queue[i]), [x, y] = cell.xy;
+    if (Math.abs(cell.depth - baseline) < 0.012) continue;
+    for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
+      const next = cells.get(`${x + dx},${y + dy}`);
+      if (!next || seeds.has(next.key)) continue;
+      if ((next.depth - baseline) * (cell.depth - baseline) > 0 &&
+          Math.abs(next.depth - baseline) >= 0.012 && Math.abs(next.depth - cell.depth) < 0.02) {
+        seeds.add(next.key); queue.push(next.key);
+      }
+    }
+  }
+  // Include boundaries: otherwise an eligible neighboring wall triangle can
+  // still pull a protected fold/frame vertex onto its plane.
+  const expanded = new Set(seeds);
+  for (const key of seeds) {
+    const [x, y] = cells.get(key).xy;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) expanded.add(`${x + dx},${y + dy}`);
+  }
+  for (const key of expanded) cells.get(key)?.ids.forEach((id) => protectedVertices.add(id));
+}
+
+function detectPlanes(records, distanceLimit, options, protectedVertices) {
   const planes = [], ignored = new Set();
   for (let pass = 0; pass < 12 && planes.length < 10; pass++) {
     const available = records.filter((r) => r.plane < 0 && !ignored.has(r));
@@ -201,11 +299,14 @@ function detectPlanes(records, distanceLimit, report) {
     // of a folded or curved object must not manufacture a planar consensus.
     const neighborhood = available.filter((r) => Math.abs(dot(plane.n, r.normal)) >= 0.35 && Math.abs(dot(plane.n, r.center) - plane.d) <= distanceLimit);
     for (const group of connectedPatches(neighborhood, plane)) {
-      const eligible = group.filter((r) => inlierSet.has(r));
-      if (!supportedPatch(group, plane, report) || !supportedPatch(eligible, plane)) continue;
+      protectMeasuredRelief(group, plane, options.sourcePositions, options.evidenceFrames, protectedVertices);
+      const eligible = group.filter((r) => inlierSet.has(r) && !r.ids.some((id) => protectedVertices.has(id)));
+      if (!supportedPatch(group, plane, options.report) || !supportedPatch(eligible, plane)) continue;
       if (hasMeasuredThickness(eligible, available, plane)) continue;
       const id = planes.length;
-      planes.push({ n: plane.n, d: plane.d });
+      // Protected foreground relief must not tilt the remaining wall fit.
+      const fitted = fitPlane(eligible, plane);
+      planes.push({ n: fitted.n, d: fitted.d });
       eligible.forEach((r) => { r.plane = id; });
     }
     inliers.forEach((r) => ignored.add(r));
@@ -265,10 +366,19 @@ function hashKeys(triangle, cell) {
 export function consolidatePlanarSurfaces(mesh, options = {}) {
   const records = recordsFor(mesh);
   const distanceLimit = Math.min(0.08, Math.max(0.045, (options.voxelSize || 0.03) * 2.6));
-  const planes = detectPlanes(records, distanceLimit, options.report);
-  const diagnostics = { version: 1, planes: [], correctedVertices: 0, removedOverlapArea: 0, inputTriangles: mesh.indices.length / 3, outputTriangles: mesh.indices.length / 3 };
-  if (!planes.length) return { ...mesh, planarConsolidation: diagnostics };
+  const protectedVertices = new Set();
+  const planes = detectPlanes(records, distanceLimit, options, protectedVertices);
+  // Protection discovered by another plane must also win at shared corners.
+  for (const r of records) if (r.ids.some((id) => protectedVertices.has(id))) r.plane = -1;
+  const diagnostics = { version: 2, planes: [], protectedVertices: protectedVertices.size, correctedVertices: 0, removedOverlapArea: 0, inputTriangles: mesh.indices.length / 3, outputTriangles: mesh.indices.length / 3 };
   const positions = new Float32Array(mesh.positions);
+  if (options.sourcePositions) for (const id of protectedVertices) positions.set(options.sourcePositions.subarray(id * 3, id * 3 + 3), id * 3);
+  if (!planes.length) {
+    const restored = options.sourcePositions && protectedVertices.size;
+    return { ...mesh, positions: restored ? positions : mesh.positions,
+      ...(restored ? { surfaceArea: recordsFor({ ...mesh, positions }).reduce((sum, r) => sum + r.area, 0) } : {}),
+      planarConsolidation: diagnostics };
+  }
   const constraints = new Map();
   for (const r of records) if (r.plane >= 0) for (const id of r.ids) {
     if (!constraints.has(id)) constraints.set(id, new Set());

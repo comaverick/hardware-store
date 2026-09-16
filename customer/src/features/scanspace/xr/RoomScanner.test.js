@@ -304,11 +304,39 @@ test("an accepted stationary revisit refreshes texture without adding geometry",
   expect(scanner.colorReader.read).toHaveBeenCalledTimes(2);
   expect(scanner.keyframes).toHaveLength(1);
   expect(add).toHaveBeenCalledTimes(1);
-  expect(scanner.stats.textureRefreshes).toBe(1);
-  expect(scanner.keyframes[0].colorFocus).toBe(20);
-  expect(scanner.keyframes[0].colorImage[0]).toBe(160);
+  expect(scanner.stats.independentTextureCaptures).toBe(2);
+  expect(scanner.textureKeyframes).toHaveLength(1);
+  expect(scanner.textureKeyframes[0].colorFocus).toBe(20);
+  expect(scanner.textureKeyframes[0].colorImage[0]).toBe(160);
+  expect(scanner.keyframes[0].colorImage).toBeNull();
   expect(scanner.keyframes[0].transformMatrix[12]).toBeCloseTo(0);
-  expect(scanner.keyframes[0].viewTransformMatrix[12]).toBeCloseTo(0.02);
+  expect(scanner.textureKeyframes[0].transformMatrix[12]).toBeCloseTo(0.02);
+  expect(scanner.textureKeyframes[0].viewTransformMatrix[12]).toBeCloseTo(0.02);
+  expect(scanner.textureKeyframes[0].textureOnly).toBe(true);
+});
+
+test("a genuinely focused slow-sweep exposure is retained, but fast or blurred exposures are not", () => {
+  const scanner = new RoomScanner({ onUpdate: () => {} });
+  const focused = { quality: { samples: 400 }, focus: 8, sharpness: 16, clippedRatio: 0.03 };
+  expect(scanner.isColorFrameReliable({ linearSpeed: 0.3, angularSpeed: 0.4 }, focused)).toBe(true);
+  expect(scanner.isColorFrameReliable({ linearSpeed: 0.3 }, { ...focused, focus: 0.8 })).toBe(false);
+  expect(scanner.isColorFrameReliable({ linearSpeed: 1.2 }, focused)).toBe(false);
+});
+
+test("independent photo retention shares the image budget without dropping depth frames", () => {
+  const scanner = new RoomScanner({ onUpdate: () => {} });
+  const makeFrame = (index) => ({
+    colorImage: new Uint8Array(512 * 1024 * 4),
+    colorSharpness: 8, colorFocus: 8,
+    transformMatrix: new Float32Array(new Matrix4().makeTranslation(index * 0.1, 0, 0).elements),
+  });
+  scanner.keyframes = Array.from({ length: 6 }, (_, i) => makeFrame(i));
+  scanner.textureKeyframes = Array.from({ length: 15 }, (_, i) => makeFrame(i + 6));
+  scanner.compactTextureKeyframes();
+  expect(scanner.keyframes).toHaveLength(6);
+  const images = [...scanner.keyframes, ...scanner.textureKeyframes].filter((frame) => frame.colorImage);
+  expect(images.length).toBeLessThanOrEqual(15);
+  expect(images.reduce((sum, frame) => sum + frame.colorImage.byteLength, 0)).toBeLessThanOrEqual(24 * 1024 * 1024);
 });
 
 test("a materially better stationary depth revisit replaces one keyframe", () => {
