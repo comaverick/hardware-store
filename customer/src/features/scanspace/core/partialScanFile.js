@@ -15,6 +15,9 @@ const ARRAY_TYPES = {
   u8: Uint8Array,
   u32: Uint32Array,
 };
+const RAW_CAPTURE_VERSION = 1;
+const MAX_RAW_KEYFRAMES = 80;
+const MAX_RAW_IMAGE_BYTES = 16 * 1024 * 1024;
 
 function encodeArray(value, type) {
   if (!value) return null;
@@ -47,6 +50,178 @@ function decodeArray(value, expectedType, label) {
       bytes[index] = binary.charCodeAt(index);
   }
   return new Type(bytes.buffer);
+}
+
+const RAW_FRAME_ARRAYS = [
+  ["depths", "f32", true],
+  ["positions", "f32", true],
+  ["colors", "u8", true],
+  ["colorMask", "u8", true],
+  ["projectionMatrix", "f32", true],
+  ["transformMatrix", "f32", true],
+  ["viewProjectionMatrix", "f32", false],
+  ["viewTransformMatrix", "f32", false],
+  ["nativeDepthUvTransform", "f32", false],
+  ["camera", "f32", false],
+  ["colorImage", "u8", false],
+];
+
+function encodeRawFrame(frame) {
+  const value = {
+    columns: Number(frame.columns) || 0,
+    rows: Number(frame.rows) || 0,
+    validCount: finite(frame.validCount, 0),
+    coloredCount: finite(frame.coloredCount, 0),
+    tracking: frame.tracking !== false,
+    textureOnly: frame.textureOnly === true,
+    timestamp: finite(frame.timestamp, 0),
+    linearSpeed: finite(frame.linearSpeed, 0),
+    angularSpeed: finite(frame.angularSpeed, 0),
+    textureLinearSpeed: finite(frame.textureLinearSpeed, 0),
+    textureAngularSpeed: finite(frame.textureAngularSpeed, 0),
+    textureRefreshedAt: finite(frame.textureRefreshedAt, 0),
+    depthQuality: finite(frame.depthQuality, 0),
+    measuredDepthCount: finite(frame.measuredDepthCount, 0),
+    colorSharpness: finite(frame.colorSharpness, 0),
+    colorFocus: finite(frame.colorFocus, 0),
+    colorClippedRatio: finite(frame.colorClippedRatio, 0),
+    colorWidth: finite(frame.colorWidth, 0),
+    colorHeight: finite(frame.colorHeight, 0),
+    colorChannels: finite(frame.colorChannels, 4),
+    geometryMode: String(frame.geometryMode || "view-aligned-v1"),
+  };
+  RAW_FRAME_ARRAYS.forEach(([name, type]) => {
+    if (frame[name]?.length) value[name] = encodeArray(frame[name], type);
+  });
+  return value;
+}
+
+function validateRawPositions(positions, label) {
+  // Missing depth samples are represented by NaN in the raw position grid.
+  // Infinity and other non-finite values are never valid capture data.
+  for (let index = 0; index < positions.length; index++)
+    if (!Number.isFinite(positions[index]) && !Number.isNaN(positions[index]))
+      throw new Error(`The scan file has invalid ${label} coordinates.`);
+}
+
+function decodeRawFrame(frame, label) {
+  if (!frame || !Number.isInteger(frame.columns) || !Number.isInteger(frame.rows) ||
+      frame.columns < 1 || frame.rows < 1 || frame.columns * frame.rows > 100000)
+    throw new Error(`The scan file has invalid ${label} dimensions.`);
+  const count = frame.columns * frame.rows;
+  const decoded = {};
+  RAW_FRAME_ARRAYS.forEach(([name, type, required]) => {
+    if (!frame[name]) {
+      if (required) throw new Error(`The scan file is missing raw ${label} ${name} data.`);
+      decoded[name] = new ARRAY_TYPES[type]();
+      return;
+    }
+    decoded[name] = decodeArray(frame[name], type, `raw ${label} ${name}`);
+  });
+  if (decoded.depths.length !== count || decoded.positions.length !== count * 3 ||
+      decoded.colors.length !== count * 3 || decoded.colorMask.length !== count)
+    throw new Error(`The scan file has inconsistent raw ${label} grid data.`);
+  if (decoded.projectionMatrix.length !== 16 || decoded.transformMatrix.length !== 16)
+    throw new Error(`The scan file has invalid raw ${label} camera matrices.`);
+  if (decoded.viewProjectionMatrix.length && decoded.viewProjectionMatrix.length !== 16)
+    throw new Error(`The scan file has invalid raw ${label} color matrix.`);
+  if (decoded.viewTransformMatrix.length && decoded.viewTransformMatrix.length !== 16)
+    throw new Error(`The scan file has invalid raw ${label} color transform.`);
+  if (decoded.nativeDepthUvTransform.length && decoded.nativeDepthUvTransform.length !== 16)
+    throw new Error(`The scan file has invalid raw ${label} depth transform.`);
+  if (decoded.camera.length && decoded.camera.length !== 3)
+    throw new Error(`The scan file has invalid raw ${label} camera position.`);
+  validateRawPositions(decoded.positions, `raw ${label}`);
+  const colorWidth = Number(frame.colorWidth) || 0;
+  const colorHeight = Number(frame.colorHeight) || 0;
+  const colorChannels = Number(frame.colorChannels) || 4;
+  if (decoded.colorImage.length) {
+    if (!Number.isInteger(colorWidth) || !Number.isInteger(colorHeight) ||
+        !Number.isInteger(colorChannels) || colorWidth < 1 || colorHeight < 1 ||
+        colorChannels < 3 || colorChannels > 4 ||
+        colorWidth * colorHeight * colorChannels !== decoded.colorImage.length ||
+        decoded.colorImage.byteLength > MAX_RAW_IMAGE_BYTES)
+      throw new Error(`The scan file has invalid raw ${label} image data.`);
+  }
+  return {
+    ...decoded,
+    columns: frame.columns,
+    rows: frame.rows,
+    validCount: Math.max(0, Math.min(count, finite(frame.validCount, count))),
+    coloredCount: Math.max(0, Math.min(count, finite(frame.coloredCount, 0))),
+    tracking: frame.tracking !== false,
+    textureOnly: frame.textureOnly === true,
+    timestamp: finite(frame.timestamp, 0),
+    linearSpeed: finite(frame.linearSpeed, 0),
+    angularSpeed: finite(frame.angularSpeed, 0),
+    textureLinearSpeed: finite(frame.textureLinearSpeed, 0),
+    textureAngularSpeed: finite(frame.textureAngularSpeed, 0),
+    textureRefreshedAt: finite(frame.textureRefreshedAt, 0),
+    depthQuality: finite(frame.depthQuality, 0),
+    measuredDepthCount: finite(frame.measuredDepthCount, 0),
+    colorSharpness: finite(frame.colorSharpness, 0),
+    colorFocus: finite(frame.colorFocus, 0),
+    colorClippedRatio: Math.max(0, Math.min(1, finite(frame.colorClippedRatio, 0))),
+    colorWidth,
+    colorHeight,
+    colorChannels,
+    geometryMode: String(frame.geometryMode || "view-aligned-v1"),
+    viewProjectionMatrix: decoded.viewProjectionMatrix.length
+      ? decoded.viewProjectionMatrix : new Float32Array(decoded.projectionMatrix),
+    viewTransformMatrix: decoded.viewTransformMatrix.length
+      ? decoded.viewTransformMatrix : new Float32Array(decoded.transformMatrix),
+    nativeDepthUvTransform: decoded.nativeDepthUvTransform,
+    camera: decoded.camera.length
+      ? decoded.camera : new Float32Array(decoded.transformMatrix.slice(12, 15)),
+    colorImage: decoded.colorImage.length ? decoded.colorImage : null,
+  };
+}
+
+function rawStats(stats) {
+  const result = {};
+  Object.entries(stats || {}).forEach(([name, value]) => {
+    if (name === "fusion") return;
+    if (["string", "number", "boolean"].includes(typeof value)) result[name] = value;
+    else if (Array.isArray(value) && value.length <= 64 && value.every((item) =>
+      ["boolean", "number", "string"].includes(typeof item))) result[name] = value.slice();
+  });
+  return result;
+}
+
+function encodeRawCapture(capture) {
+  const keyframes = Array.isArray(capture?.keyframes) ? capture.keyframes : [];
+  const textureKeyframes = Array.isArray(capture?.textureKeyframes)
+    ? capture.textureKeyframes : [];
+  if (!keyframes.length || keyframes.length + textureKeyframes.length > MAX_RAW_KEYFRAMES)
+    throw new Error("This raw scan does not contain a valid bounded RGB-D capture.");
+  return {
+    version: RAW_CAPTURE_VERSION,
+    coordinateMode: "view-aligned-v1",
+    floorY: Number.isFinite(capture.floorY) ? capture.floorY : null,
+    observer: capture.observer || null,
+    maxTextureSize: finite(capture.maxTextureSize, 4096),
+    stats: rawStats(capture.stats),
+    keyframes: keyframes.map(encodeRawFrame),
+    textureKeyframes: textureKeyframes.map(encodeRawFrame),
+  };
+}
+
+function decodeRawCapture(value) {
+  if (!value || value.version !== RAW_CAPTURE_VERSION ||
+      !Array.isArray(value.keyframes) || !value.keyframes.length ||
+      value.keyframes.length + (value.textureKeyframes?.length || 0) > MAX_RAW_KEYFRAMES)
+    throw new Error("The scan file has an invalid raw RGB-D capture.");
+  return {
+    version: RAW_CAPTURE_VERSION,
+    coordinateMode: value.coordinateMode || "view-aligned-v1",
+    floorY: Number.isFinite(Number(value.floorY)) ? Number(value.floorY) : undefined,
+    observer: value.observer || undefined,
+    maxTextureSize: Math.max(64, Math.min(16384, finite(value.maxTextureSize, 4096))),
+    stats: rawStats(value.stats),
+    keyframes: value.keyframes.map((frame, index) => decodeRawFrame(frame, `keyframe ${index}`)),
+    textureKeyframes: (value.textureKeyframes || []).map((frame, index) =>
+      decodeRawFrame(frame, `texture keyframe ${index}`)),
+  };
 }
 
 function finite(value, fallback = 0) {
@@ -312,6 +487,33 @@ export function looksLikeScanFile(beginning = "") {
 export const looksLikePartialScan = looksLikeScanFile;
 
 export function serializePartialScan(scan) {
+  const rawCapture = scan?.rawCapture;
+  if (rawCapture?.keyframes?.length) {
+    const encodedCapture = encodeRawCapture(rawCapture);
+    const value = JSON.stringify({
+      format: SCAN_FILE_FORMAT,
+      version: 2,
+      exportedAt: new Date().toISOString(),
+      sourceType: "raw-rgbd-capture",
+      scan: {
+        name: String(scan.name || "ScanSpace scan").slice(0, 120),
+        reason: String(scan.reason || "Captured measured surfaces.").slice(0, 500),
+        pointCount: finite(scan.pointCount, 0),
+        captureQuality: scan.captureQuality || null,
+        measuredGapWarning: !!scan.measuredGapWarning,
+        measuredReviewWarning: safeReviewWarning(scan.measuredReviewWarning),
+        fusionReason: scan.fusionReason
+          ? String(scan.fusionReason).slice(0, 500)
+          : null,
+        // No mesh, atlas, UVs, or baked vertex colors are written for a raw
+        // capture. The importer reconstructs these from the keyframes.
+        rawCapture: encodedCapture,
+      },
+    });
+    if (new Blob([value]).size > MAX_SCAN_FILE_IMPORT_BYTES)
+      throw new Error("This raw scan is too large to export (maximum 64 MB).");
+    return value;
+  }
   if (!scan?.mesh && !scan?.cloud)
     throw new Error("There is no measured surface to export.");
   const mesh = canIncludeMesh(scan.mesh) ? encodeMesh(scan.mesh) : null;
@@ -348,10 +550,34 @@ export function parsePartialScan(value) {
   }
   if (
     ![SCAN_FILE_FORMAT, PARTIAL_SCAN_FORMAT].includes(parsed?.format) ||
-    parsed?.version !== 1
+    ![1, 2].includes(parsed?.version)
   )
     throw new Error("This is not a supported ScanSpace scan file.");
   const source = parsed.scan;
+  if (parsed.version >= 2 || source?.rawCapture) {
+    const rawCapture = decodeRawCapture(source?.rawCapture);
+    return {
+      version: 3,
+      kind: "raw-rgbd-scan",
+      imported: true,
+      name: String(source.name || "Imported ScanSpace scan").slice(0, 120),
+      walls: [],
+      floorObserved: Number.isFinite(rawCapture.floorY),
+      ceilingObserved: false,
+      pointCount: finite(source.pointCount, 0),
+      reason: String(source.reason || "Captured measured surfaces.").slice(0, 500),
+      cloud: null,
+      mesh: null,
+      rawCapture,
+      fusionMode: "raw-import",
+      captureQuality: source.captureQuality || null,
+      measuredGapWarning: !!source.measuredGapWarning,
+      measuredReviewWarning: safeReviewWarning(source.measuredReviewWarning),
+      fusionReason: source.fusionReason
+        ? String(source.fusionReason).slice(0, 500)
+        : null,
+    };
+  }
   const mesh = decodeMesh(source?.mesh);
   const cloud = decodeCloud(source?.cloud);
   if (!mesh && !cloud)
@@ -385,7 +611,7 @@ export function downloadPartialScan(scan) {
   );
   const link = document.createElement("a");
   link.href = url;
-  link.download = `scanspace-scan-${new Date()
+  link.download = `cdx-scanspace-scan-${new Date()
     .toISOString()
     .replace(/[:.]/g, "-")}.json`;
   link.click();

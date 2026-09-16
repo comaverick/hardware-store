@@ -75,7 +75,7 @@ export function downloadDepthCapture(blob, diagnostics = null) {
   const url = URL.createObjectURL(file);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `scanspace-debug-${Date.now()}.json`;
+  link.download = `cdx-scanspace-debug-${Date.now()}.json`;
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

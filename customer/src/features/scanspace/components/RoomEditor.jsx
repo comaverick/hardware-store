@@ -282,7 +282,7 @@ export default function RoomEditor({ onExit }) {
       url = URL.createObjectURL(blob),
       a = document.createElement("a");
     a.href = url;
-    a.download = "scanspace-room.json";
+    a.download = "cdx-scanspace-room.json";
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }

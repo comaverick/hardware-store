@@ -10,6 +10,7 @@ import {
   MIN_STABLE_POINTS,
   FLOOR_OUTLIER_TOLERANCE_METERS,
 } from "../core/readiness";
+import { scanFusionOptions } from "../core/fusionOptions";
 
 function observationPoints(observations) {
   if (!observations?.count || !observations.positions?.length) return null;
@@ -307,28 +308,7 @@ export default function ScannerPanel({
             .filter(Boolean)
             .map((array) => array.buffer),
         ))];
-    const baseOptions = {
-      textureKeyframes: raw.textureKeyframes || [],
-      maxTextureSize: raw.maxTextureSize || 4096,
-      floorY: raw.floorY,
-      observer: raw.observer,
-      headingCoverage: raw.stats.coverage || 0,
-      completionMode,
-      reconstructionProfile: "quality",
-      floorOutlierTolerance: FLOOR_OUTLIER_TOLERANCE_METERS,
-      pruneUnsupportedBridges: true,
-      // WebXR/ARCore already supplies one globally tracked coordinate system.
-      // Pairwise ICP on a mostly flat wall is under-constrained and can turn a
-      // sequence of locally improved poses into one globally curled surface.
-      poseRefinement: "native-tracking",
-      // Prefer the coherent subset when one can be identified, but retain the
-      // ordinary measured overlap as a fallback. Real mobile depth is noisy;
-      // coherence and wall-shape diagnostics must warn, not block completion.
-      requireCoherentSurfaceCore: false,
-      preferCoherentSurfaceCore: true,
-      rejectStructurallyInvalidSurface: false,
-      smoothingPasses: 3,
-    };
+    const baseOptions = scanFusionOptions(raw, completionMode);
     const runWorker = (options, transferable = []) =>
       new Promise((resolve, reject) => {
         const activeWorker = new Worker(
@@ -414,6 +394,14 @@ export default function ScannerPanel({
       const raw = scanner.current.result();
       scanner.current.paused = true;
       debugCapture.current = snapshotDepthCapture(raw);
+      const rawCapture = {
+        keyframes: raw.keyframes,
+        textureKeyframes: raw.textureKeyframes || [],
+        floorY: raw.floorY,
+        observer: raw.observer,
+        maxTextureSize: raw.maxTextureSize || 4096,
+        stats: raw.stats,
+      };
       const fused = await buildFusedMesh(raw, true, "surface");
       raw.stats.fusion = fused.diagnostics;
       const acceptedPoints =
@@ -427,6 +415,7 @@ export default function ScannerPanel({
           coverage: raw.stats.coverage || 0,
           cameraBaseline: raw.stats.cameraBaseline || 0,
           rejectedDepthFrames: raw.stats.rejectedDepthFrames || 0,
+          rawCapture,
         });
         return;
       }
@@ -451,6 +440,10 @@ export default function ScannerPanel({
         fusionMode: "multi-view",
         captureQuality: captureQualitySummary(raw.stats, fused.diagnostics),
         debugCapture: debugCapture.current,
+        // This is the source of truth for the scan export. It is deliberately
+        // kept alongside the preview mesh only while the result is in memory;
+        // exportScan serializes this capture and omits the derived mesh.
+        rawCapture,
         fusionDiagnostics: fused.diagnostics,
         measuredGapWarning: fused.diagnostics?.measuredGapWarning || null,
         measuredReviewWarning:

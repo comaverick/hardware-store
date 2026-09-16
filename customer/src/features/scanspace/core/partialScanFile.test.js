@@ -3,6 +3,7 @@ import {
   parsePartialScan,
   serializePartialScan,
 } from "./partialScanFile";
+import { createRgbdKeyframe } from "./fusion";
 
 function measuredScan() {
   return {
@@ -30,6 +31,58 @@ function measuredScan() {
   };
 }
 
+function rawScan() {
+  const identity = new Float32Array([
+    1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
+  ]);
+  const frame = createRgbdKeyframe(
+    Array.from({ length: 6 }, (_, index) => ({
+      x: (index % 3) * 0.2,
+      y: Math.floor(index / 3) * 0.2,
+      z: -2,
+      depth: 2,
+      gridX: index % 3,
+      gridY: Math.floor(index / 3),
+      color: [140, 100, 80],
+    })),
+    {
+      columns: 3,
+      rows: 2,
+      projectionMatrix: identity,
+      transformMatrix: identity,
+      viewProjectionMatrix: identity,
+      viewTransformMatrix: identity,
+      camera: { x: 0, y: 1.6, z: 0 },
+      colorImage: {
+        data: new Uint8Array([
+          10, 20, 30, 255,
+          40, 50, 60, 255,
+          70, 80, 90, 255,
+          100, 110, 120, 255,
+        ]),
+        width: 2,
+        height: 2,
+        channels: 4,
+      },
+      keepColor: true,
+    },
+  );
+  return {
+    name: "Raw kitchen",
+    pointCount: 6,
+    reason: "Captured raw surfaces.",
+    captureQuality: { coverage: 25, cameraBaseline: 0.2 },
+    rawCapture: {
+      keyframes: [frame],
+      textureKeyframes: [{ ...frame, textureOnly: true }],
+      floorY: 0,
+      observer: { x: 0, y: 1.6, z: 0 },
+      stats: { coverage: 25, acceptedDepthFrames: 1, fusion: { notExported: true } },
+      maxTextureSize: 2048,
+    },
+  };
+}
+
 test("incomplete scans survive portable serialization", () => {
   const serialized = serializePartialScan(measuredScan());
   expect(looksLikePartialScan(serialized.slice(0, 256))).toBe(true);
@@ -48,6 +101,36 @@ test("incomplete scans survive portable serialization", () => {
   expect(restored.mesh.triangleCount).toBe(1);
   expect(restored.mesh.portableColors).toBe(false);
   expect(restored.cloud.count).toBe(2);
+});
+
+test("raw scan exports contain capture keyframes and no derived mesh or atlas", () => {
+  const serialized = serializePartialScan(rawScan());
+  const value = JSON.parse(serialized);
+  expect(value.version).toBe(2);
+  expect(value.sourceType).toBe("raw-rgbd-capture");
+  expect(value.scan.mesh).toBeUndefined();
+  expect(value.scan.cloud).toBeUndefined();
+  expect(value.scan.rawCapture.keyframes[0].positions.type).toBe("f32");
+  expect(value.scan.rawCapture.keyframes[0].colorImage.type).toBe("u8");
+  expect(value.scan.rawCapture.stats.fusion).toBeUndefined();
+  const restored = parsePartialScan(serialized);
+  expect(restored.mesh).toBeNull();
+  expect(restored.cloud).toBeNull();
+  expect(restored.fusionMode).toBe("raw-import");
+  expect(restored.rawCapture.keyframes).toHaveLength(1);
+  expect(restored.rawCapture.textureKeyframes).toHaveLength(1);
+  expect(Array.from(restored.rawCapture.keyframes[0].colorImage)).toEqual([
+    10, 20, 30, 255, 40, 50, 60, 255, 70, 80, 90, 255, 100, 110, 120, 255,
+  ]);
+  expect(restored.rawCapture.keyframes[0].viewTransformMatrix).toEqual(
+    restored.rawCapture.keyframes[0].transformMatrix,
+  );
+});
+
+test("raw scan validation rejects a malformed keyframe before rendering", () => {
+  const value = JSON.parse(serializePartialScan(rawScan()));
+  value.scan.rawCapture.keyframes[0].positions.data = value.scan.rawCapture.keyframes[0].depths.data;
+  expect(() => parsePartialScan(JSON.stringify(value))).toThrow(/inconsistent raw keyframe .* grid/);
 });
 
 test("planar reconstruction diagnostics survive export and import", () => {

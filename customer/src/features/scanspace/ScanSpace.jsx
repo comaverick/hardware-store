@@ -330,11 +330,11 @@ export default function ScanSpace() {
         >
           <PartialScanReview
             scan={surfaceScan}
-            onCompleteManually={() => {
+            onCompleteManually={(renderedScan = surfaceScan) => {
               setReviewRoom(null);
               setCapture({
-                scanMesh: surfaceScan.mesh || null,
-                scanCloud: surfaceScan.cloud || null,
+                scanMesh: renderedScan.mesh || null,
+                scanCloud: renderedScan.cloud || null,
                 textures: {},
               });
               setSurfaceScan(null);
