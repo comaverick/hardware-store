@@ -62,6 +62,7 @@ const captureQualitySummary = (stats, fusion = null) => ({
   photometricNormalization: fusion?.photometricNormalization || null,
   fallbackBoundaryVertices: fusion?.fallbackBoundaryVertices || 0,
   revertedDeformationVertices: fusion?.revertedDeformationVertices || 0,
+  planarConsolidation: fusion?.planarConsolidation || null,
 });
 
 function CoverageCompass({ sectors = [], heading = 0 }) {

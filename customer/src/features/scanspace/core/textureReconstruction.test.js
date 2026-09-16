@@ -1,4 +1,5 @@
 import { Matrix4, PerspectiveCamera } from "three";
+import { consolidatePlanarSurfaces } from "./planarSurface";
 import {
   constrainSurfaceDeformation,
   overlapTextureColorScales,
@@ -31,6 +32,30 @@ const triangleMesh = () => ({
   positions: new Float32Array([-0.1, -0.1, -2, 0.1, -0.1, -2, -0.1, 0.1, -2]),
   indices: new Uint32Array([0, 1, 2]),
   colors: new Uint8Array(9).fill(30),
+});
+
+test("consolidated wall topology is textured at its corrected positions", () => {
+  const positions = [], indices = [];
+  for (const depth of [-2, -2.04]) {
+    const base = positions.length / 3;
+    for (let y = 0; y <= 12; y++) for (let x = 0; x <= 12; x++)
+      positions.push(x * 0.1 - 0.6, y * 0.1 - 0.6, depth);
+    for (let y = 0; y < 12; y++) for (let x = 0; x < 12; x++) {
+      const a = base + y * 13 + x;
+      indices.push(a, a + 1, a + 13, a + 1, a + 14, a + 13);
+    }
+  }
+  const corrected = consolidatePlanarSurfaces({ positions: new Float32Array(positions), indices: new Uint32Array(indices), colors: new Uint8Array(positions.length).fill(120) });
+  expect(corrected.planarConsolidation.removedOverlapArea).toBeGreaterThan(1.4);
+  const frame = cameraFrame(), result = texturedMesh(corrected, [frame]);
+  expect(result.textureProjectionMode).toBe("final-mesh-positions");
+  expect(result.textureCoverage).toBeGreaterThan(95);
+  for (let vertex = 0; vertex < result.positions.length / 3; vertex++) {
+    expect(result.positions[vertex * 3 + 2]).toBeCloseTo(-2.02, 4);
+    const projected = projectWorld(frame, ...result.positions.slice(vertex * 3, vertex * 3 + 3));
+    expect(result.uvs[vertex * 2]).toBeCloseTo((4 + projected.u * 7 + 0.5) / result.texture.width, 6);
+    expect(result.uvs[vertex * 2 + 1]).toBeCloseTo((4 + (1 - projected.v) * 7 + 0.5) / result.texture.height, 6);
+  }
 });
 
 test("UVs project the final mesh, even when an obsolete pre-correction copy is supplied", () => {

@@ -1,8 +1,13 @@
 import { readFile } from "node:fs/promises";
 
-// Load the same dependency-free core modules used by the browser worker.
+// Load the same core modules used by the browser worker, without changing the
+// application's CommonJS package configuration for this Node-only CLI.
 const loadCore = async (name) => {
-  const source = await readFile(new URL(`../src/features/scanspace/core/${name}.js`, import.meta.url), "utf8");
+  let source = await readFile(new URL(`../src/features/scanspace/core/${name}.js`, import.meta.url), "utf8");
+  if (name === "fusion") {
+    const planes = await readFile(new URL('../src/features/scanspace/core/planarSurface.js', import.meta.url), 'utf8');
+    source = source.replace('./planarSurface.js', `data:text/javascript;base64,${Buffer.from(planes).toString('base64')}`);
+  }
   return import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
 };
 

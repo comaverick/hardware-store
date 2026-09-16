@@ -103,3 +103,35 @@ Occlusion alone never proves a deeper observation false. Only confidently
 measured empty space in front of a surface can vote against old geometry.
 Consistent wrong sensor readings remain possible and require examining the
 capture, not adjusting a distance threshold based on screenshots.
+
+### Algorithm 36: planar surface consolidation
+
+Partial scans now fit area-weighted, measured planar patches after guarded
+smoothing, then clip overlapping triangles into a single planar footprint.
+This replaces the independent per-vertex wall/horizontal nudges; it does not
+create rectangular replacement walls, fill a hull, or require more coverage.
+Unique portions of overlapping triangles are retained, including open scan
+boundaries and unmeasured holes. Camera projection runs on the final geometry.
+Live results, exports and imports continue using the same finished mesh.
+
+Detection requires a broad, normal-consistent patch with a plane-distance
+tolerance of 4.5–8 cm depending on voxel size. Narrow curved strips, small partial captures,
+separate planes, and measured thin solids with side faces are protected. This
+is not semantic wall recognition: ambiguous or severely drifted geometry can
+remain unchanged. Saved meshes lack the original RGB-D keyframes, so importing
+an old export does not re-run reconstruction. Test fresh scans with version 36.
+
+`captureQuality.planarConsolidation` records plane normals/offsets, retained
+projected area, removed overlapping area, movement count and triangle counts.
+Triangle count can increase when clipping splits a partly overlapping face;
+the relevant metric is overlap area, not triangle count alone. Whole-frame
+`globalSurfaceConsensus` / `autoLayerRepair` retries are now explicitly opt-in;
+their defaults no longer discard unique views to repair one overlapping wall.
+
+Read-only geometry check for a saved export:
+
+```powershell
+node scripts/check-scanspace-planes.mjs C:/path/to/scanspace-scan.json
+```
+
+This is a geometry-only inspection, not a raw-depth or photo-texture replay.

@@ -50,6 +50,15 @@ test("incomplete scans survive portable serialization", () => {
   expect(restored.cloud.count).toBe(2);
 });
 
+test("planar reconstruction diagnostics survive export and import", () => {
+  const scan = measuredScan();
+  scan.captureQuality = { algorithmVersion: 36, planarConsolidation: { version: 1, removedOverlapArea: 0.9, planes: [{ normal: [0, 0, 1], offset: -2, retainedArea: 2.5 }] } };
+  const restored = parsePartialScan(serializePartialScan(scan));
+  expect(restored.captureQuality).toEqual(scan.captureQuality);
+  expect(restored.mesh.positions).toEqual(scan.mesh.positions);
+  expect(restored.mesh.indices).toEqual(scan.mesh.indices);
+});
+
 test("incomplete scan imports reject unsafe geometry", () => {
   const value = JSON.parse(serializePartialScan(measuredScan()));
   value.scan.mesh.indices.data = btoa(

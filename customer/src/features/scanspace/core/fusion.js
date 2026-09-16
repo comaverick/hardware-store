@@ -1,3 +1,5 @@
+import { consolidatePlanarSurfaces } from "./planarSurface.js";
+
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const MIN_ROOM_DEPTH_METERS = 0.45;
 const MIN_INDEPENDENT_VIEW_METERS = 0.04;
@@ -4761,7 +4763,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   if (localLayerConsensus.diagnostics)
     alignment.localLayerConsensus = localLayerConsensus.diagnostics;
   const stages = {
-    algorithmVersion: 35,
+    algorithmVersion: 36,
     completionMode: options.completionMode === "surface" ? "surface" : "room",
     reconstructionProfile: options.reconstructionProfile || "quality",
     supportMode: "translated-camera-viewpoints",
@@ -4920,13 +4922,13 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   );
   stages.rectangularRoomModelCompatible =
     !meshOutsideRectangularRoomModel(wallStructure);
-  // A wall-ratio consensus pass is useful for a detected duplicate layer,
-  // but it is unsafe as a general coverage filter: legitimate side-to-side
-  // views often see different portions of one wall. Keep those views unless
-  // the measured result actually reports competing layers.
+  // Legacy whole-frame pruning is opt-in for diagnostics only. A frame can
+  // contain both a duplicate wall and unique ceiling/side-wall measurements.
+  // Production consolidates overlapping measured patches below instead of
+  // deleting that frame's entire captured extent.
   if (
     surfaceCompletion &&
-    options.globalSurfaceConsensus !== false &&
+    options.globalSurfaceConsensus === true &&
     measuredSurfaceQuality?.duplicateLayerLikely
   ) {
     const repair = wallConsensusKeyframes(usable, measuredSurfaceQuality, {
@@ -4983,7 +4985,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     });
   if (measuredSurfaceQuality?.duplicateLayerLikely) {
     const repair =
-      options.autoLayerRepair === false
+      options.autoLayerRepair !== true
         ? null
         : wallConsensusKeyframes(usable, measuredSurfaceQuality);
     if (repair?.keptFrameIds.length >= 3) {
@@ -5020,7 +5022,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
           "The depth views may contain overlapping wall layers. Review the measured result before accepting it.",
       });
       stages.autoLayerRepair = {
-        attempted: options.autoLayerRepair !== false,
+        attempted: options.autoLayerRepair === true,
         succeeded: false,
         removedFrameIds: repair?.removedFrameIds || [],
       };
@@ -5100,27 +5102,20 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       (options.completionMode === "surface" ? 2 : 3),
     volumeVoxelSize,
   );
-  // Smooth first, then return supported wall vertices to their measured plane.
-  // The previous order allowed the smoothing pass to reintroduce bowed trim
-  // and wall lines immediately after they had been straightened.
-  if (surfaceCompletion && measuredSurfaceQuality?.assessed)
-    surface = stabilizeMeasuredWallSectors(
-      surface,
-      measuredSurfaceQuality.walls,
-      volumeVoxelSize,
-    );
-  if (surfaceCompletion)
-    surface = stabilizeMeasuredHorizontalSurfaces(
-      surface,
-      volumeVoxelSize,
-      5,
-    );
   const constrained = constrainSurfaceDeformation(
     { ...surface, positions: measuredPositions },
     surface.positions,
   );
   surface = { ...surface, positions: constrained.positions };
   stages.revertedDeformationVertices = constrained.revertedVertices;
+  // Correct supported patches as a surface, not independent vertices. Running
+  // this after the smoothing guard avoids restoring an old duplicate sheet;
+  // running it before texturing keeps photos aligned with the final geometry.
+  if (surfaceCompletion) {
+    volume = null; // release the dense TSDF before allocating patch topology
+    surface = consolidatePlanarSurfaces(surface, { voxelSize: volumeVoxelSize });
+    stages.planarConsolidation = surface.planarConsolidation;
+  }
   wallStructure = meshWallStructureDiagnostics(surface);
   stages.wallStructure = wallStructure;
   stages.postStabilizationWallStructure = wallStructure;
@@ -5170,9 +5165,10 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       triangles: mesh.triangleCount,
       surfaceArea: surface.surfaceArea,
       stabilizedPlanes:
+        (surface.planarConsolidation?.planes.length || 0) +
         (surface.stabilizedPlaneCount || 0) +
         (surface.stabilizedHorizontalPlaneCount || 0),
-      stabilizedVertices: surface.stabilizedVertexCount || 0,
+      stabilizedVertices: surface.planarConsolidation?.correctedVertices || surface.stabilizedVertexCount || 0,
       stabilizedHorizontalPlanes:
         surface.stabilizedHorizontalPlaneCount || 0,
       stabilizedHorizontalVertices:
