@@ -101,6 +101,7 @@ export function createRgbdKeyframe(points, options = {}) {
     ),
     nativeDepthWidth: Number(options.nativeDepthWidth) || 0,
     nativeDepthHeight: Number(options.nativeDepthHeight) || 0,
+    depthType: String(options.depthType || ""),
     nativeDepthUvTransform: new Float32Array(
       options.nativeDepthUvTransform?.length === 16
         ? options.nativeDepthUvTransform
@@ -220,7 +221,11 @@ export function selectFusionKeyframes(values, limit) {
     .map((index) => values[index]);
 }
 
-export function filterDepth(frame) {
+export function filterDepth(frame, options = {}) {
+  const depthType = String(options.depthType || frame.depthType || "")
+    .trim()
+    .toLowerCase();
+  const sensorAlreadySmoothed = depthType === "smooth";
   const filtered = new Float32Array(frame.depths.length);
   const confidence = new Uint8Array(frame.depths.length);
   let weakSupportedCount = 0;
@@ -234,7 +239,14 @@ export function filterDepth(frame) {
         center > 8
       )
         continue;
-      const range = Math.max(0.07, center * 0.045);
+      // WebXR's smooth depth has already been temporally/spatially filtered
+      // by the device. A second broad 3x3 average pulls a curtain fold or a
+      // shelf toward its wall and is the source of many apparently blurred
+      // layers. Keep a narrow centre-dominant filter for smooth depth while
+      // retaining the wider support band for raw depth.
+      const range = sensorAlreadySmoothed
+        ? Math.max(0.055, center * 0.032)
+        : Math.max(0.07, center * 0.045);
       // The runtime's smoothed depth can put a foreground edge and its wall
       // background inside the broad noise band above. Do not average those
       // layers together: at two metres a six-centimetre shelf/curtain edge is
@@ -243,13 +255,16 @@ export function filterDepth(frame) {
       // smoothing band used for a continuous wall.
       const discontinuity = Math.max(
         0.035,
-        Math.min(range * 0.62, center * 0.028),
+        Math.min(
+          range * (sensorAlreadySmoothed ? 0.52 : 0.62),
+          center * (sensorAlreadySmoothed ? 0.021 : 0.028),
+        ),
       );
       // Keep the measured centre dominant. A symmetric mean softens sensor
       // noise on a wall, but it also pulls a shelf edge toward the foreground
       // whenever one side of the 3x3 footprint contains a different layer.
-      let sum = center * 3;
-      let weight = 3;
+      let sum = center * (sensorAlreadySmoothed ? 6 : 3);
+      let weight = sensorAlreadySmoothed ? 6 : 3;
       let support = 0;
       let differenceSum = 0;
       let minimum = center;
@@ -280,9 +295,11 @@ export function filterDepth(frame) {
       if (support >= 2) {
         const average = sum / weight;
         const edgeTransition = maximum - minimum > range * 0.82;
-        filtered[index] = edgeTransition
-          ? center * 0.78 + average * 0.22
-          : average;
+        filtered[index] = sensorAlreadySmoothed
+          ? center * 0.86 + average * 0.14
+          : edgeTransition
+            ? center * 0.78 + average * 0.22
+            : average;
         const agreement = 1 - clamp(differenceSum / support / range, 0, 1);
         confidence[index] = Math.round(255 * clamp((support / 8) * 0.7 + agreement * 0.3, 0.15, 1));
         if (support === 2) weakSupportedCount++;
@@ -425,7 +442,7 @@ function prepareFrame(frame, frameId, options = {}) {
   const transform = frame.transformMatrix;
   if (projection?.length !== 16 || transform?.length !== 16) return null;
   if (![...projection, ...transform].every(Number.isFinite)) return null;
-  const filtered = filterDepth(frame);
+  const filtered = filterDepth(frame, options);
   const filteredDepth = filtered.filtered;
   const positions = new Float32Array(frame.positions.length).fill(NaN);
   const freeSpaceMask = new Uint8Array(filteredDepth.length);
@@ -999,13 +1016,17 @@ function estimateRigidDelta(pairs) {
     [szx - sxz, sxy + syx, -sxx + syy - szz, syz + szy],
     [sxy - syx, szx + sxz, syz + szy, -sxx - syy + szz],
   ];
+  // Power iteration needs the largest algebraic eigenvalue, not the largest
+  // absolute eigenvalue. Shift the symmetric Horn matrix to be nonnegative
+  // definite; otherwise nearly planar matches can select the wrong rotation.
+  const shift = Math.max(...matrix.map((row) => row.reduce((sum, value) => sum + Math.abs(value), 0)));
   let quaternion = [1, 0, 0, 0];
-  for (let pass = 0; pass < 18; pass++) {
+  for (let pass = 0; pass < 48; pass++) {
     const next = [0, 0, 0, 0];
     for (let rowIndex = 0; rowIndex < 4; rowIndex++) {
       const row = matrix[rowIndex];
       for (let columnIndex = 0; columnIndex < 4; columnIndex++)
-        next[rowIndex] += row[columnIndex] * quaternion[columnIndex];
+        next[rowIndex] += (row[columnIndex] + (rowIndex === columnIndex ? shift : 0)) * quaternion[columnIndex];
     }
     const length = Math.hypot(...next) || 1;
     quaternion = next.map((value) => value / length);
@@ -1104,46 +1125,95 @@ function refineRigidPair(source, target, options = {}) {
   };
 }
 
-// AR tracking is usually good enough for a single frame, but small pose drift
-// between depth frames bends a long wall and creates doubled shelf edges. Use
-// only depth correspondences that already agree in visibility, apply bounded
-// rigid corrections, and leave a frame untouched unless the residual improves
-// substantially. This is deliberately an opt-in validated pass so legacy
-// diagnostics and synthetic callers retain their original poses.
+function validatePoseProposal(target, delta, references, options) {
+  const median = (values) => values.sort((a, b) => a - b)[Math.floor(values.length / 2)];
+  const views = [];
+  for (const reference of references) {
+    const pairs = rigidCorrespondences(reference, target, Math.max(80, Math.floor((options.samples || 420) / 2)));
+    if (pairs.length < 24) continue;
+    const before = [], after = [];
+    for (const pair of pairs) {
+      const point = transformPointByRigidDelta(pair.target, delta);
+      before.push(Math.hypot(pair.source.x - pair.target.x, pair.source.y - pair.target.y, pair.source.z - pair.target.z));
+      after.push(Math.hypot(pair.source.x - point.x, pair.source.y - point.y, pair.source.z - point.z));
+    }
+    views.push({ before: median(before), after: median(after) });
+  }
+  const before = views.length ? median(views.map((v) => v.before)) : Infinity;
+  const after = views.length ? median(views.map((v) => v.after)) : Infinity;
+  return {
+    accepted: views.length >= 2 && after < before * 0.95 && after < (options.maxResidual || 0.055) &&
+      views.filter((v) => v.after <= v.before + 0.002).length >= Math.ceil(views.length * 0.8),
+    views: views.length, before, after,
+  };
+}
+
+// Depth grids and independent camera snapshots share this trajectory pass.
+// Evaluate every proposal against original, held-out views: feeding corrected
+// frames into later pair fits used to accumulate a chain of unchecked drift.
+// A rejected correction keeps the observation at its native pose; it never
+// rejects the scan or removes the frame's measured coverage.
 export function refineFramePoses(frames, options = {}) {
   const diagnostics = {
     attempted: 0,
     corrected: 0,
     rejected: 0,
+    rejectedValidation: 0,
     corrections: [],
   };
   if (!Array.isArray(frames) || frames.length < 2)
     return { frames, diagnostics };
   const corrected = frames.map(cloneFrameForPoseRefinement);
   const window = Math.max(1, options.window || 3);
-  for (let index = 1; index < corrected.length; index++) {
-    const target = corrected[index];
+  const captureKey = (frame) => `${frame.timestamp || 0}:${Array.from(frame.transformMatrix).map((v) => v.toFixed(6)).join(',')}`;
+  const keys = frames.map(captureKey);
+  const applied = new Map([[keys[0], null]]);
+  const cameraDistance = (a, b) => Math.hypot(...[0, 1, 2].map((axis) => a.camera[axis] - b.camera[axis]));
+  // Camera poses landing exactly on the nominal four-centimetre boundary can
+  // round a few ulps below it. Keep those genuinely independent views in the
+  // trajectory graph instead of leaving a target with only one validator.
+  const minimumReferenceDistance = MIN_INDEPENDENT_VIEW_METERS * 0.9;
+  for (let index = 1; index < frames.length; index++) {
+    const target = frames[index];
+    if (applied.has(keys[index])) {
+      const delta = applied.get(keys[index]);
+      if (delta) corrected[index] = applyRigidDeltaToFrame(target, delta);
+      continue;
+    }
+    const references = [];
+    const seen = new Set([keys[index]]);
+    for (let distance = 1; distance < frames.length && references.length < window * 2; distance++) {
+      for (const referenceIndex of [index - distance, index + distance]) {
+        const reference = frames[referenceIndex];
+        if (!reference || seen.has(keys[referenceIndex]) || cameraDistance(reference, target) < minimumReferenceDistance) continue;
+        seen.add(keys[referenceIndex]);
+        references.push({ frame: reference, index: referenceIndex });
+      }
+    }
     let best = null;
-    for (let referenceIndex = Math.max(0, index - window); referenceIndex < index; referenceIndex++) {
+    for (const { frame: reference, index: referenceIndex } of references) {
       diagnostics.attempted++;
       const proposal = refineRigidPair(
-        corrected[referenceIndex],
+        reference,
         target,
         options,
       );
       if (!proposal) continue;
+      const heldOut = references.filter((r) => r.index !== referenceIndex && cameraDistance(r.frame, reference) >= minimumReferenceDistance);
+      const validation = validatePoseProposal(target, proposal.delta, heldOut.map((r) => r.frame), options);
+      if (!validation.accepted) { diagnostics.rejectedValidation++; continue; }
       if (
         !best ||
-        proposal.pairCount > best.pairCount ||
-        (proposal.pairCount === best.pairCount &&
-          proposal.delta.afterMedian < best.delta.afterMedian)
+        validation.after < best.validation.after
       )
-        best = { ...proposal, referenceIndex };
+        best = { ...proposal, referenceIndex, validation };
     }
     if (!best) {
       diagnostics.rejected++;
+      applied.set(keys[index], null);
       continue;
     }
+    applied.set(keys[index], best.delta);
     corrected[index] = applyRigidDeltaToFrame(target, best.delta);
     diagnostics.corrected++;
     diagnostics.corrections.push({
@@ -1154,6 +1224,9 @@ export function refineFramePoses(frames, options = {}) {
       rotationRadians: best.rotationAngle,
       medianResidualBefore: best.delta.beforeMedian,
       medianResidualAfter: best.delta.afterMedian,
+      heldOutViews: best.validation.views,
+      heldOutResidualBefore: best.validation.before,
+      heldOutResidualAfter: best.validation.after,
     });
   }
   diagnostics.maxTranslationMeters = diagnostics.corrections.reduce(
@@ -1524,7 +1597,7 @@ function sampleFrameColor(frame, u, v, depthIndex) {
   return [frame.colors[offset], frame.colors[offset + 1], frame.colors[offset + 2]];
 }
 
-function integrateProjective(volume, frames, report) {
+function integrateProjective(volume, frames, report, options = {}) {
   const [width, height, depth] = volume.dimensions;
   const truncation = volume.voxelSize * 3.2;
   volume.truncation = truncation;
@@ -1534,12 +1607,24 @@ function integrateProjective(volume, frames, report) {
     // Moving camera/depth pairs can be a few frames apart on mobile XR. Keep
     // their unique coverage, but let steady captures contribute more strongly
     // wherever several views overlap.
+    const smoothDepth = String(options.depthType || frame.depthType || "")
+      .trim()
+      .toLowerCase() === "smooth";
+    // Smoothed depth is less trustworthy during a fast sweep because the
+    // device blends samples from adjacent poses. Downweight only those fast
+    // samples; stable frames keep their full contribution and all coverage is
+    // still retained for fusion.
+    const fastSmoothDepth = smoothDepth &&
+      ((Number(frame.linearSpeed) || 0) > 0.28 ||
+        (Number(frame.angularSpeed) || 0) > 0.42);
+    const depthLinearScale = fastSmoothDepth ? 0.34 : 0.45;
+    const depthAngularScale = fastSmoothDepth ? 0.48 : 0.6;
     const motionReliability = clamp(
       1 /
         (1 +
-          (Number(frame.linearSpeed) || 0) / 0.45 +
-          (Number(frame.angularSpeed) || 0) / 0.6),
-      0.2,
+          (Number(frame.linearSpeed) || 0) / depthLinearScale +
+          (Number(frame.angularSpeed) || 0) / depthAngularScale),
+      smoothDepth ? 0.14 : 0.2,
       1,
     );
     // A stable revisit may replace the camera image without replacing the
@@ -3338,13 +3423,17 @@ export function smoothPositions(mesh, passes = 2, voxelSize = 0.03) {
     });
   });
   const referenceNormals = computeNormals(mesh);
-  const maximumEdge = Math.max(0.06, voxelSize * 3.4);
+  const maximumEdge = Math.max(0.04, voxelSize * 2.5);
+  const rangeSigma = clamp(voxelSize * 0.35, 0.004, 0.012);
+  const movementLimit = Math.min(0.003, voxelSize * 0.15);
   let positions = new Float32Array(mesh.positions);
-  const move = (source, factor) => {
+  const move = (source) => {
     const target = new Float32Array(source);
     neighbors.forEach((adjacent, vertex) => {
       if (adjacent.size < 5 || boundary[vertex]) return;
-      const accepted = [];
+      const offset = vertex * 3;
+      const nx = referenceNormals[offset], ny = referenceNormals[offset + 1], nz = referenceNormals[offset + 2];
+      let weight = 0, displacement = 0, accepted = 0;
       adjacent.forEach((next) => {
         if (boundary[next]) return;
         const dx = source[next * 3] - source[vertex * 3];
@@ -3355,24 +3444,39 @@ export function smoothPositions(mesh, passes = 2, voxelSize = 0.03) {
           referenceNormals[vertex * 3] * referenceNormals[next * 3] +
           referenceNormals[vertex * 3 + 1] * referenceNormals[next * 3 + 1] +
           referenceNormals[vertex * 3 + 2] * referenceNormals[next * 3 + 2];
-        if (alignment >= 0.86) accepted.push(next);
+        if (alignment < 0.9) return;
+        const height = dx * nx + dy * ny + dz * nz;
+        if (Math.abs(height) > rangeSigma * 3) return;
+        const w = Math.exp(-(dx * dx + dy * dy + dz * dz) / (maximumEdge * maximumEdge * 0.5) -
+          height * height / (2 * rangeSigma * rangeSigma));
+        displacement += height * w;
+        weight += w;
+        accepted++;
       });
-      if (accepted.length < 3) return;
+      if (accepted < 3 || weight < 0.01) return;
+      // Normal-only bilateral denoising cannot slide a vertex along a fold or
+      // blend its color with another surface. Cap TOTAL displacement from the
+      // measured mesh, so extra passes cannot gradually erase shallow relief.
+      const alreadyMoved = (source[offset] - mesh.positions[offset]) * nx +
+        (source[offset + 1] - mesh.positions[offset + 1]) * ny +
+        (source[offset + 2] - mesh.positions[offset + 2]) * nz;
+      const nextDisplacement = clamp(alreadyMoved + displacement / weight * 0.65, -movementLimit, movementLimit);
       for (let axis = 0; axis < 3; axis++) {
-        let average = 0;
-        accepted.forEach((next) => {
-          average += source[next * 3 + axis] / accepted.length;
-        });
-        target[vertex * 3 + axis] += (average - source[vertex * 3 + axis]) * factor;
+        target[offset + axis] = mesh.positions[offset + axis] + referenceNormals[offset + axis] * nextDisplacement;
       }
     });
     return target;
   };
   for (let pass = 0; pass < passes; pass++) {
-    positions = move(positions, 0.24);
-    positions = move(positions, -0.245);
+    positions = move(positions);
   }
-  return { ...mesh, positions };
+  let movedVertices = 0, maxDisplacementMeters = 0;
+  for (let offset = 0; offset < positions.length; offset += 3) {
+    const distance = Math.hypot(...[0, 1, 2].map((axis) => positions[offset + axis] - mesh.positions[offset + axis]));
+    if (distance > 1e-7) movedVertices++;
+    maxDisplacementMeters = Math.max(maxDisplacementMeters, distance);
+  }
+  return { ...mesh, positions, denoising: { mode: "bounded-normal-bilateral", passes, movedVertices, maxDisplacementMeters } };
 }
 
 // Plane fitting is only a proposal. Near folds/trim, independently snapping
@@ -4243,6 +4347,19 @@ export function texturedMesh(mesh, frames, precomputedCalibration = null, option
         0,
         1.5,
       );
+      // Keep a low-quality image only when it is the sole depth-tested view
+      // of a triangle. When a clear alternative exists, a soft frame should
+      // never win merely because it is a few pixels closer or more front-on.
+      // This is a score penalty, not a hard frame rejection, so coverage is
+      // never traded for a blank/gray patch.
+      const qualityGap = atlas.textureQualityFloor > 0
+        ? clamp(
+            (atlas.textureQualityFloor - frame.textureQuality) /
+              atlas.textureQualityFloor,
+            0,
+            1,
+          )
+        : 0;
       const texturePenalty = projectedTexturePenalty(frame, [
         colorProjection,
         ...colorProjections,
@@ -4286,7 +4403,8 @@ export function texturedMesh(mesh, frames, precomputedCalibration = null, option
           Math.max(0, farthestRecovery - 1) * 0.18 -
           motionPenalty * 0.68 -
           texturePenalty * 1.05 -
-          frameClippingPenalty * 0.8,
+          frameClippingPenalty * 0.8 -
+          qualityGap * 1.15,
       });
     });
     // Keep soft/flat patches when they are the only measured photo, but do not
@@ -4581,12 +4699,18 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     )
     .map(({ frame, frameId }) => prepareFrame(frame, frameId, options))
     .filter(Boolean);
+  let extraTextureFrames = (options.textureKeyframes || []).slice(0, 15)
+    .filter((frame) => frame?.tracking !== false && !frame?.legacyGeometryAmbiguous)
+    .map((frame, index) => prepareFrame(frame, keyframes.length + index, options))
+    .filter(Boolean);
   const alignment = {};
   const initialOverlap = {};
   let surfaceConsistencyFailure = null;
   let overlapping = validateFrameOverlap(prepared, initialOverlap);
   if (options.poseRefinement === "validated" && overlapping.length >= 2) {
-    const refinement = refineFramePoses(overlapping, {
+    const geometryIds = new Set(overlapping.map((frame) => frame.frameId));
+    const snapshots = [...overlapping, ...extraTextureFrames].sort((a, b) => a.timestamp - b.timestamp || a.frameId - b.frameId);
+    const refinement = refineFramePoses(snapshots, {
       window: options.poseRefinementWindow || 3,
       samples: options.poseRefinementSamples || 420,
       maxTranslation: options.poseRefinementMaxTranslation || 0.085,
@@ -4594,11 +4718,13 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       maxResidual: options.poseRefinementMaxResidual || 0.055,
     });
     const refinedOverlap = {};
-    overlapping = validateFrameOverlap(refinement.frames, refinedOverlap);
+    overlapping = validateFrameOverlap(refinement.frames.filter((frame) => geometryIds.has(frame.frameId)), refinedOverlap);
+    extraTextureFrames = refinement.frames.filter((frame) => !geometryIds.has(frame.frameId));
     Object.assign(alignment, refinedOverlap);
     alignment.initial = initialOverlap;
     alignment.poseCorrectionApplied = refinement.diagnostics.corrected > 0;
-    alignment.poseRefinement = "validated-rigid-depth";
+    alignment.poseRefinement = "held-out-shared-rgbd-trajectory";
+    alignment.synchronizedTextureFrames = extraTextureFrames.length;
     alignment.poseRefinementDiagnostics = refinement.diagnostics;
   } else {
     Object.assign(alignment, initialOverlap);
@@ -4721,12 +4847,22 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   if (localLayerConsensus.diagnostics)
     alignment.localLayerConsensus = localLayerConsensus.diagnostics;
   const stages = {
-    algorithmVersion: 37,
+    algorithmVersion: 38,
     completionMode: options.completionMode === "surface" ? "surface" : "room",
     reconstructionProfile: options.reconstructionProfile || "quality",
     supportMode: "translated-camera-viewpoints",
     depthSampling: "continuous-inverse-depth",
     coordinateMode: "view-aligned-v1",
+    fusionSettings: {
+      depthType: String(options.depthType || "unknown"),
+      maxKeyframes: Number(options.maxKeyframes) || null,
+      smoothingPasses: Number.isFinite(Number(options.smoothingPasses))
+        ? Number(options.smoothingPasses)
+        : options.completionMode === "surface"
+          ? 2
+          : 3,
+      poseRefinement: alignment.poseRefinement || "disabled",
+    },
     inputKeyframes: keyframes.length,
     ambiguousLegacyKeyframes,
     preparedKeyframes: prepared.length,
@@ -4800,11 +4936,6 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   // atlas construction. Otherwise triangles that fall back to fused vertex
   // colors can still show the raw exposure jump that the atlas corrected.
   // Texture-only observations never enter geometry or multi-view support.
-  const extraTextureFrames = options.poseRefinement === "validated" ? [] :
-    (options.textureKeyframes || []).slice(0, 15)
-      .filter((frame) => frame?.tracking !== false && !frame?.legacyGeometryAmbiguous)
-      .map((frame, index) => prepareFrame(frame, keyframes.length + index, options))
-      .filter(Boolean);
   const textureFrames = [...usable, ...extraTextureFrames];
   stages.independentTextureFrames = extraTextureFrames.length;
   const colorCalibration =
@@ -4823,7 +4954,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   const volumeDimensions = volume.dimensions;
   const volumeCells = volume.values.length;
   report?.("fusing", 16, { voxelSize: volume.voxelSize, dimensions: volume.dimensions });
-  const confirmedVoxels = integrateProjective(volume, usable, report);
+  const confirmedVoxels = integrateProjective(volume, usable, report, options);
   stages.robustFusion = {
     robustlyDownweightedSamples: volume.robustlyDownweightedSamples,
     robustlyRejectedSamples: volume.robustlyRejectedSamples,
@@ -5068,6 +5199,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       (options.completionMode === "surface" ? 2 : 3),
     volumeVoxelSize,
   );
+  stages.denoising = surface.denoising;
   const constrained = constrainSurfaceDeformation(
     { ...surface, positions: measuredPositions },
     surface.positions,
@@ -5083,6 +5215,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       voxelSize: volumeVoxelSize,
       sourcePositions: measuredPositions,
       evidenceFrames: usable,
+      preserveDenoisedRelief: true,
     });
     stages.planarConsolidation = surface.planarConsolidation;
   }

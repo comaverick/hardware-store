@@ -105,6 +105,17 @@ function textureKeyframePoseForRetention(frame) {
   };
 }
 
+function qualityForRetention(frames, index) {
+  const frame = frames[index];
+  const measured = Number(frame?.measuredDepthCount);
+  const valid = Number(frame?.validCount);
+  return Number.isFinite(measured)
+    ? measured
+    : Number.isFinite(valid)
+      ? valid
+      : 0;
+}
+
 function textureQualityScore(frame) {
   const storedSharpness = Number(frame?.colorSharpness) || 0;
   const storedFocus = Number(frame?.colorFocus) || 0;
@@ -206,11 +217,14 @@ export function selectTextureKeyframesForRetention(
   return retained.sort((left, right) => left - right);
 }
 
-// Retain the viewpoints that provide the most spatial and directional
-// coverage. Keeping every other frame is tempting, but a scan path can spend
-// different amounts of time on each wall; index decimation then drops a whole
-// area. This bounded farthest-point pass keeps the endpoints and fills the
-// remaining slots with the least-covered poses.
+// Retain a temporally even path of viewpoints. A farthest-point pass looks
+// attractive for coverage, but it can keep two distant poses and discard all
+// of the overlapping frames between them. That turns a continuous wall into
+// unsupported TSDF spans and is a common cause of bowed or doubled edges.
+// Texture views remain pinned first; the remaining depth slots are filled by
+// samples distributed across the whole capture timeline, with depth quality
+// breaking ties. This keeps nearby overlap without adding a user-facing scan
+// restriction.
 export function selectKeyframesForRetention(
   frames,
   maximum = MAX_FUSION_KEYFRAMES,
@@ -218,9 +232,6 @@ export function selectKeyframesForRetention(
   if (!Array.isArray(frames) || frames.length <= maximum) return frames?.slice() || [];
   const limit = Math.max(2, Math.floor(maximum));
   if (limit >= frames.length) return frames.slice();
-  const poses = frames.map(keyframePoseForRetention);
-  const timestamps = poses.map((pose, index) => pose.timestamp || index);
-  const timestampSpan = Math.max(1, timestamps[timestamps.length - 1] - timestamps[0]);
   // Texture retention has already reduced live captures to a small,
   // pose-diverse set. Seed geometry compaction with those frames so the
   // 60-frame worker bound cannot silently discard the only color view of a
@@ -234,46 +245,49 @@ export function selectKeyframesForRetention(
       ? textured
       : selectTextureKeyframesForRetention(frames, limit),
   );
-  if (selected.size < limit) selected.add(0);
-  if (selected.size < limit) selected.add(frames.length - 1);
-  while (selected.size < limit) {
+  // Pin both ends of the path, then choose the closest unselected frame to
+  // each evenly spaced timeline target. If a target lands on an already
+  // pinned texture frame, the next closest depth frame is used instead. The
+  // quality tie-break keeps a clearer revisit without moving it far from its
+  // original temporal slot.
+  selected.add(0);
+  selected.add(frames.length - 1);
+  if (selected.size > limit) {
+    const pinned = [0, frames.length - 1];
+    selected.clear();
+    pinned.forEach((index) => selected.add(index));
+    textured
+      .slice()
+      .sort((left, right) => qualityForRetention(frames, right) - qualityForRetention(frames, left))
+      .forEach((index) => {
+        if (selected.size < limit) selected.add(index);
+      });
+  }
+  const quality = (index) => qualityForRetention(frames, index);
+  for (let slot = 0; selected.size < limit && slot < limit; slot++) {
+    const target = (slot * (frames.length - 1)) / Math.max(1, limit - 1);
     let bestIndex = -1;
-    let bestScore = -Infinity;
+    let bestDistance = Infinity;
+    let bestQuality = -Infinity;
     for (let candidate = 0; candidate < frames.length; candidate++) {
       if (selected.has(candidate)) continue;
-      let score = Infinity;
-      selected.forEach((chosen) => {
-        const a = poses[candidate];
-        const b = poses[chosen];
-        const spatial = Math.hypot(
-          a.position[0] - b.position[0],
-          a.position[1] - b.position[1],
-          a.position[2] - b.position[2],
-        );
-        const directionDot = Math.max(
-          -1,
-          Math.min(
-            1,
-            a.direction[0] * b.direction[0] +
-              a.direction[1] * b.direction[1] +
-              a.direction[2] * b.direction[2],
-          ),
-        );
-        const angular = Math.acos(directionDot);
-        const temporal =
-          Math.abs(timestamps[candidate] - timestamps[chosen]) / timestampSpan;
-        score = Math.min(score, spatial + angular * 0.18 + temporal * 0.01);
-      });
-      if (score > bestScore) {
-        bestScore = score;
+      const distance = Math.abs(candidate - target);
+      const candidateQuality = quality(candidate);
+      if (
+        distance < bestDistance - 1e-6 ||
+        (Math.abs(distance - bestDistance) <= 1e-6 &&
+          candidateQuality > bestQuality)
+      ) {
         bestIndex = candidate;
+        bestDistance = distance;
+        bestQuality = candidateQuality;
       }
     }
     if (bestIndex < 0) break;
     selected.add(bestIndex);
   }
-  // The fallback matters only when all poses are identical and the novelty
-  // score ties. It still gives callers exactly the requested bounded count.
+  // A malformed timestamp/path must still return exactly the requested
+  // bounded count; the caller can then apply its normal overlap validation.
   for (let index = 0; selected.size < limit && index < frames.length; index++)
     selected.add(index);
   return [...selected]
@@ -890,6 +904,7 @@ export class RoomScanner {
       geometryMode: "view-aligned-v1", keepColor: true, colorImage: snapshot,
       nativeDepthWidth: depth?.width || 0, nativeDepthHeight: depth?.height || 0,
       nativeDepthUvTransform: depth?.normDepthBufferFromNormView?.matrix,
+      depthType: this.stats.depthType,
       ...quality,
     });
     if (!candidate) return false;
@@ -1046,6 +1061,7 @@ export class RoomScanner {
       nativeDepthWidth: depth?.width || 0,
       nativeDepthHeight: depth?.height || 0,
       nativeDepthUvTransform: depth?.normDepthBufferFromNormView?.matrix,
+      depthType: this.stats.depthType,
       camera: pose.position,
       timestamp,
       keepColor: false,
@@ -1053,7 +1069,7 @@ export class RoomScanner {
       angularSpeed: motion.angularSpeed,
     });
     if (!candidate) return false;
-    const filtered = filterDepth(candidate);
+    const filtered = filterDepth(candidate, { depthType: this.stats.depthType });
     const measuredCount = filtered.measuredMask.reduce(
       (count, value) => count + value,
       0,
@@ -1131,6 +1147,7 @@ export class RoomScanner {
       nativeDepthWidth: depth?.width || 0,
       nativeDepthHeight: depth?.height || 0,
       nativeDepthUvTransform: depth?.normDepthBufferFromNormView?.matrix,
+      depthType: this.stats.depthType,
       camera: pose.position,
       timestamp,
       colorImage: colorSnapshot,
@@ -1143,7 +1160,7 @@ export class RoomScanner {
       angularSpeed: motion.angularSpeed,
     });
     if (!keyframe) return;
-    const filtered = filterDepth(keyframe);
+    const filtered = filterDepth(keyframe, { depthType: this.stats.depthType });
     keyframe.measuredDepthCount = filtered.measuredMask.reduce(
       (count, value) => count + value,
       0,

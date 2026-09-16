@@ -74,8 +74,14 @@ export default function PartialScanReview({
         captureQuality: {
           ...(scan.captureQuality || {}),
           algorithmVersion: fused.diagnostics?.algorithmVersion || scan.captureQuality?.algorithmVersion,
+          fusionSettings:
+            fused.diagnostics?.fusionSettings || scan.captureQuality?.fusionSettings || null,
           fusedKeyframes: fused.diagnostics?.keyframes || 0,
           independentTextureFrames: fused.diagnostics?.independentTextureFrames || 0,
+          planarConsolidation: fused.diagnostics?.planarConsolidation || null,
+          denoising: fused.diagnostics?.denoising || null,
+          synchronizedTextureFrames: fused.diagnostics?.alignment?.synchronizedTextureFrames || 0,
+          poseRefinement: fused.diagnostics?.alignment?.poseRefinement || null,
         },
       });
     };

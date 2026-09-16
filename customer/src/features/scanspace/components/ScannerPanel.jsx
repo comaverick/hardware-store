@@ -45,6 +45,7 @@ const captureQualitySummary = (stats, fusion = null) => ({
   removedBridgeTriangles: fusion?.removedBridgeTriangles || 0,
   longEdgeTriangleRatio: fusion?.meshBridgeDiagnostics?.longEdgeRatio || 0,
   algorithmVersion: fusion?.algorithmVersion || 0,
+  fusionSettings: fusion?.fusionSettings || null,
   preparedKeyframes: fusion?.preparedKeyframes || 0,
   fusedKeyframes: fusion?.keyframes || 0,
   textureFramesBeforeSelection:
@@ -64,6 +65,9 @@ const captureQualitySummary = (stats, fusion = null) => ({
   fallbackBoundaryVertices: fusion?.fallbackBoundaryVertices || 0,
   revertedDeformationVertices: fusion?.revertedDeformationVertices || 0,
   planarConsolidation: fusion?.planarConsolidation || null,
+  denoising: fusion?.denoising || null,
+  synchronizedTextureFrames: fusion?.alignment?.synchronizedTextureFrames || 0,
+  poseRefinement: fusion?.alignment?.poseRefinement || null,
 });
 
 function CoverageCompass({ sectors = [], heading = 0 }) {

@@ -13,14 +13,20 @@ export function scanFusionOptions(raw, completionMode = "surface", extra = {}) {
     reconstructionProfile: "quality",
     floorOutlierTolerance: FLOOR_OUTLIER_TOLERANCE_METERS,
     pruneUnsupportedBridges: true,
-    // WebXR supplies one tracked coordinate system. Pairwise ICP on a mostly
-    // flat wall is under-constrained and can curl an otherwise straight wall.
-    poseRefinement: "native-tracking",
+    // WebXR tracking is a good starting pose, but the raw capture can still
+    // accumulate centimetres of drift while the camera crosses a wall. The
+    // fusion pass evaluates bounded corrections against held-out views. Depth
+    // and independent RGB snapshots participate in the same pose pass.
+    poseRefinement: "validated",
     requireCoherentSurfaceCore: false,
     preferCoherentSurfaceCore: true,
     rejectStructurallyInvalidSurface: false,
-    smoothingPasses: 3,
+    // Bounded normal-only denoising preserves discontinuities and caps the
+    // total displacement independently of the number of passes.
+    smoothingPasses: completionMode === "surface" ? 1 : 3,
+    // Keep all of the scanner's bounded depth path for a measured surface.
+    maxKeyframes: completionMode === "surface" ? 60 : 40,
+    depthType: raw?.stats?.depthType || raw?.depthType || "",
     ...extra,
   };
 }
-

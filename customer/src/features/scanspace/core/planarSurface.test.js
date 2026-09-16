@@ -145,3 +145,45 @@ test('oppositely wound duplicate sheets become one consistently oriented surface
   expect(signs.size).toBe(1);
   expect(signs.has(0)).toBe(false);
 });
+
+function measuredViews(shape, noise = 0) {
+  return Array.from({ length: 6 }, (_, view) => {
+    const mesh = sheet({ step: 0.025, z: (x, y) => shape(x, y) +
+      noise * Math.sin(x * 23 + view * 1.7) * Math.cos(y * 19 + view * 2.1) });
+    return { positions: mesh.positions, measuredMask: new Uint8Array(mesh.positions.length / 3).fill(1),
+      filteredCount: mesh.positions.length / 3, camera: [view * 0.08, 1, 2] };
+  });
+}
+
+test('contradictory depth ripples do not protect an entire flat wall from correction', () => {
+  const source = sheet({ step: 0.025, z: (x, y) => 0.025 * Math.sin(x * 23) * Math.cos(y * 19) });
+  const result = consolidatePlanarSurfaces(source, {
+    sourcePositions: source.positions, evidenceFrames: measuredViews(() => 0, 0.025), voxelSize: 0.022,
+  });
+  expect(result.planarConsolidation.planes.length).toBeGreaterThan(0);
+  expect(result.planarConsolidation.correctedVertices).toBeGreaterThan(2000);
+  const errors = [];
+  for (let i = 0; i < result.positions.length; i += 3)
+    if (result.positions[i] > 0.2 && result.positions[i] < 1.8 && result.positions[i + 1] > 0.2 && result.positions[i + 1] < 1.8)
+      errors.push(Math.abs(result.positions[i + 2]));
+  expect(errors.reduce((a, b) => a + b, 0) / errors.length).toBeLessThan(0.005);
+});
+
+test('mixed wall, curtain folds and a raised picture retain separate depth while the wall straightens', () => {
+  const shape = (x, y) => x < 0.65 ? 0.035 * Math.cos(x * Math.PI * 8) :
+    x > 1.05 && x < 1.65 && y > 0.65 && y < 1.45 ? 0.035 : 0;
+  const source = sheet({ step: 0.025, z: (x, y) => shape(x, y) +
+    (x > 0.75 && !(x > 1.05 && x < 1.65 && y > 0.65 && y < 1.45) ? 0.015 * Math.sin(x * 23) * Math.cos(y * 19) : 0) });
+  const result = consolidatePlanarSurfaces(source, {
+    sourcePositions: source.positions, evidenceFrames: measuredViews(shape, 0.005), voxelSize: 0.022,
+  });
+  expect(result.planarConsolidation.planes.length).toBeGreaterThan(0);
+  const curtain = [], picture = [];
+  for (let i = 0; i < result.positions.length; i += 3) {
+    const [x, y, z] = result.positions.subarray(i, i + 3);
+    if (x < 0.6 && y > 0.3 && y < 1.7) curtain.push(z);
+    if (x > 1.15 && x < 1.55 && y > 0.75 && y < 1.35) picture.push(z);
+  }
+  expect(Math.max(...curtain) - Math.min(...curtain)).toBeGreaterThan(0.06);
+  expect(Math.min(...picture)).toBeGreaterThan(0.029);
+});

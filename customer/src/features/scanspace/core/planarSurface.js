@@ -12,6 +12,10 @@ const basis = (n) => {
   const u = unit(cross(n, Math.abs(n[1]) < 0.8 ? [0, 1, 0] : [1, 0, 0]));
   return [u, cross(n, u)];
 };
+const median = (values) => {
+  const sorted = values.slice().sort((a, b) => a - b);
+  return sorted.length ? sorted[Math.floor(sorted.length / 2)] : 0;
+};
 
 function recordsFor(mesh) {
   const records = [];
@@ -194,25 +198,53 @@ function protectMeasuredRelief(group, plane, sourcePositions, frames, protectedV
       value.sum += residual; value.count++; cell.views.set(frameId, value);
     }
   }
+  const contrasts = new Map();
   const agrees = (a, b) => {
     if (!frames?.length) return true; // conservative geometry-only inspection
+    const key = `${a.key}/${b.key}`;
+    if (contrasts.has(key)) return contrasts.get(key);
     const expected = a.depth - b.depth;
-    const supporting = [];
+    const observations = [];
     for (const [id, first] of a.views) {
       const second = b.views.get(id);
       if (!second) continue;
       const difference = first.sum / first.count - second.sum / second.count;
-      if (difference * expected <= 0 || Math.abs(difference) < 0.009) continue;
-      supporting.push(id);
+      observations.push({ id, difference });
     }
-    // Too little evidence is not permission to erase a coherent measured step.
-    if (supporting.length < 2) return a.views.size < 2 || b.views.size < 2;
-    return supporting.some((id) => supporting.some((other) => {
-      const p = frames[id].camera, q = frames[other].camera;
-      return p && q && Math.hypot(...sub(p, q)) >= 0.04;
-    }));
+    // Unobserved detail remains protected locally, but must not flood-fill a
+    // whole wall. Require at least two independent views and reject any edge
+    // with contradictory depth evidence; a single view cannot distinguish a
+    // real raised object from a registration seam.
+    if (observations.length < 2) {
+      contrasts.set(key, null);
+      return null;
+    }
+    const center = median(observations.map((o) => o.difference));
+    const scatter = 1.4826 * median(observations.map((o) => Math.abs(o.difference - center)));
+    const supporting = observations.filter((o) => o.difference * expected > 0 &&
+      Math.abs(o.difference) >= 0.006 &&
+      Math.abs(o.difference - center) <= Math.max(0.008, scatter * 2));
+    const stable = center * expected > 0 && Math.abs(center) >= Math.max(0.009, scatter * 1.5) &&
+      Math.abs(center - expected) <= Math.max(0.01, Math.abs(expected) * 0.45) &&
+      supporting.length >= Math.ceil(observations.length * 0.7) &&
+      supporting.some(({ id }) => supporting.some(({ id: other }) => {
+        const p = frames[id].camera, q = frames[other].camera;
+        return p && q && Math.hypot(...sub(p, q)) >= 0.04;
+      }));
+    contrasts.set(key, stable);
+    return stable;
   };
   const seeds = new Set();
+  const raised = [];
+  const depths = [...cells.values()].map((c) => c.depth);
+  const baseline = median(depths);
+  const hasEvidence = !!frames?.length;
+  const stepAt = (a, b) => a?.count >= 3 && b?.count >= 3 &&
+    Math.abs(a.depth - b.depth) > 0.014 &&
+    // With captured views, a depth step is protected only when the same
+    // edge is reproduced by separated cameras. Synthetic/legacy callers that
+    // have no view evidence retain the geometry-only behavior.
+    (!hasEvidence || agrees(a, b) === true);
   for (const cell of cells.values()) {
     // A sparsely sampled cell can contain only one of two overlapping sheets.
     // Alternating sheet occupancy is not a measured step or curtain ridge.
@@ -223,40 +255,48 @@ function protectMeasuredRelief(group, plane, sourcePositions, frames, protectedV
       if (before?.count >= 3 && after?.count >= 3) {
         const left = cell.depth - before.depth, right = cell.depth - after.depth;
         if (left * right > 0 && Math.min(Math.abs(left), Math.abs(right)) > 0.006 &&
-            Math.abs(left + right) > 0.018 && agrees(cell, before) && agrees(cell, after)) {
+            Math.abs(left + right) > 0.018 &&
+            (!hasEvidence || (agrees(cell, before) === true && agrees(cell, after) === true))) {
           seeds.add(cell.key); seeds.add(before.key); seeds.add(after.key);
         }
       }
-      if (after?.count >= 3 && Math.abs(cell.depth - after.depth) > 0.014 && agrees(cell, after)) {
+      // A real edge continues spatially. Do not seed protection from a lone
+      // inconsistent cell, which otherwise expands into a large frozen patch.
+      const continuous = [-1, 1].some((side) => {
+        const a = cells.get(`${x + dy * side},${y + dx * side}`);
+        const b = cells.get(`${x + dx + dy * side},${y + dy + dx * side}`);
+        return stepAt(a, b) && (a.depth - b.depth) * (cell.depth - after?.depth) > 0;
+      });
+      if (stepAt(cell, after) && continuous) {
         seeds.add(cell.key); seeds.add(after.key);
+        const front = Math.abs(cell.depth - baseline) > Math.abs(after.depth - baseline) ? cell : after;
+        const back = front === cell ? after : cell;
+        if (agrees(front, back) === true) raised.push({ cell: front, front, back });
       }
     }
   }
   // Grow along a raised front, not just its edge. A picture need not have a
   // visible back or side face to retain its measured offset from the wall.
-  const depths = [...cells.values()].map((c) => c.depth).sort((a, b) => a - b);
-  const baseline = depths[Math.floor(depths.length / 2)] || 0;
-  const queue = [...seeds];
-  for (let i = 0; i < queue.length; i++) {
-    const cell = cells.get(queue[i]), [x, y] = cell.xy;
+  const grown = new Set();
+  for (let i = 0; i < raised.length; i++) {
+    const { cell, front, back } = raised[i], [x, y] = cell.xy;
     if (Math.abs(cell.depth - baseline) < 0.012) continue;
     for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
       const next = cells.get(`${x + dx},${y + dy}`);
-      if (!next || seeds.has(next.key)) continue;
-      if ((next.depth - baseline) * (cell.depth - baseline) > 0 &&
-          Math.abs(next.depth - baseline) >= 0.012 && Math.abs(next.depth - cell.depth) < 0.02) {
-        seeds.add(next.key); queue.push(next.key);
+      if (!next || grown.has(next.key)) continue;
+      // Compare to the ORIGINAL raised surface and its background, not just
+      // the previous cell. A random walk through wall noise cannot grow a mask.
+      if (Math.abs(next.depth - front.depth) <= Math.max(0.008, Math.abs(front.depth - back.depth) * 0.35) &&
+          Math.abs(next.depth - baseline) >= 0.012 && agrees(next, back) === true) {
+        seeds.add(next.key); grown.add(next.key); raised.push({ cell: next, front, back });
       }
     }
   }
   // Include boundaries: otherwise an eligible neighboring wall triangle can
   // still pull a protected fold/frame vertex onto its plane.
-  const expanded = new Set(seeds);
-  for (const key of seeds) {
-    const [x, y] = cells.get(key).xy;
-    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) expanded.add(`${x + dx},${y + dy}`);
-  }
-  for (const key of expanded) cells.get(key)?.ids.forEach((id) => protectedVertices.add(id));
+  // Faces incident on a protected vertex are already excluded below. Expanding
+  // by a full 3x3 grid added a 7.5 cm halo and swallowed otherwise flat walls.
+  for (const key of seeds) cells.get(key)?.ids.forEach((id) => protectedVertices.add(id));
 }
 
 function detectPlanes(records, distanceLimit, options, protectedVertices) {
@@ -267,12 +307,28 @@ function detectPlanes(records, distanceLimit, options, protectedVertices) {
     // Deterministic, area-weighted normal/offset voting; no random RANSAC
     // outcomes, Manhattan-room assumption, or dependency on triangle density.
     const directions = new Map();
+    const coarseNormals = new Map();
     for (const r of available) {
       const n = canonical(r.normal), key = n.map((x) => Math.round(x * 12)).join(',');
       if (!directions.has(key)) directions.set(key, { n: [0, 0, 0], area: 0 });
       const value = directions.get(key);
       value.area += r.area;
       for (let i = 0; i < 3; i++) value.n[i] += n[i] * r.area;
+      const cell = r.center.map((x) => Math.floor(x / 0.3)).join(',');
+      if (!coarseNormals.has(cell)) coarseNormals.set(cell, { n: [0, 0, 0], area: 0 });
+      const coarse = coarseNormals.get(cell);
+      coarse.area += r.area;
+      for (let i = 0; i < 3; i++) coarse.n[i] += n[i] * r.area;
+    }
+    // Small noisy triangles may never vote for their underlying flat surface.
+    // Add measured, locally averaged normals as hypotheses (not axis-aligned
+    // walls). The same relief and support tests still decide eligibility.
+    for (const coarse of coarseNormals.values()) {
+      const n = unit(coarse.n), key = n.map((x) => Math.round(x * 12)).join(',');
+      if (!directions.has(key)) directions.set(key, { n: [0, 0, 0], area: 0 });
+      const value = directions.get(key);
+      value.area += coarse.area;
+      for (let i = 0; i < 3; i++) value.n[i] += n[i] * coarse.area;
     }
     const candidates = [...directions.values()].sort((a, b) => b.area - a.area).slice(0, 20);
     let best = null;
@@ -370,9 +426,10 @@ export function consolidatePlanarSurfaces(mesh, options = {}) {
   const planes = detectPlanes(records, distanceLimit, options, protectedVertices);
   // Protection discovered by another plane must also win at shared corners.
   for (const r of records) if (r.ids.some((id) => protectedVertices.has(id))) r.plane = -1;
-  const diagnostics = { version: 2, planes: [], protectedVertices: protectedVertices.size, correctedVertices: 0, removedOverlapArea: 0, inputTriangles: mesh.indices.length / 3, outputTriangles: mesh.indices.length / 3 };
+  const diagnostics = { version: 3, planes: [], protectedVertices: protectedVertices.size, correctedVertices: 0, removedOverlapArea: 0, inputTriangles: mesh.indices.length / 3, outputTriangles: mesh.indices.length / 3 };
   const positions = new Float32Array(mesh.positions);
-  if (options.sourcePositions) for (const id of protectedVertices) positions.set(options.sourcePositions.subarray(id * 3, id * 3 + 3), id * 3);
+  if (options.sourcePositions && !options.preserveDenoisedRelief)
+    for (const id of protectedVertices) positions.set(options.sourcePositions.subarray(id * 3, id * 3 + 3), id * 3);
   if (!planes.length) {
     const restored = options.sourcePositions && protectedVertices.size;
     return { ...mesh, positions: restored ? positions : mesh.positions,
