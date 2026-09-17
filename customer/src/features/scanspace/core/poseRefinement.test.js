@@ -20,7 +20,7 @@ test('same-capture depth and independent RGB get exactly the same held-out-valid
   const photo = { ...plane(10, 0.02, 0.035, 200), textureOnly: true, colorImage: new Uint8Array([250, 20, 80, 255]) };
   const original = depth.transformMatrix.slice();
   const input = [plane(0, -0.16), plane(1, -0.08), depth, photo, plane(3, 0.1), plane(4, 0.18)];
-  const result = refineFramePoses(input);
+  const result = refineFramePoses(input, { minimumTrajectorySupport: 1 });
   const correctedDepth = result.frames.find((f) => f.frameId === 2);
   const correctedPhoto = result.frames.find((f) => f.frameId === 10);
   expect(Math.abs(correctedDepth.transformMatrix[14])).toBeLessThan(0.008);
@@ -31,6 +31,15 @@ test('same-capture depth and independent RGB get exactly the same held-out-valid
   expect(depth.transformMatrix).toEqual(original);
   expect(photo.transformMatrix).toEqual(original);
   expect(result.diagnostics.corrections.find((c) => c.frameId === 2).heldOutViews).toBeGreaterThanOrEqual(2);
+});
+
+test('an isolated pairwise correction cannot tear the native camera trajectory', () => {
+  const target = plane(2, 0.02, 0.035, 200);
+  const input = [plane(0, -0.16), plane(1, -0.08), target, plane(3, 0.1), plane(4, 0.18)];
+  const result = refineFramePoses(input);
+  expect(result.frames[2].transformMatrix).toEqual(target.transformMatrix);
+  expect(result.diagnostics.corrected).toBe(0);
+  expect(result.diagnostics.rejectedTrajectory).toBeGreaterThan(0);
 });
 
 test('an attractive pairwise fit contradicted by other views does not move a good frame', () => {

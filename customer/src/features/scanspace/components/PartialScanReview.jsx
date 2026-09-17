@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { CheckCircle, Info, WarningCircle } from "@phosphor-icons/react";
 import PartialScanScene from "./PartialScanScene";
+import ScanRenderProgress from "./ScanRenderProgress";
 import { downloadDepthCapture } from "../core/captureDebug";
 import { downloadScan } from "../core/partialScanFile";
 import { buildScanCloud } from "../core/scanCloud";
@@ -21,19 +22,33 @@ export default function PartialScanReview({
     scan.rawCapture ? null : scan,
   );
   const [renderError, setRenderError] = useState("");
+  const [renderProgress, setRenderProgress] = useState({
+    stage: "preparing",
+    progress: 0,
+  });
   useEffect(() => {
     if (!scan.rawCapture?.keyframes?.length) {
       setRenderedScan(scan);
       setRenderError("");
+      setRenderProgress(null);
       return undefined;
     }
     let active = true;
     const worker = new Worker(new URL("../core/fusion.worker.js", import.meta.url));
     setRenderedScan(null);
     setRenderError("");
+    setRenderProgress({ stage: "preparing", progress: 0 });
     worker.onmessage = (event) => {
       if (!active) return;
+      if (event.data.type === "progress") {
+        setRenderProgress({
+          stage: event.data.stage || "preparing",
+          progress: event.data.progress,
+        });
+        return;
+      }
       if (event.data.type === "error") {
+        setRenderProgress(null);
         setRenderError(event.data.error || "The raw scan could not be rendered.");
         const points = rawCapturePoints(scan.rawCapture);
         setRenderedScan({
@@ -50,6 +65,7 @@ export default function PartialScanReview({
         return;
       }
       if (event.data.type !== "complete") return;
+      setRenderProgress(null);
       const fused = event.data.result;
       const points = observationPoints(fused.observations) || rawCapturePoints(scan.rawCapture);
       const cloud = points.length
@@ -87,6 +103,7 @@ export default function PartialScanReview({
     };
     worker.onerror = () => {
       if (!active) return;
+      setRenderProgress(null);
       setRenderError("The raw scan renderer stopped unexpectedly.");
       const points = rawCapturePoints(scan.rawCapture);
       setRenderedScan({
@@ -115,11 +132,12 @@ export default function PartialScanReview({
   const rawRendering = !!scan.rawCapture && !renderedScan && !renderError;
   if (rawRendering)
     return (
-      <section className="ss-partial-review">
-        <div className="ss-notice ss-notice--status" role="status">
-          <strong>Rendering raw scan…</strong>
-          <p>The captured depth and camera frames are being rebuilt on this device.</p>
-        </div>
+      <section className="ss-partial-review ss-partial-review--rendering">
+        <ScanRenderProgress
+          stage={renderProgress?.stage}
+          progress={renderProgress?.progress}
+          title="Rendering your captured scan"
+        />
       </section>
     );
   if (renderError && !renderedScan)

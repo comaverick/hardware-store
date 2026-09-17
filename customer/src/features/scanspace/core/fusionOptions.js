@@ -18,6 +18,11 @@ export function scanFusionOptions(raw, completionMode = "surface", extra = {}) {
     // fusion pass evaluates bounded corrections against held-out views. Depth
     // and independent RGB snapshots participate in the same pose pass.
     poseRefinement: "validated",
+    // A correction still needs three consecutive, held-out-validated poses.
+    // Permit the small change across that run seen when mobile tracking drift
+    // settles, while rejecting isolated pose jumps.
+    poseRefinementMaximumTrajectoryTranslationStep: 0.045,
+    poseRefinementMaximumTrajectoryRotationStep: 0.04,
     requireCoherentSurfaceCore: false,
     preferCoherentSurfaceCore: true,
     rejectStructurallyInvalidSurface: false,

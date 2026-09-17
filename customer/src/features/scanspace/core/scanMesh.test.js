@@ -936,7 +936,7 @@ test("allows validated multi-view surface fusion without a room heading sweep", 
   expect(result.mesh?.kind).toBe("projective-tsdf-surface-net");
   expect(result.mesh?.triangleCount).toBeGreaterThan(0);
   expect(result.diagnostics.completionMode).toBe("surface");
-  expect(result.diagnostics.algorithmVersion).toBe(38);
+  expect(result.diagnostics.algorithmVersion).toBe(40);
   expect(result.diagnostics.planarConsolidation.planes.length).toBeGreaterThan(0);
   expect(result.diagnostics.globalSurfaceConsensus).toBeUndefined();
   expect(result.diagnostics.measuredSurfaceQuality.assessed).toBe(true);
@@ -1317,7 +1317,11 @@ test("validated pose refinement removes a small depth-pose drift before fusion",
   drifted.transformMatrix[14] += 0.035;
   const result = fuseRgbdKeyframes(
     [planeKeyframe(0), drifted, planeKeyframe(0.08), planeKeyframe(-0.08)],
-    { completionMode: "surface", poseRefinement: "validated" },
+    {
+      completionMode: "surface",
+      poseRefinement: "validated",
+      poseRefinementMinimumTrajectorySupport: 1,
+    },
   );
   expect(result.mesh?.kind).toBe("projective-tsdf-surface-net");
   expect(result.diagnostics.alignment.poseCorrectionApplied).toBe(true);

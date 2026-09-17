@@ -11,6 +11,7 @@ import {
   FLOOR_OUTLIER_TOLERANCE_METERS,
 } from "../core/readiness";
 import { scanFusionOptions } from "../core/fusionOptions";
+import ScanRenderProgress from "./ScanRenderProgress";
 
 function observationPoints(observations) {
   if (!observations?.count || !observations.positions?.length) return null;
@@ -473,25 +474,25 @@ export default function ScannerPanel({
     return finishSurface();
   }
   return (
-    <div className={`ss-scanner ${active ? "is-scanning" : ""}`}>
+    <div className={`ss-scanner ${active || (busy && fusion) ? "is-scanning" : ""}`}>
       <canvas className="ss-xr-canvas" ref={canvas} />
       <div className="ss-scan-overlay" ref={overlay}>
         <div className="ss-scan-heading">
           <span className="ss-kicker">ScanSpace capture</span>
           <h2>
-            {active
-              ? busy
-                ? "Reconstructing capture"
-                : stats.depthActive
+            {busy && fusion
+              ? "Reconstructing capture"
+              : active
+                ? stats.depthActive
                   ? "Depth scanning"
                   : "Looking for depth"
               : "Bring your space into ScanSpace."}
           </h2>
           <p>
-            {active
-              ? busy
-                ? "Using the accepted depth frames already captured."
-                : stats.paused
+            {busy && fusion
+              ? "Using the accepted depth frames already captured."
+              : active
+                ? stats.paused
                   ? "Scanning paused."
                   : !stats.tracking
                     ? "Tracking lost. Move slowly toward an area you already scanned."
@@ -513,7 +514,7 @@ export default function ScannerPanel({
             </button>
           </div>
         )}
-        {active && (
+        {active && !busy && (
           <>
             <div className="ss-scan-live">
               <div>
@@ -653,13 +654,18 @@ export default function ScannerPanel({
             </div>
           </>
         )}
-        {busy && (
+        {busy && fusion && (
+          <ScanRenderProgress
+            stage={fusion.stage}
+            progress={fusion.progress}
+            title="Building your captured scan"
+            detail="Capture is paused. Your saved depth frames are safe while the result is built."
+            variant="scanner"
+          />
+        )}
+        {busy && !fusion && (
           <p className="ss-notice" role="status">
-            {active
-              ? fusion
-                ? `${fusion.stage === "fusing" ? "Fusing" : fusion.stage === "meshing" ? "Meshing" : fusion.stage === "texturing" ? "Texturing" : "Preparing"} measured surfaces${Number.isFinite(fusion.progress) ? ` (${fusion.progress}%)` : ""}…`
-                : "Reconstructing measured surfaces…"
-              : "Starting camera…"}
+            {active ? "Preparing captured frames…" : "Starting camera…"}
           </p>
         )}
         {error && (
@@ -667,9 +673,10 @@ export default function ScannerPanel({
             {error}
           </p>
         )}
-        <details className="ss-diagnostics">
-          <summary>Device diagnostics</summary>
-          <dl>
+        {!busy && (
+          <details className="ss-diagnostics">
+            <summary>Device diagnostics</summary>
+            <dl>
             {Object.entries({
               browser: capabilities.browser,
               secure: capabilities.secure,
@@ -718,16 +725,17 @@ export default function ScannerPanel({
                 <dd>{String(v)}</dd>
               </div>
             ))}
-          </dl>
-          {stats.errors?.map((e, i) => (
-            <p key={i}>{e}</p>
-          ))}
-          {active && (stats.fusionKeyframes || 0) > 0 && (
+            </dl>
+            {stats.errors?.map((e, i) => (
+              <p key={i}>{e}</p>
+            ))}
+            {active && (stats.fusionKeyframes || 0) > 0 && (
               <button type="button" onClick={downloadDebugCapture}>
                 Export RGB-D debug capture
               </button>
             )}
-        </details>
+          </details>
+        )}
       </div>
     </div>
   );

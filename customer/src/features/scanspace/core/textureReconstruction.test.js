@@ -101,6 +101,18 @@ test("UVs project the final mesh, even when an obsolete pre-correction copy is s
   }
 });
 
+test("direct depth samples tolerate fused relief without crossing a deeper occlusion", () => {
+  const relief = triangleMesh();
+  for (let index = 2; index < relief.positions.length; index += 3)
+    relief.positions[index] -= 0.075;
+  expect(texturedMesh(relief, [cameraFrame()]).textureCoverage).toBe(100);
+
+  const occluded = triangleMesh();
+  for (let index = 2; index < occluded.positions.length; index += 3)
+    occluded.positions[index] -= 0.12;
+  expect(texturedMesh(occluded, [cameraFrame()]).textureCoverage).toBe(0);
+});
+
 test("unrelated dark and bright camera views do not recolor one another", () => {
   const frames = [cameraFrame(60), cameraFrame(210, 20)];
   const result = texturedMesh(triangleMesh(), frames);

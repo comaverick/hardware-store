@@ -1159,6 +1159,7 @@ export function refineFramePoses(frames, options = {}) {
     corrected: 0,
     rejected: 0,
     rejectedValidation: 0,
+    rejectedTrajectory: 0,
     corrections: [],
   };
   if (!Array.isArray(frames) || frames.length < 2)
@@ -1167,7 +1168,13 @@ export function refineFramePoses(frames, options = {}) {
   const window = Math.max(1, options.window || 3);
   const captureKey = (frame) => `${frame.timestamp || 0}:${Array.from(frame.transformMatrix).map((v) => v.toFixed(6)).join(',')}`;
   const keys = frames.map(captureKey);
-  const applied = new Map([[keys[0], null]]);
+  const evaluated = new Set([keys[0]]);
+  const candidates = [];
+  const captureOrder = new Map();
+  let nextCaptureOrder = 0;
+  keys.forEach((key) => {
+    if (!captureOrder.has(key)) captureOrder.set(key, nextCaptureOrder++);
+  });
   const cameraDistance = (a, b) => Math.hypot(...[0, 1, 2].map((axis) => a.camera[axis] - b.camera[axis]));
   // Camera poses landing exactly on the nominal four-centimetre boundary can
   // round a few ulps below it. Keep those genuinely independent views in the
@@ -1175,11 +1182,8 @@ export function refineFramePoses(frames, options = {}) {
   const minimumReferenceDistance = MIN_INDEPENDENT_VIEW_METERS * 0.9;
   for (let index = 1; index < frames.length; index++) {
     const target = frames[index];
-    if (applied.has(keys[index])) {
-      const delta = applied.get(keys[index]);
-      if (delta) corrected[index] = applyRigidDeltaToFrame(target, delta);
-      continue;
-    }
+    if (evaluated.has(keys[index])) continue;
+    evaluated.add(keys[index]);
     const references = [];
     const seen = new Set([keys[index]]);
     for (let distance = 1; distance < frames.length && references.length < window * 2; distance++) {
@@ -1210,25 +1214,87 @@ export function refineFramePoses(frames, options = {}) {
     }
     if (!best) {
       diagnostics.rejected++;
-      applied.set(keys[index], null);
       continue;
     }
-    applied.set(keys[index], best.delta);
-    corrected[index] = applyRigidDeltaToFrame(target, best.delta);
+    candidates.push({ key: keys[index], index, target, best });
+  }
+
+  // A camera trajectory cannot jump several centimetres in one direction for
+  // one frame and then jump back for the next. Pairwise ICP can nevertheless
+  // prefer exactly that on a mostly planar wall because lateral motion along
+  // the plane is weakly constrained. Applying those isolated fits tears one
+  // wall into visible sheets. Accept only a run of mutually compatible pose
+  // proposals; otherwise preserve WebXR's native trajectory. This never drops
+  // a captured frame or blocks completion.
+  const translationDifference = (left, right) => Math.hypot(
+    ...left.translation.map((value, axis) => value - right.translation[axis]),
+  );
+  const rotationDifference = (left, right) => {
+    const dot = Math.abs(left.quaternion.reduce(
+      (sum, value, axis) => sum + value * right.quaternion[axis],
+      0,
+    ));
+    return 2 * Math.acos(clamp(dot, -1, 1));
+  };
+  const minimumTrajectorySupport = Math.max(
+    1,
+    options.minimumTrajectorySupport || 3,
+  );
+  const maximumCaptureGap = Math.max(1, options.maximumTrajectoryGap || window);
+  const maximumTranslationStep =
+    options.maximumTrajectoryTranslationStep || 0.025;
+  const maximumRotationStep =
+    options.maximumTrajectoryRotationStep || 0.025;
+  const accepted = new Set();
+  let component = [];
+  const flushComponent = () => {
+    if (component.length >= minimumTrajectorySupport)
+      component.forEach((candidate) => accepted.add(candidate.key));
+    component = [];
+  };
+  candidates
+    .slice()
+    .sort((left, right) => left.index - right.index)
+    .forEach((candidate) => {
+      const previous = component[component.length - 1];
+      const compatible = !previous || (
+        captureOrder.get(candidate.key) - captureOrder.get(previous.key) <= maximumCaptureGap &&
+        translationDifference(candidate.best.delta, previous.best.delta) <= maximumTranslationStep &&
+        rotationDifference(candidate.best.delta, previous.best.delta) <= maximumRotationStep
+      );
+      if (!compatible) flushComponent();
+      component.push(candidate);
+    });
+  flushComponent();
+
+  const applied = new Map();
+  candidates.forEach(({ key, index, target, best }) => {
+    if (!accepted.has(key)) {
+      diagnostics.rejected++;
+      diagnostics.rejectedTrajectory++;
+      return;
+    }
+    applied.set(key, best.delta);
     diagnostics.corrected++;
     diagnostics.corrections.push({
       frameId: target.frameId,
-      referenceFrameId: corrected[best.referenceIndex].frameId,
+      referenceFrameId: frames[best.referenceIndex].frameId,
       pairCount: best.pairCount,
       translationMeters: best.translationMagnitude,
+      translation: best.delta.translation.slice(),
       rotationRadians: best.rotationAngle,
+      quaternion: best.delta.quaternion.slice(),
       medianResidualBefore: best.delta.beforeMedian,
       medianResidualAfter: best.delta.afterMedian,
       heldOutViews: best.validation.views,
       heldOutResidualBefore: best.validation.before,
       heldOutResidualAfter: best.validation.after,
     });
-  }
+  });
+  frames.forEach((frame, index) => {
+    const delta = applied.get(keys[index]);
+    if (delta) corrected[index] = applyRigidDeltaToFrame(frame, delta);
+  });
   diagnostics.maxTranslationMeters = diagnostics.corrections.reduce(
     (maximum, correction) => Math.max(maximum, correction.translationMeters),
     0,
@@ -4167,6 +4233,27 @@ export function closestProjectiveDepthAgreement(
   return support >= 2 ? { ...closest, support } : null;
 }
 
+function textureDepthAgreementLimit(agreement, vertex = false) {
+  if (!agreement) return 0;
+  const depth = Math.max(0.2, Number(agreement.depth) || 0);
+  // The fused surface can legitimately sit a few centimetres away from any
+  // one raw depth sample on deep curtain folds, picture relief, and thin shelf
+  // edges. Give direct measurements a small bounded allowance so those sharp
+  // source images can texture the reconstructed relief. Keep neighbor-based
+  // recovery at the stricter legacy limit: that path is closest to an
+  // occlusion boundary and must not pull wall color through an object.
+  if (agreement.radius > 0)
+    return vertex
+      ? Math.max(0.065, depth * 0.035)
+      : Math.max(0.055, depth * 0.03);
+  // Direct readings are substantially safer than recovered neighbors. Allow
+  // enough residual for a fused thin object to retain its sharp photograph,
+  // but cap the allowance below a 12 cm foreground/background separation.
+  return vertex
+    ? clamp(depth * 0.055, 0.104, 0.11)
+    : clamp(depth * 0.05, 0.091, 0.1);
+}
+
 export function texturedMesh(mesh, frames, precomputedCalibration = null, options = {}) {
   const atlas = buildAtlas(frames, precomputedCalibration, mesh.indices.length / 3, options);
   const sharedNormals = computeNormals(mesh);
@@ -4289,7 +4376,10 @@ export function texturedMesh(mesh, frames, precomputedCalibration = null, option
       if (
         !centerAgreement ||
         centerAgreement.difference >
-          Math.max(0.055, centerAgreement.depth * 0.03)
+          textureDepthAgreementLimit(
+            centerAgreement,
+            false,
+          )
       )
         return;
       const vertexAgreements = vertexDepthProjections.map((projection) =>
@@ -4300,7 +4390,10 @@ export function texturedMesh(mesh, frames, precomputedCalibration = null, option
           (agreement) =>
             !agreement ||
             agreement.difference >
-              Math.max(0.065, agreement.depth * 0.035),
+              textureDepthAgreementLimit(
+                agreement,
+                true,
+              ),
         )
       )
         return;
@@ -4716,6 +4809,14 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       maxTranslation: options.poseRefinementMaxTranslation || 0.085,
       maxRotation: options.poseRefinementMaxRotation || 0.095,
       maxResidual: options.poseRefinementMaxResidual || 0.055,
+      minimumTrajectorySupport:
+        options.poseRefinementMinimumTrajectorySupport || 3,
+      maximumTrajectoryTranslationStep:
+        options.poseRefinementMaximumTrajectoryTranslationStep,
+      maximumTrajectoryRotationStep:
+        options.poseRefinementMaximumTrajectoryRotationStep,
+      maximumTrajectoryGap:
+        options.poseRefinementMaximumTrajectoryGap,
     });
     const refinedOverlap = {};
     overlapping = validateFrameOverlap(refinement.frames.filter((frame) => geometryIds.has(frame.frameId)), refinedOverlap);
@@ -4723,7 +4824,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     Object.assign(alignment, refinedOverlap);
     alignment.initial = initialOverlap;
     alignment.poseCorrectionApplied = refinement.diagnostics.corrected > 0;
-    alignment.poseRefinement = "held-out-shared-rgbd-trajectory";
+    alignment.poseRefinement = "held-out-trajectory-coherent-shared-rgbd";
     alignment.synchronizedTextureFrames = extraTextureFrames.length;
     alignment.poseRefinementDiagnostics = refinement.diagnostics;
   } else {
@@ -4847,7 +4948,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   if (localLayerConsensus.diagnostics)
     alignment.localLayerConsensus = localLayerConsensus.diagnostics;
   const stages = {
-    algorithmVersion: 38,
+    algorithmVersion: 40,
     completionMode: options.completionMode === "surface" ? "surface" : "room",
     reconstructionProfile: options.reconstructionProfile || "quality",
     supportMode: "translated-camera-viewpoints",

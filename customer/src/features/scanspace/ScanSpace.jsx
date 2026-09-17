@@ -34,6 +34,7 @@ import {
 } from "./services";
 import RoomReview from "./components/RoomReview";
 import SavedProjectsDialog from "./components/SavedProjectsDialog";
+import ScanRenderProgress from "./components/ScanRenderProgress";
 import "./scanspace.css";
 const ScannerPanel = lazy(() => import("./components/ScannerPanel"));
 const RoomEditor = lazy(() => import("./components/RoomEditor"));
@@ -48,6 +49,7 @@ export default function ScanSpace() {
     [surfaceScan, setSurfaceScan] = useState(null),
     [capture, setCapture] = useState({}),
     [error, setError] = useState(""),
+    [importing, setImporting] = useState(null),
     [draft, setDraft] = useState(false),
     [savedOpen, setSavedOpen] = useState(false);
   const transferStarted = useRef(false);
@@ -122,6 +124,9 @@ export default function ScanSpace() {
     const file = input.files?.[0];
     if (!file) return;
     try {
+      setError("");
+      setImporting({ name: file.name });
+      setStage("importing");
       const beginning = await file.slice(0, 65536).text();
       const scanFile = looksLikeScanFile(beginning);
       if (looksLikeScanDiagnostics(file.name, beginning))
@@ -146,8 +151,10 @@ export default function ScanSpace() {
         openRoom(parseRoomImport(contents));
       }
     } catch (reason) {
+      setStage("welcome");
       setError(reason.message || "The ScanSpace file could not be opened.");
     } finally {
+      setImporting(null);
       input.value = "";
     }
   }
@@ -303,6 +310,18 @@ export default function ScanSpace() {
               </div>
             </li>
           </ol>
+        </div>
+      )}
+      {stage === "importing" && (
+        <div className="ss-import-rendering">
+          <ScanRenderProgress
+            title="Opening your scan"
+            detail={
+              importing?.name
+                ? `Reading ${importing.name}. The raw capture will render next.`
+                : "Reading the selected ScanSpace file."
+            }
+          />
         </div>
       )}
       {stage === "scan" && (
