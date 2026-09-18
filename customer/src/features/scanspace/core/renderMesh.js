@@ -1,5 +1,17 @@
 import * as THREE from "three";
 
+// A photograph on the back of a single measured sheet is mirrored, not an
+// observation of the room's other side. Retain the geometry but make that
+// distinction visible without layering a second mesh over the first one.
+export function shadeUnobservedBacks(shader) {
+  shader.fragmentShader = shader.fragmentShader.replace(
+    "#include <opaque_fragment>",
+    "if (!gl_FrontFacing) { outgoingLight = vec3(0.08, 0.11, 0.095); }\n#include <opaque_fragment>",
+  );
+}
+
+export const observedSideProgramKey = () => "scan-observed-side-v1";
+
 // Live, saved and imported scans display the exact same finished geometry.
 // Moving vertices here folds small triangles and stretches already-baked UVs.
 // All geometry correction belongs in fusion, BEFORE camera projection.

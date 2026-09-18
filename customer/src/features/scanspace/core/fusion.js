@@ -1,4 +1,7 @@
 import { consolidatePlanarSurfaces } from "./planarSurface.js";
+import { refineJointTrajectory } from "./trajectoryAlignment.js";
+import { registerSurfaceTextures } from "./textureRegistration.js";
+import { selectSurfaceTextures } from "./surfaceTextures.js";
 import { textureAtlasLayout, buildTextureDetailGrid, projectedPatchDetail,
   detailPreservingCandidates } from "./textureDetail.js";
 
@@ -2429,6 +2432,7 @@ export function fillSmallMeshHoles(mesh, options = {}) {
   const positions = Array.from(mesh.positions);
   const colors = Array.from(mesh.colors || []);
   const indices = Array.from(mesh.indices);
+  const patches = mesh.surfacePatchIds ? Array.from(mesh.surfacePatchIds) : null;
   const maxDiameter = options.maxDiameter || 0.42;
   const maxPerimeter = options.maxPerimeter || maxDiameter * 5.5;
   const maxPlanarity = options.maxPlanarity || 0.055;
@@ -2499,6 +2503,25 @@ export function fillSmallMeshHoles(mesh, options = {}) {
       )
     )
       return;
+    // The fan center must be inside every edge's half-plane. Concave loops
+    // without a valid kernel remain open; a fan there would cross the rim.
+    if (points.some((point, index) => {
+      const next = points[(index + 1) % points.length];
+      const a = next.map((value, axis) => value - point[axis]);
+      const b = center.map((value, axis) => value - point[axis]);
+      const cross = [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+      return cross.reduce((sum, value, axis) => sum + value * loopNormal[axis], 0) < -1e-10;
+    })) return;
+    let patch = -1;
+    if (options.supportedPlanes) {
+      patch = options.supportedPlanes.findIndex(plane =>
+        Math.abs(plane.normal.reduce((sum, value, axis) => sum + value * referenceNormal[axis], 0)) > 0.985 &&
+        // Only a floor near the measured floor height, or a vertical wall.
+        (Math.abs(plane.normal[1]) < 0.15 ||
+          (Math.abs(plane.normal[1]) > 0.97 && Math.abs(center[1] - (options.floorY || 0)) < 0.25)) &&
+        points.every(point => Math.abs(point.reduce((sum, value, axis) => sum + value * plane.normal[axis], 0) - plane.offset) < 0.025));
+      if (patch < 0 || (options.allowRepair && !options.allowRepair(center, points))) return;
+    }
     const centerVertex = positions.length / 3;
     positions.push(...center);
     if (mesh.colors?.length) {
@@ -2533,6 +2556,7 @@ export function fillSmallMeshHoles(mesh, options = {}) {
       return;
     }
     addedArea += holeArea;
+    if (patches) loop.edges.forEach(() => patches.push(patch));
     filledHoleCount++;
     filledHoleTriangles += loop.edges.length;
   });
@@ -2544,6 +2568,8 @@ export function fillSmallMeshHoles(mesh, options = {}) {
     surfaceArea: (mesh.surfaceArea || 0) + addedArea,
     filledHoleCount,
     filledHoleTriangles,
+    filledHoleArea: addedArea,
+    ...(patches ? { surfacePatchIds: new Int32Array(patches) } : {}),
   };
 }
 
@@ -4457,10 +4483,11 @@ export function texturedMesh(mesh, frames, precomputedCalibration = null, option
         colorProjection,
         ...colorProjections,
       ]);
-      // A camera patch dominated by clipped glare or black sensor borders is
-      // not a usable texture source. Leave this triangle on the fused color
-      // fallback rather than baking a white/discolored streak into the atlas.
-      if (texturePenalty > 0.58) return;
+      // On a supported broad patch, keep photographed glare as a penalized
+      // candidate. Rejecting individual clipped triangles made a checkerboard
+      // of contradictory reflections. The surface-level vote below retains a
+      // coherent photo; unsupported object faces keep the stricter rejection.
+      if (texturePenalty > 0.58 && !(options.surfaceTexture && (mesh.surfacePatchIds?.[index / 3] ?? -1) >= 0)) return;
       const frameClippingPenalty = clamp(
         Number(frame.colorClippedRatio) || 0,
         0,
@@ -4500,16 +4527,21 @@ export function texturedMesh(mesh, frames, precomputedCalibration = null, option
           qualityGap * 1.15,
       });
     });
-    // Keep soft/flat patches when they are the only measured photo, but do not
-    // let a coherence vote override a substantially clearer local observation.
-    const clearCandidates = detailPreservingCandidates(candidates);
+    // Broad surfaces assess repeated blur evidence at patch level below, not
+    // a single misregistered edge. Object faces retain the strict local rule.
+    const clearCandidates = options.surfaceTexture && (mesh.surfacePatchIds?.[index / 3] ?? -1) >= 0
+      ? candidates
+      : detailPreservingCandidates(candidates);
     textureCandidateRejections.softWhenClearAvailable += candidates.length - clearCandidates.length;
     const viableCandidates = clearCandidates
       .sort((left, right) => right.score - left.score)
-      .slice(0, 4);
+      .slice(0, options.surfaceTexture ? 12 : 4);
     const record = {
       triangle,
       faceNormal,
+      area: faceNormalLength * 0.5,
+      center: [center.x, center.y, center.z],
+      patch: mesh.surfacePatchIds?.[index / 3] ?? -1,
       candidates: viableCandidates,
       selected: 0,
       neighbors: [],
@@ -4676,6 +4708,22 @@ export function texturedMesh(mesh, frames, precomputedCalibration = null, option
       });
       record.selected = selected;
     });
+  let textureRegistration = null;
+  if (options.textureRegistration && mesh.planarConsolidation?.planes?.length) {
+    textureRegistration = registerSurfaceTextures(records, mesh.planarConsolidation.planes, atlas.frames, projectColorWorld, {
+      isVisible: (frame, point) => {
+        const projected = projectWorld(frame, ...point);
+        if (!projected) return false;
+        const agreement = closestProjectiveDepthAgreement(frame, projected, 0);
+        return agreement && agreement.difference <= textureDepthAgreementLimit(agreement, true);
+      },
+    });
+    for (const record of records) for (const candidate of record.candidates) {
+      const projections = record.triangle.map(vertex => textureRegistration.project(candidate.frame, record.patch, Array.from(mesh.positions.subarray(vertex*3,vertex*3+3))));
+      if (projections.every(value => value && value.u >= 0.01 && value.v >= 0.01 && value.u <= 0.99 && value.v <= 0.99)) candidate.projections = projections;
+    }
+  }
+  const textureSelection = options.surfaceTexture ? selectSurfaceTextures(records) : null;
   const positions = [];
   const normals = [];
   const colors = [];
@@ -4713,10 +4761,26 @@ export function texturedMesh(mesh, frames, precomputedCalibration = null, option
     if (best) texturedTriangles++;
     if (best?.recoveredTexture) recoveredTextureTriangles++;
     if (best && !best.qualityPreferred) softTextureFallbackTriangles++;
-    triangle.forEach((vertex, corner) => {
+    // The atlas was photographed from one side of this thin measured sheet.
+    // Orient it toward that observation so the viewer can distinguish an
+    // unscanned back from the photographed front (including legacy winding).
+    const observation = best?.frame || frames.find(frame => {
+      const projected = projectWorld(frame, ...record.center);
+      const agreement = closestProjectiveDepthAgreement(frame, projected, 0);
+      return agreement && agreement.difference < 0.075;
+    });
+    const camera = observation?.viewTransformMatrix || observation?.transformMatrix;
+    const reverse = !!camera &&
+      record.faceNormal.x * (camera[12] - record.center[0]) +
+      record.faceNormal.y * (camera[13] - record.center[1]) +
+      record.faceNormal.z * (camera[14] - record.center[2]) < 0;
+    const corners = reverse ? [0, 2, 1] : [0, 1, 2];
+    corners.forEach((corner) => {
+      const vertex = triangle[corner];
       const target = positions.length / 3;
       positions.push(mesh.positions[vertex * 3], mesh.positions[vertex * 3 + 1], mesh.positions[vertex * 3 + 2]);
-      normals.push(sharedNormals[vertex * 3], sharedNormals[vertex * 3 + 1], sharedNormals[vertex * 3 + 2]);
+      const sign = reverse ? -1 : 1;
+      normals.push(sharedNormals[vertex * 3] * sign, sharedNormals[vertex * 3 + 1] * sign, sharedNormals[vertex * 3 + 2] * sign);
       if (best) {
         const projected = best.projections[corner];
         const tileX = best.frame.atlasTile % atlas.columns;
@@ -4752,6 +4816,9 @@ export function texturedMesh(mesh, frames, precomputedCalibration = null, option
     textureProjectionMode,
     fallbackBoundaryVertices: boundaryScores.reduce((count, score) => count + (Number.isFinite(score) ? 1 : 0), 0),
     texturePatchCount,
+    textureRegistration: textureRegistration?.diagnostics || [],
+    textureSelection,
+    observedSideOriented: true,
     textureCalibrationPairs: atlas.photometricPairCount,
     photometricNormalization: atlas.photometricNormalization,
     rejectedBlurryTextureFrames: atlas.rejectedBlurryFrames,
@@ -4779,6 +4846,17 @@ function meshBounds(positions, floorY) {
   return bounds;
 }
 
+export function refineTrajectoryPoses(frames, options = {}) {
+  return refineJointTrajectory(frames, {
+    project: projectWorld, sample: sampleProjectiveDepth, unproject: depthPositionAt,
+    apply: applyRigidDeltaToFrame,
+    transform: (point, delta) => {
+      const value = transformPointByRigidDelta({ x: point[0], y: point[1], z: point[2] }, delta);
+      return [value.x, value.y, value.z];
+    },
+  }, options);
+}
+
 export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   report?.("preparing", 3);
   const ambiguousLegacyKeyframes = keyframes.filter(
@@ -4800,7 +4878,18 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   const initialOverlap = {};
   let surfaceConsistencyFailure = null;
   let overlapping = validateFrameOverlap(prepared, initialOverlap);
-  if (options.poseRefinement === "validated" && overlapping.length >= 2) {
+  if (options.poseRefinement === "joint" && overlapping.length >= 4) {
+    const geometryIds = new Set(overlapping.map((frame) => frame.frameId));
+    const snapshots = [...overlapping, ...extraTextureFrames].sort((a, b) => a.timestamp - b.timestamp || a.frameId - b.frameId);
+    const refinement = refineTrajectoryPoses(snapshots);
+    overlapping = refinement.frames.filter((frame) => geometryIds.has(frame.frameId));
+    extraTextureFrames = refinement.frames.filter((frame) => !geometryIds.has(frame.frameId));
+    Object.assign(alignment, initialOverlap);
+    alignment.jointPoseRefinement = refinement.diagnostics;
+    alignment.poseCorrectionApplied = refinement.diagnostics.accepted;
+    alignment.poseRefinement = "joint-held-out-shared-rgbd";
+    alignment.synchronizedTextureFrames = extraTextureFrames.length;
+  } else if (options.poseRefinement === "validated" && overlapping.length >= 2) {
     const geometryIds = new Set(overlapping.map((frame) => frame.frameId));
     const snapshots = [...overlapping, ...extraTextureFrames].sort((a, b) => a.timestamp - b.timestamp || a.frameId - b.frameId);
     const refinement = refineFramePoses(snapshots, {
@@ -4948,7 +5037,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   if (localLayerConsensus.diagnostics)
     alignment.localLayerConsensus = localLayerConsensus.diagnostics;
   const stages = {
-    algorithmVersion: 40,
+    algorithmVersion: 41,
     completionMode: options.completionMode === "surface" ? "surface" : "room",
     reconstructionProfile: options.reconstructionProfile || "quality",
     supportMode: "translated-camera-viewpoints",
@@ -4963,6 +5052,9 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
           ? 2
           : 3,
       poseRefinement: alignment.poseRefinement || "disabled",
+      surfaceTexture: !!options.surfaceTexture,
+      textureRegistration: !!options.textureRegistration,
+      repairPlanarGaps: !!options.repairPlanarGaps,
     },
     inputKeyframes: keyframes.length,
     ambiguousLegacyKeyframes,
@@ -5319,6 +5411,43 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       preserveDenoisedRelief: true,
     });
     stages.planarConsolidation = surface.planarConsolidation;
+    if (options.repairPlanarGaps) {
+      const previousCount = surface.filledHoleCount || 0;
+      const previousTriangles = surface.filledHoleTriangles || 0;
+      surface = fillSmallMeshHoles(surface, {
+        maxDiameter: 0.42,
+        maxPerimeter: 1.5,
+        maxPlanarity: 0.018,
+        maxVertices: 120,
+        supportedPlanes: surface.planarConsolidation?.planes || [],
+        floorY: options.floorY,
+        allowRepair: (center) => {
+          let agrees = 0, contradicts = 0;
+          for (const frame of usable) {
+            const projected = projectWorld(frame, ...center);
+            if (!projected) continue;
+            const index = gridIndex(frame, projected.u, projected.v);
+            if (!frame.measuredMask[index]) continue;
+            const difference = frame.filteredDepth[index] - projected.depth;
+            if (Math.abs(difference) < 0.05) agrees++;
+            else if (Math.abs(difference) > 0.09) contradicts++;
+          }
+          // Measured background/foreground is evidence of an opening/object,
+          // not permission to put an estimated wall over it.
+          return contradicts === 0 || (agrees >= 3 && contradicts / (agrees + contradicts) < 0.1);
+        },
+      });
+      stages.surfaceRepair = {
+        mode: "bounded-planar-estimate",
+        estimatedHoleCount: surface.filledHoleCount,
+        estimatedTriangles: surface.filledHoleTriangles,
+        estimatedArea: surface.filledHoleArea,
+        maxDiameterMeters: 0.42,
+      };
+      surface = { ...surface,
+        filledHoleCount: previousCount + surface.filledHoleCount,
+        filledHoleTriangles: previousTriangles + surface.filledHoleTriangles };
+    }
   }
   wallStructure = meshWallStructureDiagnostics(surface);
   stages.wallStructure = wallStructure;
@@ -5347,6 +5476,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     version: 3,
     kind: "projective-tsdf-surface-net",
     ...textured,
+    surfaceRepair: stages.surfaceRepair || null,
     vertexCount: textured.positions.length / 3,
     triangleCount: textured.indices.length / 3,
     floorY,
@@ -5391,6 +5521,8 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       textureProjectionMode: mesh.textureProjectionMode || "mesh-positions",
       fallbackBoundaryVertices: mesh.fallbackBoundaryVertices || 0,
       texturePatchCount: mesh.texturePatchCount || 0,
+      textureSelection: mesh.textureSelection,
+      textureRegistration: mesh.textureRegistration,
       textureCalibrationPairs: mesh.textureCalibrationPairs || 0,
       photometricNormalization: mesh.photometricNormalization || "none",
       rejectedBlurryTextureFrames:

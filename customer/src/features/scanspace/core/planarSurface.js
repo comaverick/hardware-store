@@ -455,7 +455,7 @@ export function consolidatePlanarSurfaces(mesh, options = {}) {
     positions.set(q, id * 3);
     diagnostics.correctedVertices++;
   }
-  const outputPositions = [], outputIndices = [], attributes = {}, vertexLookup = new Map();
+  const outputPositions = [], outputIndices = [], outputPatches = [], attributes = {}, vertexLookup = new Map();
   let outputArea = 0;
   for (const [name, size] of [['colors', 3], ['portableColors', 3], ['uvs', 2]])
     if (mesh[name]?.length === mesh.positions.length / 3 * size) attributes[name] = { size, values: [] };
@@ -487,7 +487,12 @@ export function consolidatePlanarSurfaces(mesh, options = {}) {
       const b = Array.from(outputPositions.slice(ids[i] * 3, ids[i] * 3 + 3));
       const c = Array.from(outputPositions.slice(ids[i + 1] * 3, ids[i + 1] * 3 + 3));
       const twiceArea = Math.hypot(...cross(sub(b, a), sub(c, a)));
-      if (twiceArea > 1e-10) { outputIndices.push(ids[0], ids[i], ids[i + 1]); outputArea += twiceArea / 2; }
+      if (twiceArea > 1e-10) {
+        outputIndices.push(ids[0], ids[i], ids[i + 1]); outputArea += twiceArea / 2;
+        let patch = r.plane;
+        if (patch < 0) patch = planes.findIndex(plane => Math.abs(dot(plane.n, r.normal)) >= 0.35 && r.p.every(p => Math.abs(dot(plane.n, p) - plane.d) < 0.14));
+        outputPatches.push(patch);
+      }
     }
   };
   const weights = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
@@ -532,7 +537,7 @@ export function consolidatePlanarSurfaces(mesh, options = {}) {
     diagnostics.removedOverlapArea += Math.max(0, projectedArea - retainedArea);
     diagnostics.planes.push({ normal: plane.n, offset: plane.d, inputArea: projectedArea, retainedArea, maxInputResidual: maxResidual });
   });
-  const result = { ...mesh, positions: new Float32Array(outputPositions), indices: new Uint32Array(outputIndices), planarConsolidation: diagnostics };
+  const result = { ...mesh, positions: new Float32Array(outputPositions), indices: new Uint32Array(outputIndices), surfacePatchIds: new Int32Array(outputPatches), planarConsolidation: diagnostics };
   for (const [name, attribute] of Object.entries(attributes)) result[name] = new mesh[name].constructor(attribute.values);
   // Normals belong to the final topology, never to the discarded duplicate sheet.
   delete result.normals;

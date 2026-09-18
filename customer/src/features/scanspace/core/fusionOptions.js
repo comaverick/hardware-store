@@ -15,9 +15,12 @@ export function scanFusionOptions(raw, completionMode = "surface", extra = {}) {
     pruneUnsupportedBridges: true,
     // WebXR tracking is a good starting pose, but the raw capture can still
     // accumulate centimetres of drift while the camera crosses a wall. The
-    // fusion pass evaluates bounded corrections against held-out views. Depth
-    // and independent RGB snapshots participate in the same pose pass.
-    poseRefinement: "validated",
+    // joint solve is checked on held-out overlap. Depth and RGB snapshots from
+    // one capture remain rigidly synchronized throughout the solve.
+    poseRefinement: completionMode === "surface" ? "joint" : "validated",
+    surfaceTexture: completionMode === "surface",
+    textureRegistration: completionMode === "surface",
+    repairPlanarGaps: completionMode === "surface",
     // A correction still needs three consecutive, held-out-validated poses.
     // Permit the small change across that run seen when mobile tracking drift
     // settles, while rejecting isolated pose jumps.

@@ -87,6 +87,8 @@ export default function PartialScanReview({
         fusionMode: "raw-import-rendered",
         fusionDiagnostics: fused.diagnostics,
         fusionReason: fused.diagnostics?.reason || scan.fusionReason,
+        measuredReviewWarning: fused.diagnostics?.measuredReviewWarning || null,
+        measuredGapWarning: fused.diagnostics?.measuredGapWarning || null,
         captureQuality: {
           ...(scan.captureQuality || {}),
           algorithmVersion: fused.diagnostics?.algorithmVersion || scan.captureQuality?.algorithmVersion,
@@ -98,6 +100,10 @@ export default function PartialScanReview({
           denoising: fused.diagnostics?.denoising || null,
           synchronizedTextureFrames: fused.diagnostics?.alignment?.synchronizedTextureFrames || 0,
           poseRefinement: fused.diagnostics?.alignment?.poseRefinement || null,
+          jointPoseRefinement: fused.diagnostics?.alignment?.jointPoseRefinement || null,
+          surfaceRepair: fused.diagnostics?.surfaceRepair || null,
+          textureSelection: fused.diagnostics?.textureSelection || null,
+          textureRegistration: fused.diagnostics?.textureRegistration || [],
         },
       });
     };
@@ -129,6 +135,7 @@ export default function PartialScanReview({
   }, [scan]);
   const displayScan = renderedScan || scan;
   const quality = displayScan.captureQuality;
+  const repair = displayScan.mesh?.surfaceRepair || quality?.surfaceRepair;
   const rawRendering = !!scan.rawCapture && !renderedScan && !renderError;
   if (rawRendering)
     return (
@@ -188,10 +195,16 @@ export default function PartialScanReview({
         <span className="ss-kicker">Scan result</span>
         <h2>Your captured scan.</h2>
         <p>
-          This view is rebuilt from the captured camera colors and depth points that were
-          actually captured. Missing areas remain open instead of becoming
-          generated walls.
+          Rebuilt from your captured camera images and depth. Small, supported
+          wall or floor gaps may be repaired as estimates; larger unscanned areas
+          and uncertain object details remain open.
         </p>
+        {quality?.algorithmVersion && (
+          <p className="ss-notice-detail">Reconstruction v{quality.algorithmVersion}
+            {quality.fusedKeyframes ? ` · ${quality.fusedKeyframes} depth views` : ""}
+            {quality.independentTextureFrames ? ` · ${quality.independentTextureFrames} photos` : ""}
+          </p>
+        )}
       </header>
       {quality &&
         (quality.coverage < MIN_DIRECTION_COVERAGE ||
@@ -205,28 +218,28 @@ export default function PartialScanReview({
               This scan covers {quality.coverage}% of the heading sweep with {Math.round(
                 quality.cameraBaseline * 100,
               )} cm of horizontal camera-position spread. ScanSpace only shows
-              the surfaces you captured; curved walls can indicate unreliable depth.
+              supported surfaces and separately identifies estimated repairs; curved walls can indicate unreliable depth.
               For the next scan, move sideways while keeping each wall in view.
             </p>
           </div>
         )}
-      {scan.measuredReviewWarning ? (
+      {displayScan.measuredReviewWarning ? (
         <div className="ss-notice ss-notice--warning" role="status">
           <div className="ss-notice-title">
             <WarningCircle size={17} weight="fill" aria-hidden="true" />
             <strong>Automatic checks found possible scan issues</strong>
           </div>
           <p>
-            This is still the real measured mesh. Inspect it before accepting;
-            ScanSpace did not add replacement wall geometry.
+            Inspect the reconstructed surface before accepting it. Any small
+            estimated repairs are listed separately below.
           </p>
           <ul>
-            {scan.measuredReviewWarning.issues?.map((issue) => (
+            {displayScan.measuredReviewWarning.issues?.map((issue) => (
               <li key={issue.code}>{issue.message}</li>
             ))}
           </ul>
         </div>
-      ) : scan.measuredGapWarning ? (
+      ) : displayScan.measuredGapWarning ? (
         <div className="ss-notice ss-notice--warning" role="status">
           <div className="ss-notice-title">
             <WarningCircle size={17} weight="fill" aria-hidden="true" />
@@ -234,10 +247,18 @@ export default function PartialScanReview({
           </div>
           <p>
             Some regions did not provide reliable depth and remain open in this
-            result. ScanSpace did not generate replacement wall geometry.
+            result. No unseen object detail has been generated.
           </p>
         </div>
       ) : null}
+      {repair?.estimatedHoleCount > 0 && (
+        <div className="ss-notice ss-notice--guidance" role="status">
+          <strong>Estimated gap repairs</strong>
+          <p>{repair.estimatedHoleCount} small, enclosed wall or floor gaps
+            ({repair.estimatedArea.toFixed(2)} m²) were repaired from their surrounding surfaces.
+            These patches are estimates, not measured depth.</p>
+        </div>
+      )}
       <PartialScanScene scan={displayScan} />
       <div className="ss-partial-facts" aria-label="Scan measurements">
         <div>
@@ -246,7 +267,7 @@ export default function PartialScanReview({
               ? displayScan.mesh.triangleCount.toLocaleString()
               : displayScan.cloud?.count?.toLocaleString() || 0}
           </strong>
-          <span>{displayScan.mesh ? "measured triangles" : "captured depth points"}</span>
+          <span>{displayScan.mesh ? "surface triangles" : "captured depth points"}</span>
         </div>
         <div>
           <strong>
@@ -258,7 +279,10 @@ export default function PartialScanReview({
           <span>{displayScan.mesh ? "surface color coverage" : "point color coverage"}</span>
         </div>
       </div>
-      {scan.fusionReason && (
+      {displayScan.mesh?.observedSideOriented && (
+        <p className="ss-notice-detail">Unscanned backs are shown in neutral gray, without a mirrored photograph.</p>
+      )}
+      {displayScan.fusionReason && (
         <div className="ss-notice ss-notice--status">
           <div className="ss-notice-title">
             <Info size={17} weight="fill" aria-hidden="true" />

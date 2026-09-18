@@ -58,6 +58,20 @@ test("a locally sharp painting view wins over a globally sharper curtain view an
   expect(restored.mesh.texture).toEqual(result.texture);
   expect(restored.mesh.positions).toEqual(result.positions);
   expect(restored.mesh.uvs).toEqual(result.uvs);
+  expect(restored.mesh.observedSideOriented).toBe(true);
+});
+
+test('photographed faces are oriented toward their actual capture and retain registered UVs', () => {
+  const mesh = triangleMesh();
+  mesh.indices = new Uint32Array([0, 2, 1]);
+  const result = texturedMesh(mesh, [cameraFrame()]);
+  expect(result.observedSideOriented).toBe(true);
+  expect(result.positions).toEqual(triangleMesh().positions);
+  expect(mesh.indices).toEqual(new Uint32Array([0, 2, 1]));
+  result.surfaceRepair = { mode: 'bounded-planar-estimate', estimatedHoleCount: 2,
+    estimatedTriangles: 8, estimatedArea: 0.03, maxDiameterMeters: 0.42 };
+  const restored = parsePartialScan(serializePartialScan({ mesh: result }));
+  expect(restored.mesh.surfaceRepair).toEqual(result.surfaceRepair);
 });
 
 test("consolidated wall topology is textured at its corrected positions", () => {

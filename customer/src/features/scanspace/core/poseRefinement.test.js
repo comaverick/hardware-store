@@ -1,4 +1,4 @@
-import { refineFramePoses } from './fusion';
+import { refineFramePoses, refineTrajectoryPoses } from './fusion';
 
 function plane(frameId, x, drift = 0, timestamp = frameId * 100) {
   const columns = 24, rows = 24, positions = [];
@@ -55,4 +55,36 @@ test('insufficient pose evidence keeps both observations rather than blocking a 
   expect(result.frames).toHaveLength(2);
   expect(result.diagnostics.corrected).toBe(0);
   expect(result.frames[1].transformMatrix).toEqual(input[1].transformMatrix);
+});
+
+test('joint registration improves independent overlap while sharing one correction with RGB', () => {
+  const input = Array.from({ length: 9 }, (_, i) => plane(i, (i - 4) * 0.1, Math.sin(i * 0.45) * 0.045));
+  const photo = { ...input[4], frameId: 99, textureOnly: true, colorImage: new Uint8Array([250, 20, 80, 255]) };
+  const originals = input.map(frame => frame.transformMatrix.slice());
+  const result = refineTrajectoryPoses([...input, photo]);
+  expect(result.diagnostics.captures).toBe(9);
+  expect(result.diagnostics.accepted).toBe(true);
+  expect(result.diagnostics.afterMeters).toBeLessThan(result.diagnostics.beforeMeters * 0.94);
+  expect(result.diagnostics.heldOutSamples).toBeGreaterThan(100);
+  expect(result.diagnostics.maxTranslationMeters).toBeLessThanOrEqual(0.09);
+  expect(result.diagnostics.maxRotationRadians).toBeLessThanOrEqual(0.06);
+  expect(result.frames[4].transformMatrix).toEqual(result.frames[9].transformMatrix);
+  expect(result.frames[4].viewTransformMatrix).toEqual(result.frames[9].viewTransformMatrix);
+  expect(result.frames[9].colorImage).toBe(photo.colorImage);
+  input.forEach((frame, i) => expect(frame.transformMatrix).toEqual(originals[i]));
+});
+
+test('joint registration leaves an already aligned plane and its unconstrained lateral motion alone', () => {
+  const input = Array.from({ length: 7 }, (_, i) => plane(i, i * 0.1));
+  const result = refineTrajectoryPoses(input);
+  expect(result.diagnostics.accepted).toBe(false);
+  expect(result.frames).toBe(input);
+});
+
+test('joint registration never aligns unrelated surfaces or unsupported pairs', () => {
+  const input = Array.from({ length: 6 }, (_, i) => plane(i, i * 2, i * 0.3));
+  const result = refineTrajectoryPoses(input);
+  expect(result.diagnostics.accepted).toBe(false);
+  expect(result.frames).toBe(input);
+  expect(refineTrajectoryPoses(input.slice(0, 2)).frames).toEqual(input.slice(0, 2));
 });

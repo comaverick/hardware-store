@@ -1,9 +1,12 @@
 import { useEffect, useMemo } from "react";
 import * as THREE from "three";
-import { createScanMeshResources } from "../core/renderMesh";
+import { createScanMeshResources, shadeUnobservedBacks, observedSideProgramKey } from "../core/renderMesh";
 
 export default function ScanMesh({ mesh, low = false }) {
   const resources = useMemo(() => createScanMeshResources(mesh), [mesh]);
+  const sided = mesh.observedSideOriented ? {
+    onBeforeCompile: shadeUnobservedBacks, customProgramCacheKey: observedSideProgramKey,
+  } : {};
   useEffect(
     () => () => {
       resources.geometry.dispose();
@@ -14,12 +17,12 @@ export default function ScanMesh({ mesh, low = false }) {
   return (
     <mesh geometry={resources.geometry} frustumCulled={false}>
       {resources.texture ? (
-        <meshBasicMaterial vertexColors map={resources.texture}
+        <meshBasicMaterial {...sided} vertexColors map={resources.texture}
           side={THREE.DoubleSide} toneMapped={false} />
       ) : mesh.portableColors ? (
-        <meshBasicMaterial vertexColors side={THREE.DoubleSide} toneMapped={false} />
+        <meshBasicMaterial {...sided} vertexColors side={THREE.DoubleSide} toneMapped={false} />
       ) : (
-        <meshStandardMaterial vertexColors side={THREE.DoubleSide}
+        <meshStandardMaterial {...sided} vertexColors side={THREE.DoubleSide}
           roughness={0.92} metalness={0} flatShading={low} />
       )}
     </mesh>

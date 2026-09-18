@@ -246,7 +246,7 @@ export default function PartialScanScene({ scan }) {
       </span>
       <span className="ss-partial-legend" role="status">
         <i />{" "}
-        {mesh ? "Captured measured surface" : "Captured depth points"}
+        {mesh ? mesh.surfaceRepair?.estimatedHoleCount > 0 ? "Measured + estimated repairs" : "Captured measured surface" : "Captured depth points"}
       </span>
       <button
         className="ss-quality"

@@ -22,7 +22,11 @@ function load(file) {
   return loaded.exports;
 }
 
-if (!process.argv[2]) {
+module.exports = { load };
+
+if (require.main !== module) {
+  // The visual regression runner uses the same application-module loader.
+} else if (!process.argv[2]) {
   console.error("Usage: node scripts/replay-scanspace.cjs <raw-scan.json>");
   process.exitCode = 1;
 } else {

@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { createScanMeshResources } from "./renderMesh";
+import { createScanMeshResources, shadeUnobservedBacks } from "./renderMesh";
 
 test.each([false, true])("rendering preserves finished positions, topology and colors (texture=%s)", (textured) => {
   // Duplicated vertices are intentional at camera seams. They must not trigger
@@ -27,4 +27,12 @@ test.each([false, true])("rendering preserves finished positions, topology and c
   expect(resources.texture?.generateMipmaps).toBe(textured ? false : undefined);
   resources.texture?.dispose();
   resources.geometry.dispose();
+});
+
+test('unobserved backs are shaded neutrally without adding a duplicate surface', () => {
+  const shader = { fragmentShader: 'vec3 outgoingLight = textureColor;\n#include <opaque_fragment>' };
+  shadeUnobservedBacks(shader);
+  expect(shader.fragmentShader).toContain('if (!gl_FrontFacing)');
+  expect(shader.fragmentShader).toContain('outgoingLight = vec3(0.08, 0.11, 0.095)');
+  expect(shader.fragmentShader).toContain('#include <opaque_fragment>');
 });

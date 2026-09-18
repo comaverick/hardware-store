@@ -313,6 +313,8 @@ function encodeMesh(mesh) {
     // live result. Only mark the mesh as portable when that atlas had to be
     // omitted and its sRGB pixels were baked into linear vertex colors.
     portableColors: Boolean(mesh.texture?.data && !includeTexture),
+    observedSideOriented: !!mesh.observedSideOriented,
+    surfaceRepair: safeSurfaceRepair(mesh.surfaceRepair),
   };
   if (includeTexture) {
     value.uvs = encodeArray(mesh.uvs, "f32");
@@ -437,9 +439,22 @@ function decodeMesh(mesh) {
     triangleCount: indices.length / 3,
     colorCoverage: finite(mesh.colorCoverage, 0),
     portableColors: !!mesh.portableColors,
+    observedSideOriented: !!mesh.observedSideOriented,
+    surfaceRepair: safeSurfaceRepair(mesh.surfaceRepair),
     texture,
     bounds,
     observer: safeObserver(mesh.observer, bounds),
+  };
+}
+
+function safeSurfaceRepair(value) {
+  if (value?.mode !== "bounded-planar-estimate") return null;
+  return {
+    mode: "bounded-planar-estimate",
+    estimatedHoleCount: Math.max(0, Math.floor(finite(value.estimatedHoleCount, 0))),
+    estimatedTriangles: Math.max(0, Math.floor(finite(value.estimatedTriangles, 0))),
+    estimatedArea: Math.max(0, finite(value.estimatedArea, 0)),
+    maxDiameterMeters: Math.max(0, finite(value.maxDiameterMeters, 0)),
   };
 }
 
