@@ -13,6 +13,7 @@ import {
   MAX_COLOR_CAPTURE_LINEAR_SPEED,
 } from "../core/readiness";
 import { createCameraColorReader } from "./cameraColor";
+import { AdaptiveCapture, adaptiveCaptureProfile, captureDetail, capturePointObserved, confirmedViewRatio, prepareCaptureFrame } from "../core/adaptiveCapture";
 
 function coverageSplatTexture() {
   const canvas = document.createElement("canvas");
@@ -359,6 +360,9 @@ export class RoomScanner {
     this.observer = { x: 0, z: 0 };
     this.planes = new Map();
     this.keyframes = [];
+    this.capture = new AdaptiveCapture({ maximumFrames: MAX_FUSION_KEYFRAMES });
+    this.captureProfile = adaptiveCaptureProfile();
+    this.captureProcessingMs = 0;
   }
   publish() {
     this.onUpdate({
@@ -435,6 +439,9 @@ export class RoomScanner {
         this.paused = true;
         this.stats.originChanged = true;
         this.hit = null;
+        this.capture.failure("tracking-reset", performance.now());
+        this.updateAdaptiveStats();
+        if (this.recoveryMarker) this.recoveryMarker.visible = false;
         this.stats.errors.push(
           "Tracking origin changed. Start a new scan to avoid mixing coordinates.",
         );
@@ -473,6 +480,12 @@ export class RoomScanner {
       const points = new THREE.Points(this.pointGeometry, this.coverageMaterial);
       points.frustumCulled = false;
       this.scene.add(points);
+      this.recoveryMarker = new THREE.Mesh(
+        new THREE.SphereGeometry(0.075, 12, 8),
+        new THREE.MeshBasicMaterial({ color: "#ffc47b", transparent: true, opacity: 0.85, depthWrite: false }),
+      );
+      this.recoveryMarker.visible = false;
+      this.scene.add(this.recoveryMarker);
       if (typeof window.XRWebGLBinding === "function")
         this.binding = new window.XRWebGLBinding(
           this.session,
@@ -502,6 +515,7 @@ export class RoomScanner {
     }
   }
   captureDepthFrame(time, frame, view) {
+    const started = performance.now();
     let depth = null;
     try {
       const depthUsage = this.session?.depthUsage || this.stats.depthUsage;
@@ -514,11 +528,17 @@ export class RoomScanner {
       this.stats.rejectedDepthFrames++;
       this.stats.depthReadErrors++;
       this.stats.depthState = "error";
+      this.stats.currentConfirmedRatio = 0;
       this.recordCaptureError(error, "Depth read failed");
+      this.capture.failure("depth-error", time);
+      this.updateAdaptiveStats();
       return;
     }
     if (!depth) {
       this.markDepthMiss(time);
+      this.stats.currentConfirmedRatio = 0;
+      if (time - (this.lastDepthAt ?? time) > 1800) this.capture.failure("depth-missing", time);
+      this.updateAdaptiveStats();
       return;
     }
     this.lastDepthAt = time;
@@ -530,6 +550,7 @@ export class RoomScanner {
     this.stats.depthType = this.session.depthType || "Unavailable";
     this.stats.depthUsage = this.session.depthUsage || "Unavailable";
     this.stats.dimensions = `${depth.width} × ${depth.height}`;
+    this.nativeDepthSize = { width: depth.width, height: depth.height };
     try {
       const keyframePose = this.keyframePose(view);
       const motion = this.measureFrameMotion(keyframePose, time);
@@ -537,17 +558,22 @@ export class RoomScanner {
         motion.textureLinearSpeed = this.cameraMotion.linearSpeed;
         motion.textureAngularSpeed = this.cameraMotion.angularSpeed;
       }
-      const keyframeEligible = this.shouldCaptureKeyframe(keyframePose);
+      this.captureProfile = adaptiveCaptureProfile({
+        depthType: this.stats.depthType, width: depth.width, height: depth.height,
+        validRatio: this.stats.depthFrames > 1 ? this.stats.validDepthRatio : 1, ...this.captureDetail,
+        processingMs: this.captureProcessingMs, ...this.cameraMotion,
+      });
       let colorAt = null;
       if (
         this.binding &&
         view.camera &&
-        time >= (this.colorRetryAt || 0)
+        time >= (this.colorRetryAt || 0) && time - (this.lastColorReadAt ?? -Infinity) >= 350
       ) {
         try {
           this.colorReader ??= createCameraColorReader(
             this.renderer.getContext(),
           );
+          this.lastColorReadAt = time;
           colorAt = this.colorReader.read(this.binding, view.camera);
           if (colorAt) {
             this.stats.colorActive = true;
@@ -556,6 +582,7 @@ export class RoomScanner {
             this.stats.colorClippedRatio = colorAt.clippedRatio || 0;
             this.stats.colorFrameReliable =
               this.isColorFrameReliable(motion, colorAt);
+            if (!this.stats.colorFrameReliable) this.stats.colorFramesSkippedForMotion++;
             this.colorFailures = 0;
           }
         } catch (error) {
@@ -572,7 +599,7 @@ export class RoomScanner {
       }
       // Preserve a bounded grid for mid-range phones while matching the XR
       // view aspect. Native depth storage may be rotated or cropped.
-      const { columns, rows } = viewSampleGrid(view, !!colorAt);
+      const { columns, rows } = viewSampleGrid(view, !!colorAt, this.captureProfile.sampleLongSide);
       const framePoints = unprojectDepth(
         depth,
         view,
@@ -599,6 +626,12 @@ export class RoomScanner {
         totalSamples: columns * rows,
         obstructionRatio,
         ...motion,
+        // Use the short XR motion window too: a fast out-and-back movement
+        // can look stationary between two sampled depth frames.
+        linearSpeed: Math.max(motion.linearSpeed, motion.textureLinearSpeed || 0),
+        angularSpeed: Math.max(motion.angularSpeed, motion.textureAngularSpeed || 0),
+        maxLinearSpeed: this.captureProfile.maxLinearSpeed,
+        maxAngularSpeed: this.captureProfile.maxAngularSpeed,
       });
       this.stats.frameQuality = quality.reason;
       this.stats.validDepthRatio = quality.validRatio;
@@ -608,20 +641,41 @@ export class RoomScanner {
       this.stats.nearDepthWarning = nearRatio > 0.12;
       this.stats.poseDriftWarning = false;
       if (quality.accepted) {
-        this.stats.acceptedDepthFrames++;
-        const consistency = keyframeEligible
-          ? this.cloud.overlapConsistency(framePoints)
-          : null;
-        this.stats.poseOverlapRatio = consistency?.overlapRatio || 0;
-        this.stats.poseMedianResidual = consistency?.medianDistance || 0;
-        this.stats.poseUpperResidual = consistency?.upperDistance || 0;
-        if (keyframeEligible && this.shouldRejectPose(consistency, keyframePose)) {
+        const candidate = createRgbdKeyframe(framePoints, {
+          columns, rows, timestamp: time, camera: keyframePose.position,
+          projectionMatrix: view.projectionMatrix, transformMatrix: view.transform.matrix,
+          viewProjectionMatrix: view.projectionMatrix, viewTransformMatrix: view.transform.matrix,
+          geometryMode: "view-aligned-v1", keepColor: !!colorAt,
+          nativeDepthWidth: depth.width, nativeDepthHeight: depth.height,
+          nativeDepthUvTransform: depth.normDepthBufferFromNormView?.matrix,
+          depthType: this.stats.depthType, linearSpeed: motion.linearSpeed, angularSpeed: motion.angularSpeed,
+        });
+        if (!candidate) return;
+        candidate.measuredDepthCount = prepareCaptureFrame(candidate).measuredCount;
+        candidate.depthQuality = candidate.measuredDepthCount;
+        this.captureDetail = captureDetail(candidate);
+        const previousFrames = this.keyframes.slice();
+        const decision = this.capture.consider(candidate, this.captureProfile);
+        this.keyframes = this.capture.frames;
+        const match = this.capture.lastMatch;
+        this.stats.poseOverlapRatio = match?.overlap || 0;
+        this.stats.poseMedianResidual = Number.isFinite(match?.median) ? match.median : 0;
+        this.stats.poseUpperResidual = Number.isFinite(match?.upper) ? match.upper : 0;
+        this.stats.frameQuality = decision.reason;
+        if (!decision.accepted) {
           this.stats.rejectedDepthFrames++;
-          this.stats.rejectedPoseFrames++;
-          this.stats.poseDriftWarning = true;
-          this.stats.frameQuality = "pose-inconsistent";
+          if (decision.reason === "alignment-conflict") this.stats.rejectedPoseFrames++;
+          this.stats.poseDriftWarning = this.capture.state === "recovering";
           this.stats.currentConfirmedRatio = 0;
         } else {
+          this.stats.acceptedDepthFrames++;
+          this.keyframes = this.capture.frames;
+          if (decision.committed.length) {
+            if (previousFrames.some(saved => !this.keyframes.includes(saved))) this.rebuildPreviewCloud();
+            else decision.committed.forEach(saved => this.addSavedPreview(saved, saved.captureId));
+            this.recordCommittedViews(decision.committed);
+            this.lastMeshPose = keyframePose;
+          }
           // Retain RGB with its OWN same-frame depth and camera pose, even
           // between geometry keyframes. These observations never enter TSDF
           // fusion or the confirmed-coverage preview.
@@ -629,19 +683,7 @@ export class RoomScanner {
             time, colorAt, keyframePose, depth, motion);
           // Pose gating decides whether this accepted depth frame adds a
           // useful new viewpoint. Fast/sparse frames never reach fusion.
-          if (keyframeEligible)
-            this.captureKeyframe(
-              framePoints,
-              view,
-              columns,
-              rows,
-              time,
-              colorAt,
-              keyframePose,
-              depth,
-              motion,
-            );
-          else {
+          if (!decision.committed.length) {
             // A stationary revisit may contain a better depth sample even
             // though it is not a new independent viewpoint. Replace only the
             // nearby keyframe when its measured support is materially better;
@@ -667,12 +709,14 @@ export class RoomScanner {
           // Feedback counts only views actually retained for fusion, with
           // the full image grid as denominator (including missing depth).
           this.stats.currentConfirmedRatio =
-            this.cloud.confirmedRatio(framePoints, columns * rows);
+            confirmedViewRatio(candidate, this.capture.references(candidate));
         }
       } else {
         this.stats.rejectedDepthFrames++;
         this.stats.currentConfirmedRatio = 0;
+        this.capture.failure(quality.reason, time);
       }
+      this.updateAdaptiveStats();
       this.stats.cloudCellSize = this.cloud.size;
       this.stats.cloudCompactions = this.cloud.compactions;
       const m = view.transform.matrix;
@@ -680,7 +724,7 @@ export class RoomScanner {
         Math.floor(
           ((Math.atan2(-m[8], -m[10]) + Math.PI) / (Math.PI * 2)) * 24,
         ) % 24;
-      if (quality.accepted && !this.stats.poseDriftWarning)
+      if (quality.accepted && this.capture.state === "tracking" && this.stats.frameQuality === "connected")
         this.directions.add(direction);
       this.stats.currentDirection = direction;
       this.stats.directionCoverage = Array.from(
@@ -700,15 +744,21 @@ export class RoomScanner {
       this.stats.frameQuality = "depth-error";
       this.stats.currentConfirmedRatio = 0;
       this.recordCaptureError(error, "Depth frame skipped");
+      this.capture.failure("depth-error", time);
+      this.updateAdaptiveStats();
+    } finally {
+      const elapsed = performance.now() - started;
+      this.captureProcessingMs = this.captureProcessingMs ? this.captureProcessingMs * 0.8 + elapsed * 0.2 : elapsed;
+      this.stats.captureProcessingMs = Math.round(this.captureProcessingMs);
     }
   }
   frame(time, frame) {
     if (!frame || this.closed) return;
     try {
       const pose = frame.getViewerPose(this.space);
-      this.stats.tracking = !!pose;
+      this.stats.tracking = !!pose && !pose.emulatedPosition;
       this.hit = null;
-      if (pose) {
+      if (pose && !pose.emulatedPosition) {
         const view = pose.views[0];
         if (view) this.recordCameraMotion(this.keyframePose(view), time);
         this.observer = {
@@ -732,7 +782,13 @@ export class RoomScanner {
             this.stats.floorAutoDetected = true;
           }
         }
-        if (!this.paused && time - (this.lastCapture || 0) > 400) {
+        const interval = adaptiveCaptureProfile({ ...this.captureDetail,
+          ...this.nativeDepthSize, validRatio: this.stats.depthFrames ? this.stats.validDepthRatio : 1,
+          depthType: this.stats.depthType, processingMs: this.captureProcessingMs,
+          linearSpeed: this.cameraMotion?.linearSpeed || 0, angularSpeed: this.cameraMotion?.angularSpeed || 0,
+        }).interval;
+        this.stats.captureIntervalMs = interval;
+        if (!this.paused && view && time - (this.lastCapture || 0) >= interval) {
           this.lastCapture = time;
           this.captureDepthFrame(time, frame, view);
           if (frame.detectedPlanes) {
@@ -745,23 +801,70 @@ export class RoomScanner {
           }
         }
       } else {
+        this.capture.failure("tracking-lost", time);
+        this.updateAdaptiveStats();
         this.lastCameraPose = null;
         this.cameraMotion = null;
         this.cameraMotionWindow = [];
+        this.stats.currentConfirmedRatio = 0;
       }
-      if (time - (this.lastPublish || 0) > 800) {
+      if (time - (this.lastPublish || 0) > 350) {
         this.stats.depthCurrent =
           !!this.lastDepthAt && time - this.lastDepthAt < 2000;
         this.lastPublish = time;
         this.updatePreview();
         this.publish();
       }
+      if (pose && this.stats.tracking) this.updateRecoveryTarget(pose.views[0]);
+      else if (this.recoveryMarker) this.recoveryMarker.visible = false;
+      if (this.coverageMaterial) this.coverageMaterial.visible = this.stats.tracking && !this.originChanged;
       this.renderer.render(this.scene, this.camera);
     } catch (error) {
       this.paused = true;
       this.recordCaptureError(error, "Capture paused after an XR error");
       this.publish();
     }
+  }
+  updateAdaptiveStats() {
+    this.stats.adaptiveCapture = this.capture.snapshot();
+    this.stats.captureProfile = this.captureProfile.name;
+    this.stats.fusionKeyframes = this.keyframes.length;
+    this.stats.fusionKeyframeCompactions = this.capture.events.removed;
+    this.stats.connectedSurfaceCoverage = Math.round(this.stats.adaptiveCapture.coverage.ratio * 100);
+  }
+  recordCommittedViews(frames) {
+    const positions = (this.keyframePositions ||= []);
+    for (const frame of frames) {
+      const position = { x: frame.camera[0], y: frame.camera[1], z: frame.camera[2] };
+      for (const previous of positions) this.stats.cameraBaseline = Math.max(this.stats.cameraBaseline,
+        Math.hypot(position.x - previous.x, position.z - previous.z));
+      const last = positions[positions.length - 1];
+      if (last) this.stats.cameraTravel += Math.hypot(position.x - last.x, position.y - last.y, position.z - last.z);
+      positions.push(position);
+    }
+    // Geometry stays bounded, so auxiliary motion history must be bounded too.
+    if (positions.length > 128) positions.splice(0, positions.length - 128);
+  }
+  updateRecoveryTarget(view) {
+    if (!this.recoveryMarker || !view) return;
+    const recovering = this.capture.state === "recovering";
+    let target = this.stats.adaptiveCapture?.coverage.target;
+    if (recovering) {
+      const last = this.keyframes[this.keyframes.length - 1];
+      if (last) {
+        const valid = prepareCaptureFrame(last);
+        const center = Math.floor(last.rows / 2) * last.columns + Math.floor(last.columns / 2);
+        const index = valid.measuredMask[center] ? center : valid.measuredMask.findIndex(Boolean);
+        if (index >= 0) target = Array.from(valid.positions.subarray(index * 3, index * 3 + 3));
+      }
+    }
+    this.recoveryMarker.visible = !!target && !this.originChanged && this.stats.tracking && !this.paused;
+    if (!this.recoveryMarker.visible) return;
+    this.recoveryMarker.position.fromArray(target);
+    const local = new THREE.Vector3().fromArray(target).applyMatrix4(new THREE.Matrix4().fromArray(view.transform.matrix).invert());
+    this.stats.recoveryDirection = local.z > 0 ? "Turn back toward the last scanned area" :
+      Math.abs(local.x) > Math.abs(local.z) * 0.3 ? (local.x > 0 ? "Turn gently right toward the amber marker" : "Turn gently left toward the amber marker") :
+      Math.abs(local.y) > Math.abs(local.z) * 0.3 ? (local.y > 0 ? "Aim up toward the amber marker" : "Aim down toward the amber marker") : "Keep the amber area in view while moving gently sideways";
   }
   updatePreview() {
     const allPoints = this.cloud.values();
@@ -804,9 +907,9 @@ export class RoomScanner {
     return poseMotion(previous, pose, timestamp);
   }
   recordCameraMotion(pose, timestamp) {
-    // The 400 ms depth interval aliases hand shake: moving away and back can
-    // appear perfectly stationary. Track every XR view for image quality only;
-    // do not change depth acceptance or introduce a completion requirement.
+    // Sampled depth alone aliases hand shake: moving away and back can appear
+    // stationary. Track every XR view and use the recent motion peak for both
+    // depth acceptance and texture quality, without requiring a full stop.
     const motion = poseMotion(this.lastCameraPose, pose, timestamp);
     this.lastCameraPose = { pose, timestamp };
     this.cameraMotionWindow = (this.cameraMotionWindow || []).filter(
@@ -838,7 +941,7 @@ export class RoomScanner {
       // every XR frame. The global keyframe cap still bounds phone memory.
       // Keep nearby translated views so the fusion volume gets real overlap
       // instead of long, sparsely supported jumps that bend wall edges.
-      if (moved < 0.055 && turned < 0.12) return false;
+      if (moved < this.captureProfile.spacing && turned < this.captureProfile.turn) return false;
     }
     return true;
   }
@@ -1106,7 +1209,10 @@ export class RoomScanner {
       candidate.viewProjectionMatrix = target.frame.viewProjectionMatrix;
       candidate.viewTransformMatrix = target.frame.viewTransformMatrix;
     }
-    this.keyframes[target.index] = candidate;
+    if (this.capture.frames.includes(target.frame)) {
+      if (!this.capture.replace(target.frame, candidate)) return false;
+      this.keyframes = this.capture.frames;
+    } else this.keyframes[target.index] = candidate;
     this.stats.depthRefreshes++;
     // Remove the old observation from the live splat preview as well as from
     // final fusion. This rebuild is bounded by the same retained keyframes.
@@ -1261,11 +1367,12 @@ export class RoomScanner {
           : undefined,
       });
     });
-    this.cloud.add(points, frameId, frame.camera);
+    this.cloud.add(points, frameId, frame.camera,
+      point => capturePointObserved(frame, [point.x, point.y, point.z]));
   }
   rebuildPreviewCloud() {
     this.cloud = new VoxelCloud();
-    this.keyframes.forEach((frame, index) => this.addSavedPreview(frame, index));
+    this.keyframes.forEach((frame, index) => this.addSavedPreview(frame, frame.captureId ?? index));
   }
   togglePause() {
     if (this.originChanged) return;
@@ -1277,6 +1384,7 @@ export class RoomScanner {
       throw new Error(
         "Tracking origin changed. Start a new scan before reconstructing the room.",
       );
+    this.updateAdaptiveStats();
     return {
       points: this.cloud.values(true),
       keyframes: this.keyframes,

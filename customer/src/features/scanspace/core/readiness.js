@@ -27,11 +27,13 @@ export function depthFrameQuality({
   obstructionRatio = nearRatio,
   linearSpeed = 0,
   angularSpeed = 0,
+  maxLinearSpeed = MAX_CAPTURE_LINEAR_SPEED,
+  maxAngularSpeed = MAX_CAPTURE_ANGULAR_SPEED,
 } = {}) {
   const validRatio = validSamples / Math.max(1, totalSamples);
   if (
-    linearSpeed > MAX_CAPTURE_LINEAR_SPEED ||
-    angularSpeed > MAX_CAPTURE_ANGULAR_SPEED
+    linearSpeed > maxLinearSpeed ||
+    angularSpeed > maxAngularSpeed
   )
     return { accepted: false, reason: "moving-too-fast", validRatio };
   if (validRatio < 0.2)

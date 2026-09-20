@@ -18,6 +18,16 @@ test("capabilities distinguish secure context, immersive AR, and absent depth ev
   expect(c.ar).toBe(true);
   expect(c.depthActive).toBeUndefined();
 });
+
+test("preview does not confirm a nearby voxel when its measured depth contradicts the saved surface", () => {
+  const cloud = new VoxelCloud();
+  cloud.add([{ x: 0.02, y: 1.02, z: -1.99 }], 1, [0, 1.6, 0]);
+  cloud.add([{ x: 0.02, y: 1.02, z: -1.94 }], 2, [0.08, 1.6, 0], () => false);
+  expect(cloud.previewStableCount()).toBe(0);
+  expect(cloud.values()[0].z).toBe(-1.99);
+  cloud.add([{ x: 0.02, y: 1.02, z: -1.99 }], 3, [0.1, 1.6, 0], () => true);
+  expect(cloud.previewStableCount()).toBe(1);
+});
 test("unprojects plane depth with the XR view when sensor geometry is absent", () => {
   const camera = new PerspectiveCamera(90, 1, 0.1, 100),
     view = {

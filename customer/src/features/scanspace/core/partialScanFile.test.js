@@ -133,6 +133,31 @@ test("raw scan validation rejects a malformed keyframe before rendering", () => 
   expect(() => parsePartialScan(JSON.stringify(value))).toThrow(/inconsistent raw keyframe .* grid/);
 });
 
+test("adaptive capture connections and quality survive export without provisional frames or derived caches", () => {
+  const scan = rawScan();
+  Object.assign(scan.rawCapture.keyframes[0], {
+    captureId: 12, captureLinks: [4, 9], depthType: "smooth", nativeDepthWidth: 160, nativeDepthHeight: 90,
+  });
+  scan.rawCapture.stats.adaptiveCapture = {
+    version: 1, state: "recovering", reason: "overlap-lost", connected: true,
+    frameCount: 3, pendingCount: 2, recoveries: 1, promoted: 1,
+    coverage: { observed: 120, confirmed: 60, ratio: 0.5, target: [1, 2, 3],
+      regions: [{ id: "middle", observed: 120, confirmed: 60, ratio: 0.5 }] },
+    pending: [{ shouldNotExport: true }],
+  };
+  scan.captureQuality.captureAudit = { passed: false, issues: ["Needs another angle"], checkedReconstruction: true };
+  const restored = parsePartialScan(serializePartialScan(scan));
+  expect(restored.rawCapture.keyframes[0]).toMatchObject({
+    captureId: 12, captureLinks: [4, 9], depthType: "smooth", nativeDepthWidth: 160, nativeDepthHeight: 90,
+  });
+  expect(restored.rawCapture.stats.adaptiveCapture).toMatchObject({
+    connected: true, pendingCount: 2, state: "recovering", coverage: { ratio: 0.5 },
+  });
+  expect(restored.rawCapture.stats.adaptiveCapture.pending).toBeUndefined();
+  expect(restored.rawCapture.stats.adaptiveCapture.coverage.target).toBeUndefined();
+  expect(restored.captureQuality.captureAudit).toEqual(scan.captureQuality.captureAudit);
+});
+
 test("planar reconstruction diagnostics survive export and import", () => {
   const scan = measuredScan();
   scan.captureQuality = { algorithmVersion: 36, planarConsolidation: { version: 1, removedOverlapArea: 0.9, planes: [{ normal: [0, 0, 1], offset: -2, retainedArea: 2.5 }] } };

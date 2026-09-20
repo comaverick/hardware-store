@@ -13,7 +13,7 @@ test("raw depth is preferred before device-smoothed depth", () => {
   expect(DEPTH_TYPE_PREFERENCE).toEqual(["raw", "smooth"]);
 });
 
-test("short out-and-back camera motion is detected without changing depth acceptance", () => {
+test("short out-and-back camera motion is detected between depth samples", () => {
   const scanner = new RoomScanner({ onUpdate: () => {} });
   const pose = (x) => ({ position: { x, y: 1.6, z: 0 }, orientation: { x: 0, y: 0, z: 0, w: 1 } });
   scanner.measureFrameMotion(pose(0), 500);
@@ -74,7 +74,8 @@ test("stationary unsaved frames cannot turn the preview green", () => {
   scanner.frame(1000, frame);
   scanner.frame(1500, frame);
   expect(scanner.stats.errors).toEqual([]);
-  expect(scanner.keyframes).toHaveLength(1);
+  expect(scanner.keyframes).toHaveLength(0);
+  expect(scanner.capture.state).toBe("starting");
   expect(scanner.cloud.previewStableCount()).toBe(0);
   expect(scanner.stats.currentConfirmedRatio).toBe(0);
   position.x = 0.12;
@@ -274,6 +275,7 @@ test("an accepted stationary revisit refreshes texture without adding geometry",
     read: jest
       .fn()
       .mockReturnValueOnce(texture(1, 80))
+      .mockReturnValueOnce(texture(1, 80))
       .mockReturnValueOnce(texture(20, 160)),
   };
   const add = jest.spyOn(scanner.cloud, "add");
@@ -295,23 +297,27 @@ test("an accepted stationary revisit refreshes texture without adding geometry",
   };
   const frame = { getDepthInformation: () => depth };
   scanner.captureDepthFrame(500, frame, view);
+  // Establish a connected seed before testing a stationary texture refresh.
+  view.transform.position.x = 0.08;
+  view.transform.matrix = new Matrix4().makeTranslation(0.08, 1.6, 0).elements;
+  scanner.captureDepthFrame(1000, frame, view);
   // Stay inside the same geometry-keyframe pose, but prove that the refreshed
   // camera image keeps the exact later color pose instead of borrowing the
   // original depth pose.
-  view.transform.position.x = 0.02;
-  view.transform.matrix = new Matrix4().makeTranslation(0.02, 1.6, 0).elements;
-  scanner.captureDepthFrame(1000, frame, view);
-  expect(scanner.colorReader.read).toHaveBeenCalledTimes(2);
-  expect(scanner.keyframes).toHaveLength(1);
-  expect(add).toHaveBeenCalledTimes(1);
+  view.transform.position.x = 0.10;
+  view.transform.matrix = new Matrix4().makeTranslation(0.10, 1.6, 0).elements;
+  scanner.captureDepthFrame(1500, frame, view);
+  expect(scanner.colorReader.read).toHaveBeenCalledTimes(3);
+  expect(scanner.keyframes).toHaveLength(2);
+  expect(add).toHaveBeenCalledTimes(2);
   expect(scanner.stats.independentTextureCaptures).toBe(2);
   expect(scanner.textureKeyframes).toHaveLength(1);
   expect(scanner.textureKeyframes[0].colorFocus).toBe(20);
   expect(scanner.textureKeyframes[0].colorImage[0]).toBe(160);
-  expect(scanner.keyframes[0].colorImage).toBeNull();
-  expect(scanner.keyframes[0].transformMatrix[12]).toBeCloseTo(0);
-  expect(scanner.textureKeyframes[0].transformMatrix[12]).toBeCloseTo(0.02);
-  expect(scanner.textureKeyframes[0].viewTransformMatrix[12]).toBeCloseTo(0.02);
+  expect(scanner.keyframes[1].colorImage).toBeNull();
+  expect(scanner.keyframes[1].transformMatrix[12]).toBeCloseTo(0.08);
+  expect(scanner.textureKeyframes[0].transformMatrix[12]).toBeCloseTo(0.10);
+  expect(scanner.textureKeyframes[0].viewTransformMatrix[12]).toBeCloseTo(0.10);
   expect(scanner.textureKeyframes[0].textureOnly).toBe(true);
 });
 
@@ -445,6 +451,88 @@ test("a transient depth read error is recorded without permanently pausing captu
   expect(scanner.stats.depthReadErrors).toBe(1);
   expect(scanner.stats.depthState).toBe("error");
   expect(scanner.stats.errors[0]).toMatch(/Depth read failed/);
+});
+
+function captureHarness() {
+  const scanner = new RoomScanner({ onUpdate: () => {} });
+  scanner.session = { depthUsage: "cpu-optimized", depthType: "raw" };
+  scanner.renderer = { render: () => {} };
+  scanner.updatePreview = () => {};
+  const camera = new PerspectiveCamera(65, 1, 0.1, 20);
+  const view = { projectionMatrix: camera.projectionMatrix.elements, transform: {
+    position: { x: 0, y: 1.6, z: 0 }, orientation: { x: 0, y: 0, z: 0, w: 1 },
+    matrix: new Matrix4().makeTranslation(0, 1.6, 0).elements,
+  } };
+  let emulated = false, depth = 2;
+  const frame = { getViewerPose: () => ({ transform: view.transform, views: [view], emulatedPosition: emulated }),
+    getHitTestResults: () => [], getDepthInformation: jest.fn(() => ({ width: 320, height: 240, getDepthInMeters: () => depth })) };
+  const move = x => {
+    view.transform.position.x = x;
+    view.transform.matrix = new Matrix4().makeTranslation(x, 1.6, 0).elements;
+  };
+  scanner.frame(500, frame);
+  move(0.08);
+  scanner.frame(1000, frame);
+  return { scanner, frame, view, move, setEmulated: value => { emulated = value; }, setDepth: value => { depth = value; } };
+}
+
+test("emulated tracking withholds geometry and automatically confirms recovery in two observations", () => {
+  const { scanner, frame, move, setEmulated } = captureHarness();
+  expect(scanner.keyframes).toHaveLength(2);
+  const reads = frame.getDepthInformation.mock.calls.length;
+  scanner.recoveryMarker = { visible: true };
+  setEmulated(true);
+  scanner.frame(1400, frame);
+  expect(frame.getDepthInformation).toHaveBeenCalledTimes(reads);
+  expect(scanner.recoveryMarker.visible).toBe(false);
+  scanner.recoveryMarker = null;
+  expect(scanner.stats.adaptiveCapture.state).toBe("recovering");
+  expect(scanner.paused).toBe(false);
+  setEmulated(false);
+  move(0.1);
+  scanner.frame(1800, frame);
+  expect(scanner.stats.adaptiveCapture.state).toBe("recovering");
+  scanner.frame(2200, frame);
+  expect(scanner.stats.adaptiveCapture.state).toBe("tracking");
+  expect(scanner.stats.adaptiveCapture.connected).toBe(true);
+});
+
+test("an out-and-back shake is rejected even when the sampled depth poses are identical", () => {
+  const { scanner, frame, view } = captureHarness();
+  const pose = scanner.keyframePose(view);
+  scanner.recordCameraMotion(pose, 1300);
+  scanner.recordCameraMotion({ ...pose, position: { ...pose.position, x: 0.15 } }, 1320);
+  scanner.recordCameraMotion(pose, 1340);
+  scanner.captureDepthFrame(1340, frame, view);
+  expect(scanner.stats.movingTooFast).toBe(true);
+  expect(scanner.keyframes).toHaveLength(2);
+  expect(scanner.stats.currentConfirmedRatio).toBe(0);
+  expect(scanner.paused).toBe(false);
+});
+
+test("a shifted depth layer is withheld and does not increment accepted capture counts", () => {
+  const { scanner, frame, setDepth } = captureHarness();
+  const accepted = scanner.stats.acceptedDepthFrames;
+  setDepth(2.25);
+  scanner.frame(1500, frame);
+  expect(scanner.keyframes).toHaveLength(2);
+  expect(scanner.stats.acceptedDepthFrames).toBe(accepted);
+  expect(scanner.stats.rejectedDepthFrames).toBeGreaterThan(0);
+  expect(scanner.stats.adaptiveCapture.state).toBe("recovering");
+});
+
+test("faster depth sampling does not perform synchronous RGB readback every frame", () => {
+  const { scanner, frame, view } = captureHarness();
+  scanner.binding = {};
+  scanner.renderer = { getContext: () => ({}), resetState: () => {} };
+  view.camera = { width: 360, height: 720 };
+  scanner.colorReader = { read: jest.fn(() => null) };
+  scanner.captureDepthFrame(1500, frame, view);
+  scanner.captureDepthFrame(1630, frame, view);
+  scanner.captureDepthFrame(1760, frame, view);
+  scanner.captureDepthFrame(1890, frame, view);
+  expect(scanner.colorReader.read).toHaveBeenCalledTimes(2);
+  expect(scanner.keyframes).toHaveLength(2);
 });
 
 test("nearby overlapping views with a shifted surface are rejected live", () => {

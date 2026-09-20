@@ -1407,10 +1407,12 @@
   padding: 20px;
   display: flex;
   flex-direction: column;
+  overflow-y: auto;
   pointer-events: none;
 }
 .is-scanning .ss-scan-overlay > * {
   pointer-events: auto;
+  flex-shrink: 0;
 }
 .is-scanning .ss-scan-heading {
   padding: 14px 16px;
@@ -1443,6 +1445,30 @@
   gap: 4px;
   text-align: center;
 }
+.ss-connected-coverage {
+  display: flex;
+  gap: 14px;
+  padding: 8px 12px;
+  margin: 0 auto 10px;
+  max-width: 100%;
+  border-radius: 10px;
+  background: #182921e6;
+}
+.ss-connected-coverage > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+}
+.ss-connected-coverage span { font-size: 10px; color: #e6eee9; }
+.ss-connected-coverage strong { font-size: 10px; font-weight: 500; }
+.ss-connected-coverage progress { width: 100%; height: 5px; accent-color: #83f2cb; }
+.ss-scan-area-key .is-recovery { border-color: #ffc47b; background: #ffc47b; }
+.ss-partial-capture ul { padding-left: 18px; font-size: 12px; line-height: 1.5; max-height: 18vh; overflow-y: auto; }
+.is-reviewing .ss-scan-live,
+.is-reviewing .ss-connected-coverage,
+.is-reviewing .ss-scan-area-key,
+.is-reviewing .ss-scanning-target { display: none; }
 .ss-scan-live .ss-scan-sweep {
   display: flex;
   grid-template-columns: none;
@@ -1581,6 +1607,20 @@
 }
 .ss-scanning-target.is-warning > i {
   border-color: #ffc47b;
+}
+@media (max-height: 720px) {
+  .is-scanning .ss-scan-heading p {
+    display: none;
+  }
+  .is-scanning .ss-scanning-target {
+    position: relative;
+    left: auto;
+    top: auto;
+    transform: none;
+    align-self: center;
+    max-width: 100%;
+    margin: 8px auto 12px;
+  }
 }
 .ss-scan-bottom {
   margin-top: auto;
@@ -1993,6 +2033,56 @@
   }
   .ss-diagnostics dl {
     font-size: 10px;
+  }
+}
+@media (min-width: 520px) and (max-height: 500px) {
+  .is-capturing .ss-scan-heading,
+  .is-capturing .ss-scan-area-key,
+  .is-capturing .ss-scan-caption,
+  .is-capturing .ss-scan-hint {
+    display: none;
+  }
+  .is-capturing:not(.is-reviewing) .ss-scan-overlay {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-rows: auto minmax(44px, 1fr) auto auto;
+    gap: 8px;
+  }
+  .is-capturing:not(.is-reviewing) .ss-scan-live {
+    grid-column: 1;
+    grid-row: 1;
+    gap: 12px;
+    padding: 8px;
+    margin: 0;
+  }
+  .is-capturing:not(.is-reviewing) .ss-connected-coverage {
+    grid-column: 2;
+    grid-row: 1;
+    margin: 0;
+  }
+  .is-capturing:not(.is-reviewing) .ss-scanning-target {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    place-self: center;
+    margin: 0;
+  }
+  .is-capturing .ss-scan-bottom {
+    grid-column: 1 / -1;
+    grid-row: 3;
+    margin: 0;
+    padding: 8px;
+  }
+  .is-capturing .ss-scan-bottom .ss-actions {
+    margin: 0;
+  }
+  .is-capturing .ss-diagnostics {
+    grid-column: 1 / -1;
+    grid-row: 4;
+    margin: 0;
+  }
+  .is-capturing.is-reviewing .ss-scan-bottom {
+    max-height: calc(100% - 50px);
+    overflow-y: auto;
   }
 }
 @media (prefers-reduced-motion: reduce) {

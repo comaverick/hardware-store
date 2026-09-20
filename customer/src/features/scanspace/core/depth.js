@@ -32,7 +32,7 @@ export async function detectCapabilities(
   return result;
 }
 
-export function viewSampleGrid(view, withColor = false) {
+export function viewSampleGrid(view, withColor = false, requestedLongSide = null) {
   const matrix = view?.projectionMatrix;
   const projectedAspect =
     matrix?.length === 16 && Math.abs(matrix[0]) > 0.00001
@@ -46,7 +46,8 @@ export function viewSampleGrid(view, withColor = false) {
   // one large polygon for every coarse depth sample. The extra samples also
   // give the TSDF more stable support around thin shelves and wall edges.
   // Colorless fallback capture stays smaller for constrained devices.
-  const longSide = withColor ? 96 : 64;
+  const longSide = requestedLongSide == null ? (withColor ? 96 : 64)
+    : Math.max(64, Math.min(128, Math.round(requestedLongSide)));
   if (aspect >= 1)
     return {
       columns: longSide,
@@ -156,7 +157,7 @@ export class VoxelCloud {
     this.compactions++;
     return true;
   }
-  add(points, frameId, viewpoint = null) {
+  add(points, frameId, viewpoint = null, confirmsPrevious = null) {
     for (const p of points) {
       if (![p.x, p.y, p.z].every((v) => Number.isFinite(v) && Math.abs(v) < 60))
         continue;
@@ -183,6 +184,9 @@ export class VoxelCloud {
           ) < 0.04
         )
           continue;
+        // A second sample in the same voxel can be another depth layer. Live
+        // capture supplies a projective check against this exact observation.
+        if (confirmsPrevious && !confirmsPrevious(previous)) continue;
         if (previous.hits === 1) this.repeatedCells++;
         previous.hits++;
         const weight = 1 / Math.min(previous.hits, 8);

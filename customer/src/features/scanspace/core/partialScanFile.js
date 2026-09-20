@@ -89,6 +89,11 @@ function encodeRawFrame(frame) {
     colorHeight: finite(frame.colorHeight, 0),
     colorChannels: finite(frame.colorChannels, 4),
     geometryMode: String(frame.geometryMode || "view-aligned-v1"),
+    captureId: finite(frame.captureId, 0),
+    captureLinks: Array.isArray(frame.captureLinks) ? frame.captureLinks.filter(Number.isFinite).slice(0, 64) : [],
+    nativeDepthWidth: finite(frame.nativeDepthWidth, 0),
+    nativeDepthHeight: finite(frame.nativeDepthHeight, 0),
+    depthType: ["raw", "smooth"].includes(frame.depthType) ? frame.depthType : "",
   };
   RAW_FRAME_ARRAYS.forEach(([name, type]) => {
     if (frame[name]?.length) value[name] = encodeArray(frame[name], type);
@@ -166,6 +171,11 @@ function decodeRawFrame(frame, label) {
     colorHeight,
     colorChannels,
     geometryMode: String(frame.geometryMode || "view-aligned-v1"),
+    captureId: finite(frame.captureId, 0),
+    captureLinks: Array.isArray(frame.captureLinks) ? frame.captureLinks.filter(Number.isFinite).slice(0, 64) : [],
+    nativeDepthWidth: Math.max(0, Math.min(8192, finite(frame.nativeDepthWidth, 0))),
+    nativeDepthHeight: Math.max(0, Math.min(8192, finite(frame.nativeDepthHeight, 0))),
+    depthType: ["raw", "smooth"].includes(frame.depthType) ? frame.depthType : "",
     viewProjectionMatrix: decoded.viewProjectionMatrix.length
       ? decoded.viewProjectionMatrix : new Float32Array(decoded.projectionMatrix),
     viewTransformMatrix: decoded.viewTransformMatrix.length
@@ -185,6 +195,24 @@ function rawStats(stats) {
     else if (Array.isArray(value) && value.length <= 64 && value.every((item) =>
       ["boolean", "number", "string"].includes(typeof item))) result[name] = value.slice();
   });
+  const adaptive = stats?.adaptiveCapture;
+  if (adaptive && typeof adaptive === "object") {
+    const numeric = ["version", "frameCount", "pendingCount", "recoveries", "promoted", "expired", "removed", "capacityStops"];
+    const regions = (Array.isArray(adaptive.coverage?.regions) ? adaptive.coverage.regions : []).slice(0, 3)
+      .filter(region => ["lower", "middle", "upper"].includes(region?.id)).map(region => ({
+        id: region.id, observed: Math.max(0, finite(region.observed)), confirmed: Math.max(0, finite(region.confirmed)),
+        ratio: Math.max(0, Math.min(1, finite(region.ratio))),
+      }));
+    result.adaptiveCapture = {
+      ...Object.fromEntries(numeric.map(name => [name, Math.max(0, finite(adaptive[name]))])),
+      state: ["starting", "tracking", "recovering"].includes(adaptive.state) ? adaptive.state : "starting",
+      reason: String(adaptive.reason || "").slice(0, 80), connected: adaptive.connected === true,
+      capacityReached: adaptive.capacityReached === true,
+      coverage: { observed: Math.max(0, finite(adaptive.coverage?.observed)),
+        confirmed: Math.max(0, finite(adaptive.coverage?.confirmed)),
+        ratio: Math.max(0, Math.min(1, finite(adaptive.coverage?.ratio))), regions },
+    };
+  }
   return result;
 }
 
