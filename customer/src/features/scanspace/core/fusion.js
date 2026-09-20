@@ -792,14 +792,30 @@ function validateFrameOverlap(frames, diagnostics = {}, limits = {}) {
     }
     components.push(component);
   }
+  const componentSamples = (component) => component.reduce(
+    (sum, index) => sum + frames[index].filteredCount,
+    0,
+  );
+  diagnostics.frameComponentCount = components.length;
+  diagnostics.frameComponents = components
+    .map((component) => ({
+      frameIds: component.map((index) => frames[index].frameId),
+      sampleCount: componentSamples(component),
+      acceptedEdges: component.reduce(
+        (sum, index) =>
+          sum + adjacency[index].filter((next) => component.includes(next)).length,
+        0,
+      ) / 2,
+    }))
+    .sort(
+      (left, right) =>
+        right.frameIds.length - left.frameIds.length ||
+        right.sampleCount - left.sampleCount,
+    );
   // A weak or corrupt first frame must not poison the entire scan. Keep the
   // largest mutually connected capture sequence, with valid sample count as a
   // tie breaker, and restore chronological order for fusion.
-  const samples = (component) =>
-    component.reduce(
-      (sum, index) => sum + frames[index].filteredCount,
-      0,
-    );
+  const samples = componentSamples;
   let strongest;
   if (limits.selectionMode === "anchor-core") {
     // Connected components permit a long A-B-C-D chain even when A and D no
@@ -825,6 +841,7 @@ function validateFrameOverlap(frames, diagnostics = {}, limits = {}) {
   diagnostics.selectedFrameIds = strongest.map((index) => frames[index].frameId);
   diagnostics.rejectedFrameIds = frames
     .filter((_, index) => !strongest.includes(index)).map((frame) => frame.frameId);
+  diagnostics.disconnectedFrameIds = diagnostics.rejectedFrameIds.slice();
   return strongest.sort((left, right) => left - right).map((index) => frames[index]);
 }
 
@@ -5335,6 +5352,13 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       code: "missing-depth",
       message: stages.measuredGapWarning.message,
     });
+  if ((alignment.frameComponentCount || 0) > 1 && alignment.disconnectedFrameIds?.length) {
+    measuredSurfaceWarnings.push({
+      code: "disconnected-capture-frames",
+      message:
+        `${alignment.disconnectedFrameIds.length} captured views did not have validated overlap with the retained scan path. They were left out to prevent disconnected layers; repeat that area with slower sideways overlap.`,
+    });
+  }
   if (measuredSurfaceQuality && !measuredSurfaceQuality.assessed)
     measuredSurfaceWarnings.push({
       code: "limited-wall-evidence",
@@ -5534,6 +5558,26 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     }
     if (options.conformTopology) stages.topologyAfterRepair = surfaceTopologyDiagnostics(surface);
   }
+  const finalConnectivity = stages.topologyAfterRepair;
+  if (
+    finalConnectivity?.disconnectedComponentCount > 0 &&
+    finalConnectivity.disconnectedArea > 0.12 &&
+    finalConnectivity.dominantComponentAreaRatio < 0.995
+  ) {
+    measuredSurfaceWarnings.push({
+      code: "disconnected-mesh-patches",
+      message:
+        "The final mesh still contains small disconnected surface patches. They were not welded without depth evidence; inspect the affected angles and rescan the gaps with overlapping views.",
+    });
+  }
+  stages.measuredSurfaceWarnings = measuredSurfaceWarnings;
+  stages.measuredReviewWarning = measuredSurfaceWarnings.length
+    ? {
+        message:
+          "The measured mesh was reconstructed, but automatic review found possible gaps or alignment issues. You can inspect and finish it without generating replacement walls.",
+        issues: measuredSurfaceWarnings,
+      }
+    : null;
   wallStructure = meshWallStructureDiagnostics(surface);
   stages.wallStructure = wallStructure;
   stages.postStabilizationWallStructure = wallStructure;

@@ -60,6 +60,68 @@ function geometricEdges(mesh, tolerance) {
     edges
   };
 }
+function connectivityFromGeometry(mesh, edges) {
+  const faceCount = Math.floor((mesh.indices?.length || 0) / 3),
+    parent = new Int32Array(faceCount);
+  for (let face = 0; face < faceCount; face++) parent[face] = face;
+  const find = value => {
+    let root = value;
+    while (parent[root] !== root) root = parent[root];
+    while (parent[value] !== value) {
+      const next = parent[value];
+      parent[value] = root;
+      value = next;
+    }
+    return root;
+  };
+  const join = (left, right) => {
+    const a = find(left), b = find(right);
+    if (a !== b) parent[b] = a;
+  };
+  for (const edge of edges.values()) if (edge.faces.length > 1) {
+    for (let index = 1; index < edge.faces.length; index++) join(edge.faces[0], edge.faces[index]);
+  }
+  const components = new Map();
+  for (let face = 0; face < faceCount; face++) {
+    const root = find(face), idsForFace = [0, 1, 2].map(corner => mesh.indices[face * 3 + corner]),
+      p = idsForFace.map(id => Array.from(mesh.positions.subarray(id * 3, id * 3 + 3))),
+      normal = cross(sub(p[1], p[0]), sub(p[2], p[0])),
+      area = Math.hypot(...normal) * .5;
+    const component = components.get(root) || {
+      triangles: 0,
+      area: 0,
+      min: [Infinity, Infinity, Infinity],
+      max: [-Infinity, -Infinity, -Infinity]
+    };
+    component.triangles++;
+    component.area += area;
+    for (const vertex of p) for (let axis = 0; axis < 3; axis++) {
+      component.min[axis] = Math.min(component.min[axis], vertex[axis]);
+      component.max[axis] = Math.max(component.max[axis], vertex[axis]);
+    }
+    components.set(root, component);
+  }
+  const entries = [...components.values()].sort((a, b) => b.area - a.area),
+    totalArea = entries.reduce((sum, component) => sum + component.area, 0),
+    dominantArea = entries[0]?.area || 0;
+  return {
+    componentCount: entries.length,
+    dominantComponentArea: dominantArea,
+    dominantComponentAreaRatio: dominantArea / Math.max(1e-9, totalArea),
+    disconnectedComponentCount: Math.max(0, entries.length - 1),
+    disconnectedArea: Math.max(0, totalArea - dominantArea),
+    components: entries.slice(0, 12).map(component => ({
+      triangles: component.triangles,
+      area: component.area,
+      min: component.min,
+      max: component.max
+    }))
+  };
+}
+export function surfaceConnectivityDiagnostics(mesh, tolerance = 0.00001) {
+  const { edges } = geometricEdges(mesh, tolerance);
+  return connectivityFromGeometry(mesh, edges);
+}
 export function surfaceTopologyDiagnostics(mesh, tolerance = 0.00001) {
   const {
     points,
@@ -81,7 +143,8 @@ export function surfaceTopologyDiagnostics(mesh, tolerance = 0.00001) {
     boundaryEdges,
     boundaryLengthMeters,
     nonManifoldEdges,
-    windingConflicts
+    windingConflicts,
+    ...connectivityFromGeometry(mesh, edges)
   };
 }
 export function conformSurfaceTopology(mesh, {

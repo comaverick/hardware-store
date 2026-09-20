@@ -1,4 +1,4 @@
-import { conformSurfaceTopology, surfaceTopologyDiagnostics, triangulatePlanarLoop } from './surfaceTopology';
+import { conformSurfaceTopology, surfaceConnectivityDiagnostics, surfaceTopologyDiagnostics, triangulatePlanarLoop } from './surfaceTopology';
 
 const mesh = (p,i) => ({positions:new Float32Array(p),indices:new Uint32Array(i),colors:new Uint8Array(p.length).fill(125)});
 
@@ -49,4 +49,12 @@ test('concave loops triangulate inside their boundary with coherent winding', ()
     expect(x>1&&x<2&&y>1).toBe(false);
   }
   expect(area).toBeCloseTo(7,6);
+});
+
+test('connectivity diagnostics expose detached mesh patches',()=>{
+  const source=mesh([0,0,0,1,0,0,0,1,0, 2,0,0,3,0,0,2,1,0],[0,1,2,3,4,5]);
+  const result=surfaceConnectivityDiagnostics(source);
+  expect(result.componentCount).toBe(2);
+  expect(result.disconnectedComponentCount).toBe(1);
+  expect(result.dominantComponentAreaRatio).toBeCloseTo(.5,6);
 });

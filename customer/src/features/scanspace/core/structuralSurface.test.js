@@ -70,3 +70,20 @@ test('two stationary repeats cannot authorize a rebuilt footprint',()=>{
   const result=rebuildStructuralSurfaces(mesh,[plane],frames,helpers);
   expect(result.structuralRebuild.reconstructedArea).toBe(0);
 });
+
+test('short evidence-supported runs reconnect neighboring planar patches',()=>{
+  const {mesh,plane,frames}=fixture();
+  for(let y=0;y<10;y++) plane.cells.delete(`5,${y}`);
+  const result=rebuildStructuralSurfaces(mesh,[plane],frames,helpers,{repairPlanarGaps:true});
+  expect(result.structuralRebuild.bridgedCells).toBeGreaterThan(0);
+  expect(result.structuralRebuild.bridgedArea).toBeGreaterThan(0);
+  expect(result.structuralRebuild.estimatedHoleCount).toBeGreaterThan(0);
+});
+
+test('a measured foreground or opening vetoes a planar bridge',()=>{
+  const {mesh,plane,frames}=fixture();
+  for(let y=0;y<10;y++) plane.cells.delete(`5,${y}`);
+  const veto={...frames[0],frameId:9,camera:[2,1,1],filteredDepth:new Float32Array(400).fill(1.3)};
+  const result=rebuildStructuralSurfaces(mesh,[plane],[...frames,veto],helpers,{repairPlanarGaps:true});
+  expect(result.structuralRebuild.bridgedCells).toBe(0);
+});

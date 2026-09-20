@@ -5,6 +5,31 @@ const dot = (a, b) => a.reduce((s, v, i) => s + v * b[i], 0);
 const sub = (a, b) => a.map((v, i) => v - b[i]);
 const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 const key = (x, y) => `${x},${y}`;
+function gridComponents(occupied) {
+  const visited = new Set(), components = [];
+  for (const k of occupied.keys()) {
+    if (visited.has(k)) continue;
+    const queue = [k];
+    visited.add(k);
+    for (let i = 0; i < queue.length; i++) {
+      const [x, y] = queue[i].split(',').map(Number);
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const next = key(x + dx, y + dy);
+        if (occupied.has(next) && !visited.has(next)) {
+          visited.add(next);
+          queue.push(next);
+        }
+      }
+    }
+    components.push(queue.length);
+  }
+  components.sort((a, b) => b - a);
+  return {
+    count: components.length,
+    largestCells: components[0] || 0,
+    disconnectedCells: components.slice(1).reduce((sum, size) => sum + size, 0),
+  };
+}
 function outsideCell(polygon, x, y) {
   let inside = polygon;
   const outside = [];
@@ -40,6 +65,9 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
     removedTriangles: 0,
     reconstructedTriangles: 0,
     reconstructedArea: 0,
+    bridgedCells: 0,
+    bridgedArea: 0,
+    bridgedRuns: 0,
     estimatedHoleCount: 0,
     estimatedArea: 0,
     estimatedTriangles: 0
@@ -119,6 +147,57 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
         estimated: true
       });
     }
+    // Reconnect two supported patches only when the missing run is short,
+    // lies between measured cells, and every proposed cell has independent
+    // depth agreement. This fixes a floating-slab seam without painting a
+    // plane over an unscanned opening or an occluding object.
+    if (options.repairPlanarGaps) {
+      const maxBridgeCells = Math.max(1, Math.floor(.35 / (cell * cell))),
+        bridgeCells = new Set();
+      const addRun = run => {
+        if (!run.length || run.length > 3 || bridgeCells.size + run.length > maxBridgeCells) return;
+        for (const [x, y] of run) {
+          const e = evidence(world(x + .5, y + .5));
+          if (e.agrees < 2 || e.contradicts > 0) return;
+        }
+        run.forEach(([x, y]) => bridgeCells.add(key(x, y)));
+      };
+      for (let y = bounds[1]; y <= bounds[3]; y++) {
+        let x = bounds[0];
+        while (x <= bounds[2]) {
+          if (occupied.has(key(x, y))) {
+            x++;
+            continue;
+          }
+          const start = x;
+          while (x <= bounds[2] && !occupied.has(key(x, y))) x++;
+          if (start > bounds[0] && x <= bounds[2] && occupied.has(key(start - 1, y)))
+            addRun(Array.from({ length: x - start }, (_, i) => [start + i, y]));
+        }
+      }
+      for (let x = bounds[0]; x <= bounds[2]; x++) {
+        let y = bounds[1];
+        while (y <= bounds[3]) {
+          if (occupied.has(key(x, y))) {
+            y++;
+            continue;
+          }
+          const start = y;
+          while (y <= bounds[3] && !occupied.has(key(x, y))) y++;
+          if (start > bounds[1] && y <= bounds[3] && occupied.has(key(x, start - 1)))
+            addRun(Array.from({ length: y - start }, (_, i) => [x, start + i]));
+        }
+      }
+      if (bridgeCells.size) {
+        const before = occupied.size;
+        for (const k of bridgeCells) occupied.set(k, { estimated: true, bridged: true });
+        const added = occupied.size - before;
+        diagnostics.bridgedCells += added;
+        diagnostics.bridgedArea += added * cell * cell;
+        diagnostics.bridgedRuns++;
+        diagnostics.estimatedHoleCount++;
+      }
+    }
     if (occupied.size * cell * cell < .7) continue;
     // The grid and retained fragments must share EXACTLY the same plane.
     // Do not replace independently fitted, nearby sheets or perpendicular
@@ -128,7 +207,8 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
       plane,
       occupied,
       world,
-      cell
+      cell,
+      grid: gridComponents(occupied)
     });
   }
   if (!patches.length) return {
@@ -248,7 +328,8 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
     diagnostics.planes.push({
       kind: plane.kind,
       area: occupied.size * cell * cell,
-      supportingFrameIds: plane.supportingFrameIds
+      supportingFrameIds: plane.supportingFrameIds,
+      grid: gridComponents(occupied),
     });
   }
   const result = {
