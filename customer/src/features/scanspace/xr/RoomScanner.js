@@ -14,6 +14,7 @@ import {
 } from "../core/readiness";
 import { createCameraColorReader } from "./cameraColor";
 import { AdaptiveCapture, adaptiveCaptureProfile, captureDetail, capturePointObserved, confirmedViewRatio, prepareCaptureFrame } from "../core/adaptiveCapture";
+import { CaptureExperience } from "../core/captureExperience";
 
 function coverageSplatTexture() {
   const canvas = document.createElement("canvas");
@@ -349,6 +350,7 @@ export class RoomScanner {
       cameraTravel: 0,
       nearDepthWarning: false,
       currentConfirmedRatio: 0,
+      currentViewChecked: false,
       poseDriftWarning: false,
       rejectedPoseFrames: 0,
       poseOverlapRatio: 0,
@@ -361,10 +363,12 @@ export class RoomScanner {
     this.planes = new Map();
     this.keyframes = [];
     this.capture = new AdaptiveCapture({ maximumFrames: MAX_FUSION_KEYFRAMES });
+    this.experience = new CaptureExperience();
     this.captureProfile = adaptiveCaptureProfile();
     this.captureProcessingMs = 0;
   }
   publish() {
+    this.updateExperience();
     this.onUpdate({
       ...this.stats,
       floorY: this.floorY,
@@ -506,6 +510,7 @@ export class RoomScanner {
   }
   markDepthMiss(time) {
     this.stats.depthMisses++;
+    this.stats.totalDepthMisses = (this.stats.totalDepthMisses || 0) + 1;
     if (!this.stats.depthActive) {
       this.stats.depthState = this.stats.depthMisses >= 5 ? "stalled" : "waiting";
       this.stats.frameQuality = "waiting";
@@ -528,22 +533,28 @@ export class RoomScanner {
       this.stats.rejectedDepthFrames++;
       this.stats.depthReadErrors++;
       this.stats.depthState = "error";
+      this.stats.depthCurrent = false;
+      this.stats.movingTooFast = false;
       this.stats.currentConfirmedRatio = 0;
       this.recordCaptureError(error, "Depth read failed");
       this.capture.failure("depth-error", time);
-      this.updateAdaptiveStats();
+      this.recordCaptureOutcome(time, { reason: "depth-error" }, started);
       return;
     }
     if (!depth) {
       this.markDepthMiss(time);
+      this.stats.depthCurrent = false;
+      this.stats.movingTooFast = false;
+      this.stats.rejectedDepthFrames++;
       this.stats.currentConfirmedRatio = 0;
       if (time - (this.lastDepthAt ?? time) > 1800) this.capture.failure("depth-missing", time);
-      this.updateAdaptiveStats();
+      this.recordCaptureOutcome(time, { reason: "depth-missing" }, started);
       return;
     }
     this.lastDepthAt = time;
     this.stats.depthMisses = 0;
     this.stats.depthState = "active";
+    this.stats.depthCurrent = true;
     this.stats.depthFrames++;
     this.stats.depthActive = true;
     this.stats.format = this.session.depthDataFormat || "Unavailable";
@@ -621,6 +632,10 @@ export class RoomScanner {
       const obstructionRatio = framePoints.length
         ? obstructionPointCount / framePoints.length
         : 0;
+      this.stats.gateLinearSpeed = Math.max(motion.linearSpeed, motion.textureLinearSpeed || 0);
+      this.stats.gateAngularSpeed = Math.max(motion.angularSpeed, motion.textureAngularSpeed || 0);
+      this.stats.maxLinearSpeed = this.captureProfile.maxLinearSpeed;
+      this.stats.maxAngularSpeed = this.captureProfile.maxAngularSpeed;
       const quality = depthFrameQuality({
         validSamples: framePoints.length,
         totalSamples: columns * rows,
@@ -628,8 +643,8 @@ export class RoomScanner {
         ...motion,
         // Use the short XR motion window too: a fast out-and-back movement
         // can look stationary between two sampled depth frames.
-        linearSpeed: Math.max(motion.linearSpeed, motion.textureLinearSpeed || 0),
-        angularSpeed: Math.max(motion.angularSpeed, motion.textureAngularSpeed || 0),
+        linearSpeed: this.stats.gateLinearSpeed,
+        angularSpeed: this.stats.gateAngularSpeed,
         maxLinearSpeed: this.captureProfile.maxLinearSpeed,
         maxAngularSpeed: this.captureProfile.maxAngularSpeed,
       });
@@ -640,6 +655,7 @@ export class RoomScanner {
       this.stats.angularSpeed = motion.angularSpeed;
       this.stats.nearDepthWarning = nearRatio > 0.12;
       this.stats.poseDriftWarning = false;
+      let outcome = { reason: quality.reason, accepted: false };
       if (quality.accepted) {
         const candidate = createRgbdKeyframe(framePoints, {
           columns, rows, timestamp: time, camera: keyframePose.position,
@@ -650,12 +666,19 @@ export class RoomScanner {
           nativeDepthUvTransform: depth.normDepthBufferFromNormView?.matrix,
           depthType: this.stats.depthType, linearSpeed: motion.linearSpeed, angularSpeed: motion.angularSpeed,
         });
-        if (!candidate) return;
+        if (!candidate) {
+          this.stats.rejectedDepthFrames++;
+          this.capture.failure("invalid-depth", time);
+          this.recordCaptureOutcome(time, { reason: "invalid-depth" }, started);
+          return;
+        }
         candidate.measuredDepthCount = prepareCaptureFrame(candidate).measuredCount;
         candidate.depthQuality = candidate.measuredDepthCount;
         this.captureDetail = captureDetail(candidate);
         const previousFrames = this.keyframes.slice();
         const decision = this.capture.consider(candidate, this.captureProfile);
+        outcome = { ...decision, committed: decision.committed.length,
+          matched: decision.reason !== "starting" && !!this.capture.lastMatch };
         this.keyframes = this.capture.frames;
         const match = this.capture.lastMatch;
         this.stats.poseOverlapRatio = match?.overlap || 0;
@@ -716,7 +739,7 @@ export class RoomScanner {
         this.stats.currentConfirmedRatio = 0;
         this.capture.failure(quality.reason, time);
       }
-      this.updateAdaptiveStats();
+      this.recordCaptureOutcome(time, outcome, started);
       this.stats.cloudCellSize = this.cloud.size;
       this.stats.cloudCompactions = this.cloud.compactions;
       const m = view.transform.matrix;
@@ -741,11 +764,13 @@ export class RoomScanner {
       this.stats.rejectedDepthFrames++;
       this.stats.depthReadErrors++;
       this.stats.depthState = "error";
+      this.stats.depthCurrent = false;
+      this.stats.movingTooFast = false;
       this.stats.frameQuality = "depth-error";
       this.stats.currentConfirmedRatio = 0;
       this.recordCaptureError(error, "Depth frame skipped");
       this.capture.failure("depth-error", time);
-      this.updateAdaptiveStats();
+      this.recordCaptureOutcome(time, { reason: "depth-error" }, started);
     } finally {
       const elapsed = performance.now() - started;
       this.captureProcessingMs = this.captureProcessingMs ? this.captureProcessingMs * 0.8 + elapsed * 0.2 : elapsed;
@@ -754,6 +779,7 @@ export class RoomScanner {
   }
   frame(time, frame) {
     if (!frame || this.closed) return;
+    this.lastFrameAt = time;
     try {
       const pose = frame.getViewerPose(this.space);
       this.stats.tracking = !!pose && !pose.emulatedPosition;
@@ -802,7 +828,9 @@ export class RoomScanner {
         }
       } else {
         this.capture.failure("tracking-lost", time);
-        this.updateAdaptiveStats();
+        this.stats.currentViewChecked = false;
+        this.stats.movingTooFast = false;
+        this.updateAdaptiveStats(time);
         this.lastCameraPose = null;
         this.cameraMotion = null;
         this.cameraMotionWindow = [];
@@ -825,12 +853,41 @@ export class RoomScanner {
       this.publish();
     }
   }
-  updateAdaptiveStats() {
+  recordCaptureOutcome(time, { reason, accepted = false, committed = 0, matched = false }, started) {
+    this.stats.frameQuality = reason;
+    this.stats.currentViewChecked = accepted;
+    this.lastViewDecisionAt = time;
+    if (!accepted) this.stats.currentConfirmedRatio = 0;
+    const depthAvailable = !["depth-error", "depth-missing", "invalid-depth"].includes(reason);
+    this.experience.recordFrame({ timestamp: time, reason, accepted, committed, matched,
+      state: this.capture.state,
+      gateLinearSpeed: depthAvailable ? this.stats.gateLinearSpeed : 0,
+      gateAngularSpeed: depthAvailable ? this.stats.gateAngularSpeed : 0,
+      maxLinearSpeed: this.captureProfile.maxLinearSpeed, maxAngularSpeed: this.captureProfile.maxAngularSpeed,
+      sampledLinearSpeed: depthAvailable ? this.stats.linearSpeed : 0,
+      sampledAngularSpeed: depthAvailable ? this.stats.angularSpeed : 0,
+      validDepthRatio: depthAvailable ? this.stats.validDepthRatio : 0,
+      overlap: matched ? this.stats.poseOverlapRatio : 0,
+      medianResidual: matched ? this.stats.poseMedianResidual : 0,
+      upperResidual: matched ? this.stats.poseUpperResidual : 0,
+      captureIntervalMs: this.stats.captureIntervalMs,
+      processingMs: performance.now() - started,
+    });
+    this.updateAdaptiveStats(time);
+  }
+  updateExperience(time = this.lastFrameAt ?? performance.now()) {
+    if (this.lastViewDecisionAt == null || time - this.lastViewDecisionAt > 1200)
+      this.stats.currentViewChecked = false;
+    this.stats.captureFeedback = this.experience.update({ ...this.stats, paused: this.paused }, time);
+    this.stats.captureDiagnostics = this.experience.snapshot();
+  }
+  updateAdaptiveStats(time = this.lastFrameAt ?? performance.now()) {
     this.stats.adaptiveCapture = this.capture.snapshot();
     this.stats.captureProfile = this.captureProfile.name;
     this.stats.fusionKeyframes = this.keyframes.length;
     this.stats.fusionKeyframeCompactions = this.capture.events.removed;
     this.stats.connectedSurfaceCoverage = Math.round(this.stats.adaptiveCapture.coverage.ratio * 100);
+    this.updateExperience(time);
   }
   recordCommittedViews(frames) {
     const positions = (this.keyframePositions ||= []);
@@ -848,7 +905,7 @@ export class RoomScanner {
   updateRecoveryTarget(view) {
     if (!this.recoveryMarker || !view) return;
     const recovering = this.capture.state === "recovering";
-    let target = this.stats.adaptiveCapture?.coverage.target;
+    let target = null;
     if (recovering) {
       const last = this.keyframes[this.keyframes.length - 1];
       if (last) {
@@ -858,13 +915,14 @@ export class RoomScanner {
         if (index >= 0) target = Array.from(valid.positions.subarray(index * 3, index * 3 + 3));
       }
     }
-    this.recoveryMarker.visible = !!target && !this.originChanged && this.stats.tracking && !this.paused;
-    if (!this.recoveryMarker.visible) return;
+    this.recoveryMarker.visible = !!target && this.stats.captureFeedback?.code === "reconnect" &&
+      !this.originChanged && this.stats.tracking && !this.paused;
+    if (!target) return;
     this.recoveryMarker.position.fromArray(target);
     const local = new THREE.Vector3().fromArray(target).applyMatrix4(new THREE.Matrix4().fromArray(view.transform.matrix).invert());
-    this.stats.recoveryDirection = local.z > 0 ? "Turn back toward the last scanned area" :
-      Math.abs(local.x) > Math.abs(local.z) * 0.3 ? (local.x > 0 ? "Turn gently right toward the amber marker" : "Turn gently left toward the amber marker") :
-      Math.abs(local.y) > Math.abs(local.z) * 0.3 ? (local.y > 0 ? "Aim up toward the amber marker" : "Aim down toward the amber marker") : "Keep the amber area in view while moving gently sideways";
+    this.stats.recoveryDirection = local.z > 0 ? "Turn back toward the last area you scanned." :
+      Math.abs(local.x) > Math.abs(local.z) * 0.3 ? (local.x > 0 ? "Turn gently right toward your last scanned area." : "Turn gently left toward your last scanned area.") :
+      Math.abs(local.y) > Math.abs(local.z) * 0.3 ? (local.y > 0 ? "Aim a little higher toward your last scanned area." : "Aim a little lower toward your last scanned area.") : "Keep this area in view for a moment while the connection is checked.";
   }
   updatePreview() {
     const allPoints = this.cloud.values();

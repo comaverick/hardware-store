@@ -14,15 +14,20 @@ export function CaptureCoverage({ coverage }) {
   );
 }
 
-export function CaptureAuditNotice({ audit, onContinue, onSave, saving = false }) {
+export function CaptureAuditNotice({ audit, onContinue, onSave, saving = false, canContinue = true }) {
   return (
-    <section className="ss-partial-capture" role="status" aria-label="Capture review">
-      <strong>A few areas need another look</strong>
-      <ul>{audit.issues.map(issue => <li key={issue}>{issue}</li>)}</ul>
-      <p>Your connected views are still available. Add coverage or save them as a partial scan.</p>
+    <section className={`ss-partial-capture ${audit.passed ? "is-ready" : ""}`} role="status" aria-label="Capture review">
+      <strong>{audit.passed ? "Ready to save" : "Your captured area is ready to review"}</strong>
+      <p>{audit.passed ? "Look around the preview, then save or add more coverage."
+        : "Some areas may be incomplete. You can save this partial scan or keep scanning."}</p>
+      {!canContinue && <p>The camera session cannot continue. You can still save this captured result.</p>}
+      {!!audit.issues.length && <details>
+        <summary>Areas you can improve</summary>
+        <ul>{audit.issues.map(issue => <li key={issue}>{issue}</li>)}</ul>
+      </details>}
       <div className="ss-actions">
-        <button type="button" className="ss-primary" disabled={saving} onClick={onContinue}>Keep scanning</button>
-        <button type="button" disabled={saving} onClick={onSave}>Save partial scan</button>
+        <button type="button" disabled={saving || !canContinue} onClick={onContinue}>Keep scanning</button>
+        <button type="button" className="ss-primary" disabled={saving} onClick={onSave}>{audit.passed ? "Save scan" : "Save partial scan"}</button>
       </div>
     </section>
   );

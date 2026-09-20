@@ -117,9 +117,9 @@ function ScanControls({ cloud, mode, input, view, reset }) {
   );
 }
 
-export default function PartialScanScene({ scan }) {
+export default function PartialScanScene({ scan, compact = false }) {
   const [mode, setMode] = useState("orbit");
-  const [low, setLow] = useState(false);
+  const [low, setLow] = useState(compact);
   const [reset, setReset] = useState(0);
   const [knob, setKnob] = useState({ x: 0, y: 0 });
   const input = useRef({ x: 0, y: 0, keys: {} });
@@ -173,6 +173,7 @@ export default function PartialScanScene({ scan }) {
   return (
     <div className="ss-partial-scene">
       <Canvas
+        frameloop={compact && mode === "orbit" ? "demand" : "always"}
         camera={{ position: view.position, fov: 48, near: 0.025, far: 100 }}
         dpr={low ? 1 : [1, 2]}
         gl={{ antialias: true, powerPreference: "high-performance" }}
@@ -200,7 +201,7 @@ export default function PartialScanScene({ scan }) {
         />
       </Canvas>
       <div className="ss-partial-viewbar">
-        <div role="group" aria-label="Captured room view">
+        {!compact && <div role="group" aria-label="Captured room view">
           <button
             className={mode === "orbit" ? "is-active" : ""}
             aria-pressed={mode === "orbit"}
@@ -215,7 +216,7 @@ export default function PartialScanScene({ scan }) {
           >
             Walk inside
           </button>
-        </div>
+        </div>}
         <button aria-label="Reset camera" onClick={() => setReset((v) => v + 1)}>
           Reset
         </button>
@@ -248,13 +249,13 @@ export default function PartialScanScene({ scan }) {
         <i />{" "}
         {mesh ? mesh.surfaceRepair?.estimatedHoleCount > 0 ? "Measured + estimated repairs" : "Captured measured surface" : "Captured depth points"}
       </span>
-      <button
+      {!compact && <button
         className="ss-quality"
         aria-pressed={low}
         onClick={() => setLow((value) => !value)}
       >
         {low ? "Battery saver" : "High quality"}
-      </button>
+      </button>}
     </div>
   );
 }

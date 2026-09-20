@@ -508,6 +508,85 @@ test("an out-and-back shake is rejected even when the sampled depth poses are id
   expect(scanner.keyframes).toHaveLength(2);
   expect(scanner.stats.currentConfirmedRatio).toBe(0);
   expect(scanner.paused).toBe(false);
+  expect(scanner.stats.adaptiveCapture.state).toBe("tracking");
+  expect(scanner.stats.adaptiveCapture.recoveries).toBe(0);
+  const event = scanner.stats.captureDiagnostics.recent.at(-1);
+  expect(event.reason).toBe("moving-too-fast");
+  expect(event.sampledLinearSpeed).toBe(0);
+  expect(event.gateLinearSpeed).toBeGreaterThan(event.maxLinearSpeed);
+  expect(event.matched).toBe(false);
+  expect(scanner.stats.captureFeedback.code).toBe("checking");
+});
+
+test("three brief motion skips preserve the saved map and resume without recovery prompts", () => {
+  const { scanner, frame, view } = captureHarness();
+  const pose = scanner.keyframePose(view);
+  const frames = scanner.keyframes.slice();
+  for (const time of [1340, 1480, 1620]) {
+    scanner.recordCameraMotion(pose, time - 40);
+    scanner.recordCameraMotion({ ...pose, position: { ...pose.position, x: 0.15 } }, time - 20);
+    scanner.recordCameraMotion(pose, time);
+    scanner.captureDepthFrame(time, frame, view);
+  }
+  expect(scanner.stats.captureDiagnostics.decisions["moving-too-fast"]).toBe(3);
+  expect(scanner.stats.captureDiagnostics.promptCount).toBe(0);
+  expect(scanner.stats.adaptiveCapture.recoveries).toBe(0);
+  expect(scanner.keyframes).toEqual(frames);
+  scanner.frame(1900, frame);
+  expect(scanner.stats.frameQuality).toBe("connected");
+  expect(scanner.stats.currentViewChecked).toBe(true);
+  expect(scanner.stats.adaptiveCapture.state).toBe("tracking");
+  expect(scanner.stats.captureDiagnostics.attempts).toBe(6);
+});
+
+test("a soft skip between reliable recovery observations does not restart reconnection", () => {
+  const { scanner, frame, view, setEmulated } = captureHarness();
+  setEmulated(true);
+  scanner.frame(1300, frame);
+  setEmulated(false);
+  scanner.frame(1600, frame);
+  expect(scanner.stats.frameQuality).toBe("confirming-recovery");
+  const pose = scanner.keyframePose(view);
+  scanner.recordCameraMotion(pose, 1700);
+  scanner.recordCameraMotion({ ...pose, position: { ...pose.position, x: 0.15 } }, 1720);
+  scanner.recordCameraMotion(pose, 1740);
+  scanner.captureDepthFrame(1740, frame, view);
+  expect(scanner.stats.frameQuality).toBe("moving-too-fast");
+  scanner.frame(2050, frame);
+  expect(scanner.stats.adaptiveCapture.state).toBe("tracking");
+  expect(scanner.stats.adaptiveCapture.recoveries).toBe(1);
+  expect(scanner.stats.captureDiagnostics.prompts.reconnect).toBe(0);
+});
+
+test("missing depth is counted cumulatively even after sensor acquisition resumes", () => {
+  const { scanner, frame, view } = captureHarness();
+  const missing = { getDepthInformation: () => null };
+  scanner.captureDepthFrame(1400, missing, view);
+  scanner.captureDepthFrame(1600, missing, view);
+  scanner.captureDepthFrame(1800, frame, view);
+  expect(scanner.stats.depthMisses).toBe(0);
+  expect(scanner.stats.totalDepthMisses).toBe(2);
+  expect(scanner.stats.captureDiagnostics.decisions["depth-missing"]).toBe(2);
+  expect(scanner.stats.captureDiagnostics.attempts).toBe(5);
+});
+
+test("the amber target is reserved for sustained reconnection, not routine coverage or confirmation", () => {
+  const { scanner, view } = captureHarness();
+  scanner.recoveryMarker = { visible: true, position: { fromArray: jest.fn() } };
+  scanner.updateRecoveryTarget(view);
+  expect(scanner.recoveryMarker.visible).toBe(false);
+  scanner.capture.failure("tracking-lost", 1400);
+  scanner.updateAdaptiveStats(1400);
+  scanner.updateRecoveryTarget(view);
+  expect(scanner.recoveryMarker.visible).toBe(false);
+  scanner.updateExperience(2300);
+  scanner.updateRecoveryTarget(view);
+  expect(scanner.recoveryMarker.visible).toBe(true);
+  expect(scanner.stats.recoveryDirection).not.toMatch(/amber/);
+  scanner.stats.frameQuality = "confirming-recovery";
+  scanner.updateExperience(2400);
+  scanner.updateRecoveryTarget(view);
+  expect(scanner.recoveryMarker.visible).toBe(false);
 });
 
 test("a shifted depth layer is withheld and does not increment accepted capture counts", () => {

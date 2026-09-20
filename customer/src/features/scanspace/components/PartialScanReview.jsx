@@ -6,10 +6,14 @@ import { downloadDepthCapture } from "../core/captureDebug";
 import { downloadScan } from "../core/partialScanFile";
 import { buildScanCloud } from "../core/scanCloud";
 import { scanFusionOptions } from "../core/fusionOptions";
+import { createFusionWorker } from "../core/createFusionWorker";
 import {
   MIN_CAMERA_BASELINE_METERS,
   MIN_DIRECTION_COVERAGE,
 } from "../core/readiness";
+
+const hasCheckedPreview = scan => !!(scan.mesh && scan.fusionDiagnostics &&
+  scan.captureQuality?.captureAudit?.checkedReconstruction === true);
 
 export default function PartialScanReview({
   scan,
@@ -19,7 +23,7 @@ export default function PartialScanReview({
 }) {
   const [exportError, setExportError] = useState("");
   const [renderedScan, setRenderedScan] = useState(() =>
-    scan.rawCapture ? null : scan,
+    scan.rawCapture && !hasCheckedPreview(scan) ? null : scan,
   );
   const [renderError, setRenderError] = useState("");
   const [renderProgress, setRenderProgress] = useState({
@@ -27,14 +31,16 @@ export default function PartialScanReview({
     progress: 0,
   });
   useEffect(() => {
-    if (!scan.rawCapture?.keyframes?.length) {
+    // The live review already reconstructed this exact capture. Reuse its
+    // checked mesh on save; imported raw files still require reconstruction.
+    if (!scan.rawCapture?.keyframes?.length || hasCheckedPreview(scan)) {
       setRenderedScan(scan);
       setRenderError("");
       setRenderProgress(null);
       return undefined;
     }
     let active = true;
-    const worker = new Worker(new URL("../core/fusion.worker.js", import.meta.url));
+    const worker = createFusionWorker();
     setRenderedScan(null);
     setRenderError("");
     setRenderProgress({ stage: "preparing", progress: 0 });

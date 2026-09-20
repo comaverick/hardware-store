@@ -44,6 +44,8 @@ if (!process.argv[2]) {
     inputFrames: raw.keyframes.length, retainedFrames: final.frameCount, checkedConnections,
     connected: final.connected, state: final.state, provisionalFrames: final.pendingCount,
     recoveries: final.recoveries, promoted: final.promoted, expired: final.expired,
+    pendingDrops: { age: final.pendingAgeDrops, capacity: final.pendingCapacityDrops,
+      redundant: final.pendingRedundantDrops, conflict: final.pendingConflictDrops, reset: final.pendingResetDrops },
     confirmedObservedArea: final.coverage.ratio,
     firstRecovery: decisions.find(row => ["overlap-lost", "alignment-conflict"].includes(row.reason)) || null,
     processingMs: { median: times[Math.floor(times.length * 0.5)], p95: times[Math.floor(times.length * 0.95)] },

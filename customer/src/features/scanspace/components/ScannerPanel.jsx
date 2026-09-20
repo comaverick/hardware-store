@@ -1,20 +1,25 @@
-import { useEffect, useRef, useState } from "react";
+import { Component, lazy, Suspense, useEffect, useRef, useState } from "react";
 import { RoomScanner } from "../xr/RoomScanner";
 import { buildScanCloud } from "../core/scanCloud";
 import { snapshotDepthCapture, downloadDepthCapture } from "../core/captureDebug";
-import {
-  surfaceScanReadiness,
-  MIN_CAMERA_BASELINE_METERS,
-  MIN_DIRECTION_COVERAGE,
-  MIN_FUSION_KEYFRAMES,
-  MIN_STABLE_POINTS,
-  FLOOR_OUTLIER_TOLERANCE_METERS,
-} from "../core/readiness";
+import { FLOOR_OUTLIER_TOLERANCE_METERS } from "../core/readiness";
 import { scanFusionOptions } from "../core/fusionOptions";
 import ScanRenderProgress from "./ScanRenderProgress";
-import { adaptiveGuidance, auditCapture } from "../core/adaptiveCapture";
+import { auditCapture } from "../core/adaptiveCapture";
+import { captureFeedback } from "../core/captureExperience";
 import { CaptureAuditNotice, CaptureCoverage } from "./CaptureFeedback";
 import { createFusionWorker } from "../core/createFusionWorker";
+const PartialScanScene = lazy(() => import("./PartialScanScene"));
+
+class CapturePreviewBoundary extends Component {
+  state = { failed: false };
+  static getDerivedStateFromError() { return { failed: true }; }
+  render() {
+    return this.state.failed
+      ? <p role="status">The preview could not open on this device. Your checked capture is still available to save.</p>
+      : this.props.children;
+  }
+}
 
 function observationPoints(observations) {
   if (!observations?.count || !observations.positions?.length) return null;
@@ -33,6 +38,7 @@ function observationPoints(observations) {
 
 const captureQualitySummary = (stats, fusion = null) => ({
   adaptiveCapture: stats.adaptiveCapture || null,
+  captureDiagnostics: stats.captureDiagnostics || null,
   captureProfile: stats.captureProfile || null,
   connectedSurfaceCoverage: stats.connectedSurfaceCoverage || 0,
   coverage: stats.coverage || 0,
@@ -83,136 +89,6 @@ const captureQualitySummary = (stats, fusion = null) => ({
   surfaceRepair: fusion?.surfaceRepair || null,
 });
 
-function captureGuidance(stats, busy = false) {
-  if (busy)
-    return "Capture is safely paused while the accepted depth frames are reconstructed.";
-  if (!stats.tracking)
-    return "Tracking is unstable. Point back at a confirmed area and hold still.";
-  if (stats.depthState === "unavailable")
-    return "This session has no CPU depth sensor. End the scan and use a supported Android browser.";
-  if (stats.depthState === "error")
-    return "Depth reading was interrupted. Hold still over a matte surface while ScanSpace retries.";
-  if (!stats.depthCurrent)
-    return stats.depthState === "stalled"
-      ? "Depth frames stopped. Hold still over a textured, well-lit surface and let tracking recover."
-      : "Waiting for depth. Aim at a matte, well-lit surface and hold still for a moment.";
-  if (stats.movingTooFast)
-    return "Move more slowly. Fast depth frames are being skipped to prevent warped surfaces.";
-  const adaptive = adaptiveGuidance(stats);
-  if (adaptive) return adaptive.hint;
-  if (stats.colorActive && stats.colorFrameReliable === false)
-    return "Hold still briefly. Depth is being kept, but blurred camera colors are being skipped.";
-  if (
-    !stats.adaptiveCapture &&
-    (stats.rejectedDepthFrames || 0) >= 6 &&
-    (stats.rejectedDepthFrames || 0) /
-      Math.max(1, (stats.acceptedDepthFrames || 0) + (stats.rejectedDepthFrames || 0)) >
-      0.12
-  )
-    return "Several frames were too fast or unreliable. Slow down and repeat this area for better overlap.";
-  if (stats.colorActive && (stats.colorClippedRatio || 0) > 0.45)
-    return "Color is clipped here. Tilt away from bright windows and hold still for a clearer texture.";
-  if (stats.frameQuality === "sparse-depth")
-    return "Depth is sparse here. Aim at a matte, well-lit surface and revisit shiny or dark areas from another angle.";
-  if (stats.frameQuality === "pose-inconsistent")
-    return "Tracking drift was detected. Return to the last confirmed area, hold still, then continue slowly.";
-  if (stats.nearDepthWarning)
-    return "Something is reading very close. Step back, keep fingers clear, and rescan that area slowly.";
-  if (stats.adaptiveCapture)
-    return "Continue across the surfaces you want, keeping some confirmed area in view.";
-  if (!Number.isFinite(stats.floorY))
-    return "Aim at the floor until floor detection says Ready.";
-  if ((stats.fusionKeyframes || 0) < 2)
-    return "Move slowly sideways while keeping the same surface centered.";
-  if ((stats.fusionKeyframes || 0) < MIN_FUSION_KEYFRAMES)
-    return "Good start. Continue one slow sideways pass for stronger overlap.";
-  if ((stats.cameraBaseline || 0) < MIN_CAMERA_BASELINE_METERS)
-    return "Do not only pivot in place. Move sideways at least 40 cm while keeping the same wall centered.";
-  if ((stats.coverage || 0) < MIN_DIRECTION_COVERAGE)
-    return "Turn through the unscanned directions and keep each wall in view.";
-  if ((stats.stablePointCount || 0) < MIN_STABLE_POINTS)
-    return "Keep scanning the walls from overlapping angles to fill the remaining gaps.";
-  return "Surface overlap is building. Cover dark or reflective areas from another angle.";
-}
-
-function captureTargetState(stats, busy = false) {
-  if (busy)
-    return {
-      tone: "busy",
-      label: "Building result",
-      hint: "Capture is safely paused",
-    };
-  if (stats.paused)
-    return stats.originChanged
-      ? { tone: "busy", label: "Tracking reset", hint: "Start a new scan" }
-      : { tone: "busy", label: "Capture paused", hint: "Resume to save more views" };
-  if (!stats.tracking)
-    return {
-      tone: "warning",
-      label: "Tracking lost",
-      hint: "Aim at a confirmed area",
-    };
-  if (stats.movingTooFast)
-    return {
-      tone: "warning",
-      label: "Slow down",
-      hint: "This frame was not saved",
-    };
-  if (!stats.depthCurrent)
-    return {
-      tone: "warning",
-      label:
-        stats.depthState === "error"
-          ? "Depth read interrupted"
-          : stats.depthState === "stalled"
-            ? "Depth interrupted"
-            : "Waiting for depth",
-      hint:
-        stats.depthState === "error"
-          ? "Hold still while ScanSpace retries"
-          : stats.depthState === "stalled"
-            ? "Hold still to recover tracking"
-            : "Aim at a matte surface",
-    };
-  if (stats.frameQuality === "pose-inconsistent")
-    return {
-      tone: "warning",
-      label: "Tracking drift detected",
-      hint: "Return to the last confirmed area",
-    };
-  if (stats.frameQuality === "sparse-depth" || stats.nearDepthWarning)
-    return {
-      tone: "warning",
-      label: "Weak depth here",
-      hint: "Step back or change angle",
-    };
-  const adaptive = adaptiveGuidance(stats);
-  if (adaptive) return adaptive;
-  if ((stats.cameraBaseline || 0) < MIN_CAMERA_BASELINE_METERS)
-    return {
-      tone: "pending",
-      label: "Move slowly sideways",
-      hint: "Keep this surface in view as you move",
-    };
-  if ((stats.currentConfirmedRatio || 0) >= 0.85)
-    return {
-      tone: "complete",
-      label: "Area confirmed",
-      hint: "Move to any untinted gap",
-    };
-  if ((stats.currentConfirmedRatio || 0) >= 0.2)
-    return {
-      tone: "active",
-      label: "Coverage filling",
-      hint: "Tint the remaining clear areas",
-    };
-  return {
-    tone: "pending",
-    label: "Add another viewpoint",
-    hint: "Move slowly sideways, keeping this area in view",
-  };
-}
-
 export default function ScannerPanel({
   capabilities,
   onSurface,
@@ -223,6 +99,7 @@ export default function ScannerPanel({
     scanner = useRef(),
     fusionWorker = useRef(),
     debugCapture = useRef(null),
+    reviewing = useRef(false),
     finished = useRef(false),
     [active, setActive] = useState(false),
     [busy, setBusy] = useState(false),
@@ -234,13 +111,11 @@ export default function ScannerPanel({
       errors: [],
     }),
     [partial, setPartial] = useState(null),
-    [preflight, setPreflight] = useState(null),
     [fusion, setFusion] = useState(null),
     [error, setError] = useState("");
-  const surfaceReadiness = surfaceScanReadiness(stats);
   const hasReconstructableCapture = (stats.fusionKeyframes || 0) >= 2 &&
     stats.adaptiveCapture?.connected !== false;
-  const targetState = captureTargetState(stats, busy);
+  const targetState = captureFeedback(stats);
   useEffect(
     () => () => {
       fusionWorker.current?.terminate();
@@ -252,7 +127,7 @@ export default function ScannerPanel({
     debugCapture.current = null;
     setError("");
     setPartial(null);
-    setPreflight(null);
+    reviewing.current = false;
     setBusy(true);
     finished.current = false;
     const s = new RoomScanner({
@@ -261,7 +136,7 @@ export default function ScannerPanel({
       onUpdate: setStats,
       onEnd: () => {
         setActive(false);
-        if (!finished.current)
+        if (!finished.current && !reviewing.current)
           setError("Scan ended before a result was built. Start the scan again.");
       },
     });
@@ -399,21 +274,21 @@ export default function ScannerPanel({
     }
   }
   function continueCapture() {
+    if (!active || !scanner.current || scanner.current.originChanged) return;
     setPartial(null);
-    setPreflight(null);
-    if (scanner.current && !scanner.current.originChanged) {
-      scanner.current.paused = false;
-      scanner.current.publish();
-    }
+    reviewing.current = false;
+    scanner.current.paused = false;
+    scanner.current.publish();
   }
-  async function finishSurface(allowPartial = false) {
-    setPreflight(null);
+  async function finishSurface() {
     setBusy(true);
     setError("");
     setFusion({ stage: "preparing", progress: 0 });
     try {
       const raw = scanner.current.result();
+      reviewing.current = true;
       scanner.current.paused = true;
+      scanner.current.publish();
       debugCapture.current = snapshotDepthCapture(raw);
       const rawCapture = {
         keyframes: raw.keyframes,
@@ -471,12 +346,11 @@ export default function ScannerPanel({
       };
       const audit = auditCapture(raw.stats, fused.diagnostics);
       surfaceResult.captureQuality.captureAudit = audit;
-      if (!audit.passed && !allowPartial) {
-        setPartial({ result: surfaceResult, audit, pointCount: acceptedPoints.length });
-        return;
-      }
-      await acceptResult(surfaceResult, !audit.passed);
+      // Review always shows the checked saved result before asking the user
+      // whether to save or add coverage. Unconfirmed observations stay out.
+      setPartial({ result: surfaceResult, audit, pointCount: acceptedPoints.length });
     } catch (surfaceError) {
+      reviewing.current = false;
       setError(surfaceError.message);
       if (scanner.current && !scanner.current.originChanged) scanner.current.paused = false;
     } finally {
@@ -487,22 +361,10 @@ export default function ScannerPanel({
     }
   }
   async function finishScan() {
-    try {
-      const current = scanner.current.result();
-      const audit = auditCapture(current.stats);
-      if (!audit.passed) {
-        scanner.current.paused = true;
-        scanner.current.publish();
-        setPreflight(audit);
-        return;
-      }
-      return finishSurface();
-    } catch (finishError) {
-      setError(finishError.message);
-    }
+    if (!busy && !finished.current) return finishSurface();
   }
   return (
-    <div className={`ss-scanner ${active || (busy && fusion) ? "is-scanning" : ""} ${preflight || partial ? "is-reviewing" : ""} ${active && !busy ? "is-capturing" : ""}`}>
+    <div className={`ss-scanner ${active || partial || (busy && fusion) ? "is-scanning" : ""} ${partial ? "is-reviewing" : ""} ${active && !busy && !partial ? "is-capturing" : ""}`}>
       <canvas className="ss-xr-canvas" ref={canvas} />
       <div className="ss-scan-overlay" ref={overlay}>
         <div className="ss-scan-heading">
@@ -510,12 +372,10 @@ export default function ScannerPanel({
           <h2>
             {busy && fusion
               ? "Reconstructing capture"
-              : active && (preflight || partial)
+              : partial
                 ? "Review your capture"
               : active
-                ? stats.depthActive
-                  ? "Depth scanning"
-                  : "Looking for depth"
+                ? "Scan your space"
               : "Bring your space into ScanSpace."}
           </h2>
           <p>
@@ -524,15 +384,11 @@ export default function ScannerPanel({
               : active
                 ? stats.paused
                   ? "Scanning paused."
-                  : !stats.tracking
-                    ? "Tracking lost. Move slowly toward an area you already scanned."
-                    : stats.depthActive
-                      ? "Move slowly across the surfaces you want to capture. ScanSpace records what you show it."
-                      : "Move slowly across the area while ScanSpace looks for depth."
+                  : "Your captured area stays available as you move."
               : "Your scan stays on this phone during capture. Depth and captured colors depend on the capabilities granted by your browser."}
           </p>
         </div>
-        {!active && !busy && (
+        {!active && !busy && !partial && (
           <div className="ss-actions">
             <button onClick={onCancel}>Back</button>
             <button
@@ -544,99 +400,39 @@ export default function ScannerPanel({
             </button>
           </div>
         )}
-        {active && !busy && (
+        {(active || partial) && !busy && (
           <>
-            <div className="ss-scan-live">
-              <div>
-                <strong>
-                  {Math.round((stats.currentConfirmedRatio || 0) * 100)}%
-                </strong>
-                <span>current view confirmed</span>
-              </div>
-              <div>
-                <strong>{stats.floorAutoDetected ? "Ready" : "Finding"}</strong>
-                <span>floor detection</span>
-              </div>
-              <div>
-                <strong>{stats.connectedSurfaceCoverage || 0}%</strong>
-                <span>observed area confirmed</span>
-              </div>
-            </div>
-            <CaptureCoverage coverage={stats.adaptiveCapture?.coverage} />
-            <div className="ss-scan-area-key" aria-label="Scanned area legend">
-              <span>
-                <i className="is-observed" /> Translucent mint = confirmed depth overlap
-              </span>
-              <span><i className="is-recovery" /> Amber = area to revisit</span>
-            </div>
-            <div
-              className={`ss-scanning-target is-${targetState.tone}`}
-              role="status"
-            >
-              <i aria-hidden="true" />
-              <span>
-                <strong>{targetState.label}</strong>
-                <small>{targetState.hint}</small>
-              </span>
-            </div>
+            {!partial && <div className="ss-capture-progress">
+              <p className="ss-capture-saved">
+                <i className={hasReconstructableCapture ? "is-saved" : ""} aria-hidden="true" />
+                {hasReconstructableCapture ? "Your captured area is kept" : "Building your first captured area"}
+              </p>
+              <details className="ss-capture-coverage-details">
+                <summary>Coverage details</summary>
+                <CaptureCoverage coverage={stats.adaptiveCapture?.coverage} />
+                <p>These percentages describe surfaces you have shown the camera, not the whole room.</p>
+                <p>{stats.currentViewChecked
+                  ? `${Math.round((stats.currentConfirmedRatio || 0) * 100)}% of this view has confirmed overlap.`
+                  : "The current view is being checked. Saved coverage is kept."}</p>
+                <p>Mint marks confirmed coverage. You can review the captured area whenever you are ready.</p>
+              </details>
+            </div>}
             <div className="ss-scan-bottom">
-              <p className="ss-scan-caption">
-                {busy
-                  ? "Capture is paused during reconstruction."
-                  : partial || preflight
-                    ? "Capture is paused after validation. Keep scanning to add more coverage."
-                    : stats.depthCurrent
-                    ? "Depth frames are being received."
-                    : stats.depthState === "stalled"
-                      ? "Depth frames have stopped. Hold still and let tracking recover."
-                      : stats.depthState === "error"
-                        ? "A depth read was interrupted. ScanSpace is retrying automatically."
-                        : stats.depthActive
-                          ? "Depth frames are starting again. Hold still over the surface."
-                          : "Waiting for the device to provide depth data."}{" "}
-                {stats.colorActive
-                  ? "Camera colors captured."
-                  : "Captured colors unavailable."}
-              </p>
-              <p className="ss-scan-hint">
-                {partial || preflight
-                  ? "Your captured views are still available; nothing was discarded."
-                  : <>{captureGuidance(stats, busy)}{" "}
-                    Mint coverage marks areas confirmed from multiple saved views.
-                    Keep moving until the visible surface is evenly tinted; clear
-                    gaps still need another angle.</>}
-              </p>
-              {!busy && !partial && !hasReconstructableCapture && (
-                <p className="ss-scan-hint">
-                  Capture at least two nearby depth views before finishing.
-                </p>
-              )}
-              {!busy &&
-                !partial &&
-                hasReconstructableCapture &&
-                !surfaceReadiness.ready && (
-                  <p className="ss-scan-hint">
-                    Add another overlapping pass for stronger coverage. Review
-                    scan lets you check the result or save a partial capture.
-                  </p>
-                )}
-              {(stats.cloudCompactions > 0 || stats.fusionKeyframeCompactions > 0) && (
-                <p className="ss-scan-hint">
-                    Capture density was optimized while preserving connections between saved views.
-                </p>
-              )}
-              {stats.full && (
-                <p className="ss-error">
-                  Capture density is at its safe limit. If the scan still
-                  cannot be finished, restart and scan with steadier overlap.
-                </p>
-              )}
-              {preflight ? (
-                <CaptureAuditNotice audit={preflight} onContinue={continueCapture}
-                  onSave={() => finishSurface(true)} saving={busy} />
-              ) : partial?.audit ? (
+              {!partial && <div className={`ss-scanning-target is-${targetState.tone}`} role="status" aria-live="polite" aria-atomic="true">
+                <i aria-hidden="true" />
+                <span><strong>{targetState.label}</strong><small>{targetState.hint}</small></span>
+              </div>}
+              {partial?.result && <div className="ss-capture-review-preview" aria-label="Captured scan preview">
+                <CapturePreviewBoundary>
+                  <Suspense fallback={<p role="status">Opening your preview…</p>}>
+                    <PartialScanScene scan={partial.result} compact />
+                  </Suspense>
+                </CapturePreviewBoundary>
+              </div>}
+              {partial?.audit ? (
                 <CaptureAuditNotice audit={partial.audit} onContinue={continueCapture}
-                  onSave={() => acceptResult(partial.result, true)} saving={busy} />
+                  onSave={() => acceptResult(partial.result, !partial.audit.passed)} saving={busy}
+                  canContinue={active && !stats.originChanged} />
               ) : !partial ? (
                 <div className="ss-actions">
                   {stats.paused && !stats.originChanged && !busy && (
@@ -669,7 +465,7 @@ export default function ScannerPanel({
                   <p className="ss-partial-reason">{partial.reason}</p>
                   <div className="ss-actions">
                     <button
-                      disabled={busy}
+                      disabled={busy || !active || stats.originChanged}
                       onClick={continueCapture}
                     >
                       Keep scanning
@@ -719,8 +515,20 @@ export default function ScannerPanel({
               provisionalViews: stats.adaptiveCapture?.pendingCount || 0,
               reconnectedViews: stats.adaptiveCapture?.promoted || 0,
               recoveryEvents: stats.adaptiveCapture?.recoveries || 0,
+              pendingExpired: stats.adaptiveCapture?.pendingAgeDrops || 0,
+              pendingCapacityDrops: stats.adaptiveCapture?.pendingCapacityDrops || 0,
+              pendingRedundantDrops: stats.adaptiveCapture?.pendingRedundantDrops || 0,
+              captureActiveSeconds: Math.round((stats.captureDiagnostics?.activeMs || 0) / 1000),
+              recoverySeconds: Math.round((stats.captureDiagnostics?.stateMs?.recovering || 0) / 1000),
+              promptsShown: stats.captureDiagnostics?.promptCount || 0,
+              gateLinearSpeed: stats.gateLinearSpeed || 0,
+              gateAngularSpeed: stats.gateAngularSpeed || 0,
+              maxLinearSpeed: stats.maxLinearSpeed || 0,
+              maxAngularSpeed: stats.maxAngularSpeed || 0,
+              decisionsByReason: JSON.stringify(stats.captureDiagnostics?.decisions || {}),
               depthState: stats.depthState || "waiting",
               depthMisses: stats.depthMisses || 0,
+              totalDepthMisses: stats.totalDepthMisses || 0,
               depthReadErrors: stats.depthReadErrors || 0,
               depthFormat: stats.format || "Unavailable",
               depthType: stats.depthType || "Unavailable",

@@ -6,8 +6,14 @@ import { createFusionWorker } from "../core/createFusionWorker";
 jest.mock("../xr/RoomScanner", () => ({ RoomScanner: jest.fn() }));
 jest.mock("../core/createFusionWorker", () => ({ createFusionWorker: jest.fn() }));
 jest.mock("../core/captureDebug", () => ({ snapshotDepthCapture: jest.fn(() => new Blob()), downloadDepthCapture: jest.fn() }));
+jest.mock("./PartialScanScene", () => ({ __esModule: true,
+  default: () => {
+    if (mockPreviewUnavailable) throw new Error("Simulated WebGL unavailable");
+    return <div data-testid="scan-preview">Interactive scan preview</div>;
+  } }));
 
 let scanner, result, diagnostics;
+let mockPreviewUnavailable = false;
 const cleanStats = () => ({
   depthActive: true, depthCurrent: true, tracking: true, floorY: 0, pointCount: 1200,
   stablePointCount: 1000, cameraBaseline: 0.5, fusionKeyframes: 8, features: [], errors: [],
@@ -18,6 +24,7 @@ const cleanStats = () => ({
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockPreviewUnavailable = false;
   diagnostics = {};
   result = { points: [], keyframes: [{ timestamp: 1 }, { timestamp: 2 }], textureKeyframes: [],
     stats: cleanStats(), floorY: 0, observer: { x: 0, z: 0 } };
@@ -26,7 +33,7 @@ beforeEach(() => {
       paused: false, originChanged: false, stats: result.stats,
       publish: () => onUpdate({ ...result.stats, paused: scanner.paused }),
       start: jest.fn(async () => scanner.publish()), stop: jest.fn(async () => onEnd()),
-      result: jest.fn(() => result),
+      result: jest.fn(() => result), onEnd,
     };
     return scanner;
   });
@@ -48,13 +55,14 @@ async function startPanel() {
   return onSurface;
 }
 
-test("weak coverage pauses for review, preserves frames, and can resume", async () => {
+test("weak coverage builds the preview directly, preserves frames, and can resume", async () => {
   result.stats.adaptiveCapture.coverage.regions[0].ratio = 0.3;
   const onSurface = await startPanel();
   fireEvent.click(screen.getByRole("button", { name: "Review scan" }));
   expect(await screen.findByRole("status", { name: "Capture review" })).toBeInTheDocument();
   expect(scanner.paused).toBe(true);
-  expect(createFusionWorker).not.toHaveBeenCalled();
+  expect(createFusionWorker).toHaveBeenCalledTimes(1);
+  expect(await screen.findByTestId("scan-preview")).toBeInTheDocument();
   expect(onSurface).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "Keep scanning" }));
   expect(scanner.paused).toBe(false);
@@ -87,13 +95,68 @@ test("final reconstruction rechecks disconnections even when live coverage passe
   expect(result.keyframes).toHaveLength(2);
 });
 
-test("a clean scan finishes after both live and reconstruction checks", async () => {
+test("a clean scan can be inspected before saving without reconstructing twice", async () => {
   const onSurface = await startPanel();
   fireEvent.click(screen.getByRole("button", { name: "Review scan" }));
+  const save = await screen.findByRole("button", { name: "Save scan" });
+  expect(onSurface).not.toHaveBeenCalled();
+  expect(await screen.findByTestId("scan-preview")).toBeInTheDocument();
+  fireEvent.click(save);
   await waitFor(() => expect(onSurface).toHaveBeenCalledTimes(1));
+  expect(createFusionWorker).toHaveBeenCalledTimes(1);
   expect(onSurface.mock.calls[0][0].captureQuality).toMatchObject({
     partialCapture: false, captureAudit: { passed: true, checkedReconstruction: true },
   });
+});
+
+test("checking a view keeps saved progress visible and gives one instruction", async () => {
+  result.stats.currentViewChecked = false;
+  result.stats.currentConfirmedRatio = 0;
+  result.stats.adaptiveCapture.state = "checking";
+  await startPanel();
+  expect(screen.getByText("Your captured area is kept")).toBeInTheDocument();
+  expect(screen.getByRole("status")).toHaveTextContent("Checking this view");
+  expect(screen.queryByText("0% of this view has confirmed overlap.")).not.toBeInTheDocument();
+  expect(screen.queryByText(/Keep moving until the visible surface/)).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Review scan" })).toBeEnabled();
+});
+
+test.each(["during", "after"])("the captured result can be saved if XR ends %s reconstruction", async timing => {
+  const onSurface = await startPanel();
+  fireEvent.click(screen.getByRole("button", { name: "Review scan" }));
+  if (timing === "after") await screen.findByTestId("scan-preview");
+  act(() => scanner.onEnd());
+  expect(await screen.findByTestId("scan-preview")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Keep scanning" })).toBeDisabled();
+  expect(screen.queryByRole("button", { name: "Start camera scan" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Save scan" }));
+  await waitFor(() => expect(onSurface).toHaveBeenCalledTimes(1));
+});
+
+test("a preview failure keeps the checked capture and save controls available", async () => {
+  const errorLog = jest.spyOn(console, "error").mockImplementation(() => {});
+  try {
+    mockPreviewUnavailable = true;
+    const onSurface = await startPanel();
+    fireEvent.click(screen.getByRole("button", { name: "Review scan" }));
+    expect(await screen.findByText(/The preview could not open/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Save scan" }));
+    await waitFor(() => expect(onSurface).toHaveBeenCalledTimes(1));
+  } finally {
+    errorLog.mockRestore();
+  }
+});
+
+test("a reference-space reset during review does not discard the preview or allow resume", async () => {
+  await startPanel();
+  fireEvent.click(screen.getByRole("button", { name: "Review scan" }));
+  await screen.findByTestId("scan-preview");
+  scanner.originChanged = result.stats.originChanged = true;
+  act(() => scanner.publish());
+  expect(screen.getByRole("button", { name: "Keep scanning" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Save scan" })).toBeEnabled();
+  expect(scanner.paused).toBe(true);
 });
 
 test("a tracking reset cannot be bypassed with finish or resume", async () => {

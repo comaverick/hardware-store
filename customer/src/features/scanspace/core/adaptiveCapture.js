@@ -1,6 +1,10 @@
 import { depthPosition, filterDepth, gridIndex, projectWorld, sampleProjectiveDepth } from "./fusion";
 
-export const ADAPTIVE_CAPTURE_VERSION = 1;
+export const ADAPTIVE_CAPTURE_VERSION = 2;
+const OVERLAP_GRACE_MS = 900;
+const RECOVERY_EVIDENCE_MS = 1800;
+const PENDING_AGE_MS = 8000;
+const hardFailures = new Set(["tracking-lost", "tracking-reset", "camera-jump", "alignment-conflict"]);
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const distance = (a, b) => Math.hypot(...a.map((value, axis) => value - b[axis]));
 const camera = (frame) => Array.from(frame.camera || frame.transformMatrix.slice(12, 15));
@@ -211,39 +215,79 @@ export class AdaptiveCapture {
     this.sequence = 0;
     this.state = "starting";
     this.reason = "starting";
-    this.failures = 0;
     this.recoveryMatches = 0;
-    this.events = { recoveries: 0, promoted: 0, expired: 0, removed: 0, capacityStops: 0 };
+    this.pendingSupport = new WeakMap();
+    this.events = { recoveries: 0, promoted: 0, expired: 0, removed: 0, capacityStops: 0,
+      pendingAgeDrops: 0, pendingCapacityDrops: 0, pendingRedundantDrops: 0,
+      pendingConflictDrops: 0, pendingResetDrops: 0 };
   }
-  recover(reason) {
+  clearRecoveryEvidence() {
+    this.recoveryMatches = 0;
+    this.recoveryEvidence = null;
+    this.lastRecoveryMatchAt = null;
+  }
+  recover(reason, timestamp = this.lastSeen) {
     if (!this.frames.length) return;
-    if (this.state !== "recovering") this.events.recoveries++;
+    if (this.state !== "recovering") {
+      this.events.recoveries++;
+      this.recoveryStartedAt = timestamp;
+    }
     this.state = "recovering";
     this.reason = reason;
-    this.recoveryMatches = 0;
+    this.clearRecoveryEvidence();
   }
   failure(reason, timestamp) {
-    this.failures++;
-    if (this.state === "recovering" || reason === "tracking-lost" || reason === "tracking-reset" || this.failures >= 3) this.recover(reason);
+    // Motion, sparse depth and sensor read failures describe this observation,
+    // not a change of coordinate system. Keep recent validated recovery evidence
+    // across those skips; a contradictory pose or stale evidence invalidates it.
+    if (hardFailures.has(reason)) this.recover(reason, timestamp);
+    else if (this.lastRecoveryMatchAt != null && timestamp - this.lastRecoveryMatchAt > RECOVERY_EVIDENCE_MS)
+      this.clearRecoveryEvidence();
+    if (reason === "tracking-reset") {
+      this.events.pendingResetDrops += this.pending.length;
+      this.pending = [];
+    }
+    if (this.state === "checking" && timestamp - this.uncertainSince >= OVERLAP_GRACE_MS)
+      this.recover("overlap-lost", timestamp);
     this.lastSeen = timestamp;
     this.expire(timestamp);
   }
   expire(timestamp) {
-    const kept = this.pending.filter(frame => timestamp - frame.timestamp <= 8000);
-    this.events.expired += this.pending.length - kept.length;
+    const kept = this.pending.filter(frame => timestamp - frame.timestamp <= PENDING_AGE_MS);
+    const removed = this.pending.length - kept.length;
+    this.events.expired += removed;
+    this.events.pendingAgeDrops += removed;
     this.pending = kept;
   }
-  buffer(frame) {
+  buffer(frame, support = 0) {
     // Keep the starting pose fixed until there is enough translation. Replacing
     // it on each tiny step makes slow continuous movement look stationary forever.
     const anchor = this.frames.length ? null : this.pending[0];
     const near = this.pending.findIndex(value => value !== anchor &&
       distance(camera(value), camera(frame)) < 0.025 && angle(value, frame) < 0.04);
-    if (near >= 0) this.pending.splice(near, 1);
+    const quality = value => (value.measuredDepthCount ?? value.validCount ?? 0) / Math.max(1, value.depths.length);
+    this.pendingSupport.set(frame, support);
+    if (near >= 0) {
+      this.events.pendingRedundantDrops++;
+      if (quality(this.pending[near]) > quality(frame) + 0.05) return;
+      this.pending.splice(near, 1);
+    }
     this.pending.push(frame);
     if (this.pending.length > this.maximumPending) {
-      this.pending.splice(anchor ? 1 : 0, 1);
+      const poseDistance = (a, b) => distance(camera(a), camera(b)) + angle(a, b) * 0.3;
+      // Protect the most promising connection back to saved geometry. Blindly
+      // dropping the oldest candidate can discard the only bridge on a revisit.
+      const frontierScore = value => (this.pendingSupport.get(value) || 0) * 2 -
+        Math.min(...this.frames.map(saved => poseDistance(value, saved)), 4);
+      const bridge = anchor || this.pending.reduce((best, value) =>
+        frontierScore(value) > frontierScore(best) ? value : best, this.pending[0]);
+      const utility = value => Math.min(1, ...this.pending.filter(other => other !== value)
+        .map(other => poseDistance(value, other))) + quality(value) * 0.15 + (this.pendingSupport.get(value) || 0) * 0.5;
+      const removable = this.pending.filter(value => value !== bridge)
+        .sort((a, b) => utility(a) - utility(b) || a.timestamp - b.timestamp)[0];
+      this.pending.splice(this.pending.indexOf(removable), 1);
       this.events.expired++;
+      this.events.pendingCapacityDrops++;
     }
   }
   references(frame) {
@@ -292,11 +336,12 @@ export class AdaptiveCapture {
     frame.captureId = ++this.sequence;
     const time = frame.timestamp;
     this.expire(time);
-    if (this.lastSeen != null && time - this.lastSeen > 1800) this.recover("capture-gap");
-    if (this.lastObserved && distance(camera(frame), camera(this.lastObserved)) > 0.5) this.recover("camera-jump");
+    if (this.lastReliableAt != null && time - this.lastReliableAt > RECOVERY_EVIDENCE_MS)
+      this.recover("capture-gap", time);
+    if (this.lastObserved && distance(camera(frame), camera(this.lastObserved)) > 0.5)
+      this.recover("camera-jump", time);
     this.lastSeen = time;
     this.lastObserved = frame;
-    this.failures = 0;
     if (!this.frames.length) {
       const seed = this.pending.find(value => distance(camera(frame), camera(value)) >= 0.04 && this.compare(frame, value).accepted);
       if (!seed) { this.buffer(frame); return { accepted: false, committed: [], reason: "starting" }; }
@@ -305,22 +350,48 @@ export class AdaptiveCapture {
       this.pending = [];
       this.state = "tracking";
       this.reason = "connected";
+      this.lastReliableAt = time;
       return { accepted: true, committed: [seed, frame], reason: "connected" };
     }
     const before = new Set(this.frames);
     const match = this.matches(frame);
     this.lastMatch = match.best;
-    if (!match.edges.length || match.conflict) {
-      this.recover(match.conflict ? "alignment-conflict" : "overlap-lost");
-      if (!match.conflict) this.buffer(frame);
+    if (match.conflict) {
+      this.recover("alignment-conflict", time);
       return { accepted: false, committed: [], reason: this.reason };
     }
-    if (this.state === "recovering") {
-      if (time - (this.lastRecoveryMatchAt ?? -Infinity) >= 120) this.recoveryMatches++;
-      this.lastRecoveryMatchAt = time;
-      if (this.recoveryMatches < 2) return { accepted: false, committed: [], reason: "confirming-recovery" };
-      this.state = "tracking";
+    if (!match.edges.length) {
+      this.clearRecoveryEvidence();
+      if (this.state === "tracking") {
+        this.state = "checking";
+        this.uncertainSince = time;
+      }
+      if (this.state === "checking" && time - this.uncertainSince >= OVERLAP_GRACE_MS)
+        this.recover("overlap-lost", time);
+      this.reason = this.state === "recovering" ? "overlap-lost" : "checking-overlap";
+      this.buffer(frame, match.best?.overlap || 0);
+      return { accepted: false, committed: [], reason: this.reason };
     }
+    this.lastReliableAt = time;
+    if (this.state === "recovering") {
+      // Both observations must agree with the saved map AND each other. Mere
+      // motion skips can separate them; drift, different patches and stale
+      // confirmations cannot be combined into a successful recovery.
+      const evidence = this.recoveryEvidence;
+      const continuity = evidence && this.compare(frame, evidence);
+      if (!evidence || time - evidence.timestamp > RECOVERY_EVIDENCE_MS ||
+          !continuity.accepted || continuity.conflict) {
+        this.recoveryEvidence = frame;
+        this.lastRecoveryMatchAt = time;
+        this.recoveryMatches = 1;
+      } else if (time - evidence.timestamp >= 120) {
+        this.recoveryMatches = 2;
+      }
+      if (this.recoveryMatches < 2) return { accepted: false, committed: [], reason: "confirming-recovery" };
+    }
+    this.state = "tracking";
+    this.uncertainSince = null;
+    this.clearRecoveryEvidence();
     const last = this.frames[this.frames.length - 1];
     const novel = distance(camera(last), camera(frame)) >= profile.spacing || angle(last, frame) >= profile.turn;
     if (novel && !this.commit(frame, match.edges)) return { accepted: false, committed: [], reason: "capacity" };
@@ -331,7 +402,11 @@ export class AdaptiveCapture {
       changed = false;
       for (const candidate of this.pending.slice()) {
         const result = this.matches(candidate);
-        if (result.conflict) { this.pending = this.pending.filter(value => value !== candidate); continue; }
+        if (result.conflict) {
+          this.pending = this.pending.filter(value => value !== candidate);
+          this.events.pendingConflictDrops++;
+          continue;
+        }
         if (result.edges.length && this.commit(candidate, result.edges)) {
           this.pending = this.pending.filter(value => value !== candidate);
           this.events.promoted++;
@@ -366,13 +441,13 @@ export class AdaptiveCapture {
 export function auditCapture(stats, diagnostics = null) {
   const issues = [], capture = stats.adaptiveCapture;
   if (capture && !capture.connected) issues.push("The saved views need a reliable connection.");
-  if (capture?.state === "recovering") issues.push("Return to the highlighted area to reconnect the camera.");
-  if (capture?.pendingCount) issues.push(`${capture.pendingCount} recent views still need overlap with the saved area.`);
+  if (["recovering", "checking"].includes(capture?.state)) issues.push("The latest view could not be connected. Previously saved views are included.");
+  if (capture?.pendingCount) issues.push(`${capture.pendingCount} unconfirmed views were left out of this result.`);
   if (capture?.capacityReached) issues.push("This section reached its safe capacity. Save it as a partial scan before starting another section.");
   const coverage = capture?.coverage;
   const labels = { upper: "Upper surfaces", middle: "Walls and objects", lower: "Lower surfaces" };
   for (const region of coverage?.regions || []) {
-    if (region.observed >= 12 && region.ratio < 0.55) issues.push(`${labels[region.id]} need another overlapping pass.`);
+    if (region.observed >= 12 && region.ratio < 0.55) issues.push(`${labels[region.id]} have limited overlapping coverage.`);
   }
   if ((stats.fusionKeyframes || 0) < 6) issues.push("A few more overlapping viewpoints will strengthen this surface.");
   if (diagnostics?.alignment?.disconnectedFrameIds?.length) issues.push("Some views failed the final alignment check.");
@@ -382,19 +457,4 @@ export function auditCapture(stats, diagnostics = null) {
   }
   return { passed: issues.length === 0, scope: "observed-surfaces", issues: [...new Set(issues)],
     connected: capture?.connected ?? null, checkedReconstruction: !!diagnostics };
-}
-
-export function adaptiveGuidance(stats) {
-  const capture = stats.adaptiveCapture;
-  if (!capture) return null;
-  if (capture.capacityReached) return { tone: "warning", label: "This section is full", hint: "Save this section, then start the next one" };
-  if (capture.state === "starting") return { tone: "pending", label: "Finding a starting area", hint: "Move a little sideways with this surface in view" };
-  if (capture.state === "recovering") return { tone: "warning", label: "Reconnecting your scan", hint: stats.recoveryDirection || "Aim back at the highlighted area" };
-  const weakest = capture.coverage?.regions.filter(region => region.observed >= 12).sort((a, b) => a.ratio - b.ratio)[0];
-  if (weakest?.ratio < 0.55 && (stats.currentConfirmedRatio || 0) > 0.65) return {
-    tone: "active", label: "Add another angle",
-    hint: { upper: "Include the upper surfaces and the wall edge", lower: "Include the lower surfaces and the wall edge", middle: "Revisit the highlighted wall or object" }[weakest.id],
-  };
-  if (stats.captureProfile === "detail") return { tone: "active", label: "Capturing finer detail", hint: "Keep moving gently around this area" };
-  return null;
 }

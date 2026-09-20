@@ -93,16 +93,85 @@ test("tracking loss and long gaps recover through new observations without pausi
   expect(capture.snapshot().recoveries).toBe(2);
 });
 
-test("recovery requires consecutive reliable observations, not matches separated by a bad frame", () => {
+test("brief motion skips preserve recent recovery evidence without saving the skipped observation", () => {
   const capture = started();
   capture.failure("tracking-lost", 600);
   expect(capture.consider(wallFrame(0.1, 800)).accepted).toBe(false);
   capture.failure("moving-too-fast", 1000);
-  expect(capture.consider(wallFrame(0.12, 1200)).accepted).toBe(false);
-  expect(capture.consider(wallFrame(0.14, 1450)).accepted).toBe(true);
+  expect(capture.frames).toHaveLength(2);
+  expect(capture.consider(wallFrame(0.16, 1200)).accepted).toBe(true);
+  expect(capture.state).toBe("tracking");
 });
 
-test("repeated quality failures require reconnection and stale provisional views expire", () => {
+test("three motion rejections do not turn a connected scan into an amber recovery loop", () => {
+  const capture = started();
+  for (const timestamp of [600, 800, 1000]) capture.failure("moving-too-fast", timestamp);
+  expect(capture.state).toBe("tracking");
+  expect(capture.events.recoveries).toBe(0);
+  expect(capture.frames).toHaveLength(2);
+  expect(capture.consider(wallFrame(0.16, 1200)).accepted).toBe(true);
+  expect(capture.snapshot().connected).toBe(true);
+});
+
+test.each(["tracking-lost", "tracking-reset", "alignment-conflict", "camera-jump"])(
+  "%s clears the previous successful recovery observation", reason => {
+    const capture = started();
+    capture.failure("tracking-lost", 600);
+    capture.consider(wallFrame(0.1, 800));
+    capture.failure(reason, 1000);
+    expect(capture.consider(wallFrame(0.12, 1200)).accepted).toBe(false);
+    expect(capture.consider(wallFrame(0.16, 1450)).accepted).toBe(true);
+  },
+);
+
+test("repeated quality skips cannot keep old recovery evidence alive indefinitely", () => {
+  const capture = started();
+  capture.failure("tracking-lost", 600);
+  capture.consider(wallFrame(0.1, 800));
+  for (const timestamp of [1200, 1600, 2000, 2400, 2800]) capture.failure("moving-too-fast", timestamp);
+  expect(capture.consider(wallFrame(0.12, 3000)).accepted).toBe(false);
+  expect(capture.consider(wallFrame(0.16, 3250)).accepted).toBe(true);
+});
+
+test("recovery observations that match different saved patches must also agree with each other", () => {
+  const compare = (left, right) => ({
+    accepted: left.timestamp <= 400 || right.timestamp <= 400 ||
+      Math.abs(left.camera[0] - right.camera[0]) < 0.05,
+    conflict: false, overlap: 0.8,
+  });
+  const capture = started({ compare });
+  capture.failure("tracking-lost", 600);
+  expect(capture.consider(wallFrame(0.1, 800)).accepted).toBe(false);
+  capture.failure("sparse-depth", 1000);
+  expect(capture.consider(wallFrame(0.2, 1200)).accepted).toBe(false);
+  expect(capture.frames).toHaveLength(2);
+  expect(capture.consider(wallFrame(0.22, 1450)).accepted).toBe(true);
+  expect(capture.state).toBe("tracking");
+});
+
+test("one uncertain overlap stays provisional and does not force a return after a good match", () => {
+  const capture = started();
+  const uncertain = wallFrame(0.1, 650, { wallZ: -2.1 });
+  expect(capture.consider(uncertain).accepted).toBe(false);
+  expect(capture.state).toBe("checking");
+  expect(capture.frames).not.toContain(uncertain);
+  expect(capture.consider(wallFrame(0.16, 1000)).accepted).toBe(true);
+  expect(capture.state).toBe("tracking");
+  expect(capture.events.recoveries).toBe(0);
+  expect(capture.frames).not.toContain(uncertain);
+});
+
+test("persistent lost overlap still requires verified recovery", () => {
+  const capture = started();
+  capture.consider(wallFrame(0.1, 600, { wallZ: -2.1 }));
+  capture.consider(wallFrame(0.12, 1600, { wallZ: -2.1 }));
+  expect(capture.state).toBe("recovering");
+  expect(capture.consider(wallFrame(0.14, 1800)).accepted).toBe(false);
+  expect(capture.consider(wallFrame(0.16, 2050)).accepted).toBe(true);
+  expect(capture.frames.every(frame => frame.depths[0] < 2.05)).toBe(true);
+});
+
+test("stale provisional views expire with a separate age counter", () => {
   const capture = started();
   capture.consider(wallFrame(5, 600));
   for (let i = 0; i < 3; i++) capture.failure("moving-too-fast", 800 + i * 200);
@@ -110,6 +179,30 @@ test("repeated quality failures require reconnection and stale provisional views
   capture.failure("depth-missing", 9500);
   expect(capture.pending).toHaveLength(0);
   expect(capture.events.expired).toBeGreaterThan(0);
+  expect(capture.events.pendingAgeDrops).toBeGreaterThan(0);
+});
+
+test("pending retention protects a likely bridge and removes redundant viewpoints first", () => {
+  const compare = (left, right) => {
+    const separation = Math.abs(left.camera[0] - right.camera[0]);
+    return { accepted: separation < 0.11, conflict: false, overlap: Math.max(0, 1 - separation) };
+  };
+  const capture = started({ maximumPending: 3, compare });
+  const bridge = wallFrame(0.22, 600);
+  capture.consider(bridge);
+  capture.consider(wallFrame(0.44, 800));
+  capture.consider(wallFrame(0.48, 1000));
+  capture.consider(wallFrame(0.8, 1200));
+  expect(capture.pending).toHaveLength(3);
+  expect(capture.pending).toContain(bridge);
+  expect(capture.events.pendingCapacityDrops).toBe(1);
+  expect(capture.events.pendingAgeDrops).toBe(0);
+  capture.consider(wallFrame(0.16, 1400));
+  capture.consider(wallFrame(0.17, 1650));
+  expect(capture.frames).toContain(bridge);
+  expect(capture.snapshot().connected).toBe(true);
+  for (const frame of capture.frames) for (const id of frame.captureLinks)
+    expect(compare(frame, capture.frames.find(other => other.captureId === id)).accepted).toBe(true);
 });
 
 test("more than 60 views remain connected after memory compaction", () => {

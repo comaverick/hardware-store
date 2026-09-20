@@ -1,4 +1,5 @@
 import { MAX_SCAN_ARRAY_BYTES, MAX_SCAN_MESH_BYTES } from "./textureDetail.js";
+import { sanitizeCaptureDiagnostics } from "./captureExperience.js";
 
 export const SCAN_FILE_FORMAT = "scanspace-scan";
 // Kept so exports created before the unified scan UI continue to open.
@@ -197,7 +198,8 @@ function rawStats(stats) {
   });
   const adaptive = stats?.adaptiveCapture;
   if (adaptive && typeof adaptive === "object") {
-    const numeric = ["version", "frameCount", "pendingCount", "recoveries", "promoted", "expired", "removed", "capacityStops"];
+    const numeric = ["version", "frameCount", "pendingCount", "recoveries", "promoted", "expired", "removed", "capacityStops",
+      "pendingAgeDrops", "pendingCapacityDrops", "pendingRedundantDrops", "pendingConflictDrops", "pendingResetDrops"];
     const regions = (Array.isArray(adaptive.coverage?.regions) ? adaptive.coverage.regions : []).slice(0, 3)
       .filter(region => ["lower", "middle", "upper"].includes(region?.id)).map(region => ({
         id: region.id, observed: Math.max(0, finite(region.observed)), confirmed: Math.max(0, finite(region.confirmed)),
@@ -205,7 +207,7 @@ function rawStats(stats) {
       }));
     result.adaptiveCapture = {
       ...Object.fromEntries(numeric.map(name => [name, Math.max(0, finite(adaptive[name]))])),
-      state: ["starting", "tracking", "recovering"].includes(adaptive.state) ? adaptive.state : "starting",
+      state: ["starting", "tracking", "checking", "recovering"].includes(adaptive.state) ? adaptive.state : "starting",
       reason: String(adaptive.reason || "").slice(0, 80), connected: adaptive.connected === true,
       capacityReached: adaptive.capacityReached === true,
       coverage: { observed: Math.max(0, finite(adaptive.coverage?.observed)),
@@ -213,6 +215,7 @@ function rawStats(stats) {
         ratio: Math.max(0, Math.min(1, finite(adaptive.coverage?.ratio))), regions },
     };
   }
+  if (stats?.captureDiagnostics) result.captureDiagnostics = sanitizeCaptureDiagnostics(stats.captureDiagnostics);
   return result;
 }
 

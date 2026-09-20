@@ -1,0 +1,27 @@
+import { render, screen } from "@testing-library/react";
+import PartialScanReview from "./PartialScanReview";
+import { createFusionWorker } from "../core/createFusionWorker";
+
+jest.mock("../core/createFusionWorker", () => ({ createFusionWorker: jest.fn() }));
+jest.mock("./PartialScanScene", () => ({ __esModule: true, default: () => <div>Checked scan preview</div> }));
+
+beforeEach(() => jest.clearAllMocks());
+
+test("saving a live reviewed scan reuses its checked mesh", () => {
+  render(<PartialScanReview scan={{ mesh: { triangleCount: 12 }, fusionDiagnostics: {},
+    captureQuality: { captureAudit: { checkedReconstruction: true } }, rawCapture: { keyframes: [{}] } }} />);
+  expect(screen.getByText("Checked scan preview")).toBeInTheDocument();
+  expect(createFusionWorker).not.toHaveBeenCalled();
+});
+
+test.each([false, true])("an imported or unchecked raw file still goes through reconstruction (mesh: %s)", hasMesh => {
+  const worker = { postMessage: jest.fn(), terminate: jest.fn() };
+  createFusionWorker.mockReturnValue(worker);
+  const { unmount } = render(<PartialScanReview scan={{ rawCapture: { keyframes: [{}], stats: {} },
+    ...(hasMesh ? { mesh: { triangleCount: 12 }, fusionDiagnostics: {} } : {}) }} />);
+  expect(createFusionWorker).toHaveBeenCalledTimes(1);
+  expect(worker.postMessage).toHaveBeenCalled();
+  expect(screen.queryByText("Checked scan preview")).not.toBeInTheDocument();
+  unmount();
+  expect(worker.terminate).toHaveBeenCalledTimes(1);
+});

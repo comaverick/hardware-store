@@ -1641,6 +1641,42 @@
 .ss-scan-bottom .ss-actions {
   margin-top: 10px;
 }
+.ss-capture-progress {
+  align-self: flex-start;
+  max-width: min(100%, 440px);
+  margin-top: 12px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: #182921dc;
+}
+.ss-capture-saved { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 12px; }
+.ss-capture-saved i { width: 8px; height: 8px; border: 1px solid #d8e7df; border-radius: 50%; }
+.ss-capture-saved i.is-saved { background: #83f2cb; border-color: #83f2cb; }
+.ss-capture-coverage-details { margin-top: 8px; font-size: 11px; color: #dfebe2; }
+.ss-capture-coverage-details summary { cursor: pointer; padding-block: 4px; }
+.ss-capture-coverage-details[open] { max-height: 32vh; overflow-y: auto; }
+.ss-capture-coverage-details p { line-height: 1.5; margin: 8px 0 0; }
+.ss-capture-coverage-details .ss-connected-coverage { margin: 8px 0 0; padding: 0; background: none; }
+.is-scanning .ss-scan-bottom { width: 100%; max-width: 720px; align-self: center; }
+.ss-scan-bottom > .ss-scanning-target {
+  position: static;
+  transform: none;
+  min-width: 0;
+  margin: 0 0 12px;
+  padding: 10px;
+  border-radius: 8px;
+  box-shadow: none;
+  background: #18382a80;
+}
+.ss-scan-bottom > .ss-scanning-target.is-warning { background: #432c1de3; }
+.ss-scan-bottom > .ss-scanning-target strong { font-size: 14px; line-height: 1.35; }
+.ss-scan-bottom > .ss-scanning-target small { font-size: 12px; line-height: 1.5; margin-top: 3px; }
+.ss-capture-review-preview .ss-partial-scene { height: clamp(180px, 38vh, 360px); min-height: 0; margin: 0; }
+.ss-capture-review-preview .ss-partial-legend { max-width: calc(100% - 90px); font-size: 10px; }
+.ss-capture-review-preview .ss-view-hint { font-size: 10px; }
+.is-reviewing .ss-scan-bottom { margin-top: 12px; }
+.is-capturing:not(.is-reviewing) .ss-scan-heading p { display: none; }
+.is-capturing:not(.is-reviewing) .ss-scan-heading h2 { margin: 0; }
 .ss-scan-bottom button {
   font-size: 11px;
   flex: 1;
@@ -1679,6 +1715,25 @@
 }
 .ss-partial-capture .ss-partial-reason {
   color: #ffe1bd;
+}
+.ss-partial-capture details { margin-top: 8px; font-size: 12px; }
+.ss-partial-capture summary { cursor: pointer; padding: 4px 0; }
+.ss-partial-capture.is-ready { border-color: #83f2cb80; background: #173c30e6; }
+.ss-partial-capture.is-ready strong { color: #b6ffe5; }
+@media (orientation: landscape) and (max-height: 600px) {
+  .is-reviewing .ss-scan-heading { padding: 8px 12px; }
+  .is-reviewing .ss-scan-heading h2 { font-size: 18px; margin: 0; }
+  .is-reviewing .ss-scan-bottom {
+    display: grid;
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+    align-items: start;
+    gap: 12px;
+    padding: 10px;
+    margin-top: 8px;
+  }
+  .is-reviewing .ss-partial-capture { margin: 0; padding: 10px; }
+  .is-reviewing .ss-partial-capture:only-child { grid-column: 1 / -1; }
+  .ss-capture-review-preview .ss-partial-scene { height: clamp(160px, calc(100dvh - 140px), 260px); }
 }
 .is-scanning .ss-diagnostics {
   background: #17261edd;
@@ -2036,53 +2091,22 @@
   }
 }
 @media (min-width: 520px) and (max-height: 500px) {
-  .is-capturing .ss-scan-heading,
-  .is-capturing .ss-scan-area-key,
-  .is-capturing .ss-scan-caption,
-  .is-capturing .ss-scan-hint {
+  .is-capturing:not(.is-reviewing) .ss-scan-heading {
     display: none;
   }
-  .is-capturing:not(.is-reviewing) .ss-scan-overlay {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    grid-template-rows: auto minmax(44px, 1fr) auto auto;
-    gap: 8px;
-  }
-  .is-capturing:not(.is-reviewing) .ss-scan-live {
-    grid-column: 1;
-    grid-row: 1;
-    gap: 12px;
+  .is-capturing .ss-capture-progress {
     padding: 8px;
     margin: 0;
   }
-  .is-capturing:not(.is-reviewing) .ss-connected-coverage {
-    grid-column: 2;
-    grid-row: 1;
-    margin: 0;
-  }
-  .is-capturing:not(.is-reviewing) .ss-scanning-target {
-    grid-column: 1 / -1;
-    grid-row: 2;
-    place-self: center;
-    margin: 0;
-  }
-  .is-capturing .ss-scan-bottom {
-    grid-column: 1 / -1;
-    grid-row: 3;
-    margin: 0;
+  .is-capturing:not(.is-reviewing) .ss-scan-bottom {
+    margin-top: auto;
     padding: 8px;
   }
   .is-capturing .ss-scan-bottom .ss-actions {
     margin: 0;
   }
   .is-capturing .ss-diagnostics {
-    grid-column: 1 / -1;
-    grid-row: 4;
-    margin: 0;
-  }
-  .is-capturing.is-reviewing .ss-scan-bottom {
-    max-height: calc(100% - 50px);
-    overflow-y: auto;
+    margin: 6px 0 0;
   }
 }
 @media (prefers-reduced-motion: reduce) {
