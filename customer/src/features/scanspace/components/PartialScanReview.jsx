@@ -102,6 +102,10 @@ export default function PartialScanReview({
           poseRefinement: fused.diagnostics?.alignment?.poseRefinement || null,
           jointPoseRefinement: fused.diagnostics?.alignment?.jointPoseRefinement || null,
           surfaceRepair: fused.diagnostics?.surfaceRepair || null,
+          structuralDepth: fused.diagnostics?.structuralDepth || null,
+          structuralRebuild: fused.diagnostics?.structuralRebuild || null,
+          topology: fused.diagnostics?.topologyAfterRepair || null,
+          recoveredCaptureGroups: fused.diagnostics?.alignment?.componentRecovery || null,
           textureSelection: fused.diagnostics?.textureSelection || null,
           textureRegistration: fused.diagnostics?.textureRegistration || [],
         },
@@ -196,7 +200,7 @@ export default function PartialScanReview({
         <h2>Your captured scan.</h2>
         <p>
           Rebuilt from your captured camera images and depth. Small, supported
-          wall or floor gaps may be repaired as estimates; larger unscanned areas
+          wall, floor, or ceiling gaps may be repaired as estimates; larger unscanned areas
           and uncertain object details remain open.
         </p>
         {quality?.algorithmVersion && (
@@ -254,10 +258,16 @@ export default function PartialScanReview({
       {repair?.estimatedHoleCount > 0 && (
         <div className="ss-notice ss-notice--guidance" role="status">
           <strong>Estimated gap repairs</strong>
-          <p>{repair.estimatedHoleCount} small, enclosed wall or floor gaps
+          <p>{repair.estimatedHoleCount} small, enclosed surface gaps
             ({repair.estimatedArea.toFixed(2)} m²) were repaired from their surrounding surfaces.
             These patches are estimates, not measured depth.</p>
         </div>
+      )}
+      {quality?.structuralRebuild?.reconstructedArea > 0 && (
+        <p className="ss-notice-detail" role="status">
+          Supported floor and ceiling regions were rebuilt from overlapping depth views.
+          Check the sides and the ceiling in Walk inside; unscanned object faces remain open.
+        </p>
       )}
       <PartialScanScene scan={displayScan} />
       <div className="ss-partial-facts" aria-label="Scan measurements">

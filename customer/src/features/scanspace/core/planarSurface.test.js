@@ -1,4 +1,20 @@
 import { consolidatePlanarSurfaces } from './planarSurface';
+import { conformSurfaceTopology, surfaceTopologyDiagnostics } from './surfaceTopology';
+
+test('a supported horizontal correction keeps its shared wall corner attached',()=>{
+  const positions=new Float32Array([0,.14,0,1.2,.14,0,0,.14,-1.2,1.2,.14,-1.2,0,1.5,0,0,1.5,-1.2]);
+  const source={positions,indices:new Uint32Array([0,1,2,1,3,2,0,2,4,2,5,4]),colors:new Uint8Array(18)};
+  const support={kind:'floor',normal:[0,1,0],offset:0,axes:[[1,0,0],[0,0,-1]],cellSize:.12,
+    supportingFrameIds:[0,1,2],cells:new Map()};
+  for(let y=0;y<=10;y++)for(let x=0;x<=10;x++)support.cells.set(`${x},${y}`,new Set([0,1,2]));
+  const result=conformSurfaceTopology(consolidatePlanarSurfaces(source,{structuralPlanes:[support]}));
+  expect(surfaceTopologyDiagnostics(result).boundaryEdges).toBe(6);
+  expect(surfaceTopologyDiagnostics(result).nonManifoldEdges).toBe(0);
+  const lower=Array.from(result.positions).filter((_,i)=>i%3===1&&result.positions[i]<.5);
+  expect(lower.length).toBeGreaterThan(0);
+  expect(lower.every(y=>Math.abs(y)<1e-6)).toBe(true);
+  expect(source.positions[1]).toBeCloseTo(.14,5);
+});
 
 function sheet({ z = () => 0, origin = [0, 0, 0], rotate = false, hole = false, size = 2, step = 0.1 } = {}) {
   const positions = [], indices = [], colors = [], n = Math.round(size / step);

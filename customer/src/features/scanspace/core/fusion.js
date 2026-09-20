@@ -1,5 +1,8 @@
 import { consolidatePlanarSurfaces } from "./planarSurface.js";
-import { refineJointTrajectory } from "./trajectoryAlignment.js";
+import { refineJointTrajectory, recoverFrameComponents } from "./trajectoryAlignment.js";
+import { discoverStructuralPlanes, regularizeStructuralDepth } from "./structuralDepth.js";
+import { rebuildStructuralSurfaces } from "./structuralSurface.js";
+import { conformSurfaceTopology, surfaceTopologyDiagnostics, triangulatePlanarLoop } from "./surfaceTopology.js";
 import { registerSurfaceTextures } from "./textureRegistration.js";
 import { selectSurfaceTextures } from "./surfaceTextures.js";
 import { textureAtlasLayout, buildTextureDetailGrid, projectedPatchDetail,
@@ -2505,7 +2508,7 @@ export function fillSmallMeshHoles(mesh, options = {}) {
       return;
     // The fan center must be inside every edge's half-plane. Concave loops
     // without a valid kernel remain open; a fan there would cross the rim.
-    if (points.some((point, index) => {
+    if (!options.triangulateConcave && points.some((point, index) => {
       const next = points[(index + 1) % points.length];
       const a = next.map((value, axis) => value - point[axis]);
       const b = center.map((value, axis) => value - point[axis]);
@@ -2516,11 +2519,31 @@ export function fillSmallMeshHoles(mesh, options = {}) {
     if (options.supportedPlanes) {
       patch = options.supportedPlanes.findIndex(plane =>
         Math.abs(plane.normal.reduce((sum, value, axis) => sum + value * referenceNormal[axis], 0)) > 0.985 &&
-        // Only a floor near the measured floor height, or a vertical wall.
+        // A ceiling must have explicit independent raw-depth support. Height
+        // alone cannot distinguish a ceiling from an elevated shelf or beam.
         (Math.abs(plane.normal[1]) < 0.15 ||
+          (plane.kind === 'ceiling' && plane.supportingFrameIds?.length >= 3) ||
           (Math.abs(plane.normal[1]) > 0.97 && Math.abs(center[1] - (options.floorY || 0)) < 0.25)) &&
         points.every(point => Math.abs(point.reduce((sum, value, axis) => sum + value * plane.normal[axis], 0) - plane.offset) < 0.025));
       if (patch < 0 || (options.allowRepair && !options.allowRepair(center, points))) return;
+    }
+    if (options.triangulateConcave && options.supportedPlanes) {
+      const triangles = triangulatePlanarLoop(points,referenceNormal);
+      if (!triangles.length) return;
+      let area = 0;
+      for (const face of triangles) {
+        const ids = face.map(i => loop.vertices[i]);
+        area += Math.hypot(...meshTriangleNormal(mesh.positions,...ids)) * .5;
+        // Validate the entire patch, not just its center: a narrow foreground
+        // object or a real opening must veto triangles that cross it.
+        const p = face.map(i => points[i]);
+        const samples = [[1/3,1/3,1/3],[.6,.2,.2],[.2,.6,.2],[.2,.2,.6]];
+        if (options.allowRepair && samples.some(w => !options.allowRepair([0,1,2].map(axis => p.reduce((s,q,k) => s+q[axis]*w[k],0)),points))) return;
+      }
+      if (area < .0005 || area > (options.maxArea || .4)) return;
+      for (const face of triangles) { indices.push(...face.map(i => loop.vertices[i])); patches?.push(patch); }
+      addedArea += area; filledHoleCount++; filledHoleTriangles += triangles.length;
+      return;
     }
     const centerVertex = positions.length / 3;
     positions.push(...center);
@@ -4857,6 +4880,17 @@ export function refineTrajectoryPoses(frames, options = {}) {
   }, options);
 }
 
+export function recoverOverlappingCaptures(frames, selection) {
+  return recoverFrameComponents(frames, selection, {
+    project: projectWorld, sample: sampleProjectiveDepth, unproject: depthPositionAt,
+    apply: applyRigidDeltaToFrame,
+    transform: (point, delta) => {
+      const p = transformPointByRigidDelta({x:point[0],y:point[1],z:point[2]},delta);
+      return [p.x,p.y,p.z];
+    },
+  });
+}
+
 export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   report?.("preparing", 3);
   const ambiguousLegacyKeyframes = keyframes.filter(
@@ -4878,6 +4912,26 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   const initialOverlap = {};
   let surfaceConsistencyFailure = null;
   let overlapping = validateFrameOverlap(prepared, initialOverlap);
+  if (options.recoverCaptureGroups && overlapping.length >= 3 && overlapping.length < prepared.length) {
+    const recovered = recoverOverlappingCaptures([...prepared, ...extraTextureFrames.map(f => ({...f,textureOnly:true}))], initialOverlap);
+    alignment.componentRecovery = recovered.diagnostics;
+    if (recovered.diagnostics.recoveredFrameIds.length) {
+      const ids = new Set(prepared.map(f => f.frameId));
+      const nextOverlap = {};
+      const candidate = validateFrameOverlap(recovered.frames.filter(f => ids.has(f.frameId)), nextOverlap);
+      const joinedIds = new Set(candidate.map(f => f.frameId));
+      // A promising submap fit must also join the normal overlap graph. It
+      // must never replace or discard the already trusted main component.
+      const joined = recovered.diagnostics.recoveredFrameIds.filter(id => joinedIds.has(id));
+      if (joined.length && overlapping.every(f => joinedIds.has(f.frameId))) {
+        overlapping = candidate;
+        extraTextureFrames = recovered.frames.filter(f => !ids.has(f.frameId));
+        alignment.beforeRecovery = { ...initialOverlap };
+        Object.assign(initialOverlap,nextOverlap);
+        alignment.componentRecovery.appliedFrameIds = joined;
+      } else alignment.componentRecovery.appliedFrameIds = [];
+    }
+  }
   if (options.poseRefinement === "joint" && overlapping.length >= 4) {
     const geometryIds = new Set(overlapping.map((frame) => frame.frameId));
     const snapshots = [...overlapping, ...extraTextureFrames].sort((a, b) => a.timestamp - b.timestamp || a.frameId - b.frameId);
@@ -5033,11 +5087,19 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     options.completionMode === "surface"
       ? suppressMinorityFrontLayers(selected)
       : { frames: selected, diagnostics: null };
-  const usable = localLayerConsensus.frames;
+  let usable = localLayerConsensus.frames;
   if (localLayerConsensus.diagnostics)
     alignment.localLayerConsensus = localLayerConsensus.diagnostics;
+  const structuralPlanes = options.structuralDepth
+    ? discoverStructuralPlanes(usable, { floorY: options.floorY }) : [];
+  const structural = regularizeStructuralDepth(structuralPlanes.length ? [...usable,...extraTextureFrames] : [], structuralPlanes, {unproject:depthPosition});
+  if (structuralPlanes.length) {
+    const ids = new Set(usable.map(f => f.frameId));
+    usable = structural.frames.filter(f => ids.has(f.frameId));
+    extraTextureFrames = structural.frames.filter(f => !ids.has(f.frameId));
+  }
   const stages = {
-    algorithmVersion: 41,
+    algorithmVersion: 42,
     completionMode: options.completionMode === "surface" ? "surface" : "room",
     reconstructionProfile: options.reconstructionProfile || "quality",
     supportMode: "translated-camera-viewpoints",
@@ -5055,6 +5117,10 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       surfaceTexture: !!options.surfaceTexture,
       textureRegistration: !!options.textureRegistration,
       repairPlanarGaps: !!options.repairPlanarGaps,
+      structuralDepth: !!options.structuralDepth,
+      structuralRebuild: !!options.structuralRebuild,
+      conformTopology: !!options.conformTopology,
+      recoverCaptureGroups: !!options.recoverCaptureGroups,
     },
     inputKeyframes: keyframes.length,
     ambiguousLegacyKeyframes,
@@ -5085,6 +5151,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     roundTrip: prepared.map((frame) => frameRoundTripDiagnostics(frame)),
     alignment,
     fusedFrameIds: usable.map((frame) => frame.frameId),
+    structuralDepth: structural.diagnostics,
   };
   stages.floorOutlierRatio =
     stages.floorOutlierSamples / Math.max(1, stages.inputDepthSamples);
@@ -5408,18 +5475,35 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       voxelSize: volumeVoxelSize,
       sourcePositions: measuredPositions,
       evidenceFrames: usable,
+      structuralPlanes,
       preserveDenoisedRelief: true,
     });
     stages.planarConsolidation = surface.planarConsolidation;
+    if (options.structuralRebuild) {
+      surface = rebuildStructuralSurfaces(surface,structuralPlanes,usable,{project:projectWorld,linearByte},{repairPlanarGaps:options.repairPlanarGaps});
+      stages.structuralRebuild = surface.structuralRebuild;
+    }
+    if (options.conformTopology) {
+      stages.topologyBeforeRepair = surfaceTopologyDiagnostics(surface);
+      surface = conformSurfaceTopology(surface);
+      stages.topologyRepair = surface.topologyRepair;
+      stages.topologyAfterRepair = surfaceTopologyDiagnostics(surface);
+    }
     if (options.repairPlanarGaps) {
       const previousCount = surface.filledHoleCount || 0;
       const previousTriangles = surface.filledHoleTriangles || 0;
       surface = fillSmallMeshHoles(surface, {
-        maxDiameter: 0.42,
-        maxPerimeter: 1.5,
+        maxDiameter: options.conformTopology ? 0.9 : 0.42,
+        maxPerimeter: options.conformTopology ? 3 : 1.5,
+        maxArea: 0.4,
+        triangulateConcave: !!options.conformTopology,
         maxPlanarity: 0.018,
-        maxVertices: 120,
-        supportedPlanes: surface.planarConsolidation?.planes || [],
+        maxVertices: 240,
+        supportedPlanes: (surface.planarConsolidation?.planes || []).map(plane => {
+          const support = structuralPlanes.find(p => p.kind === 'ceiling' &&
+            Math.abs(p.normal.reduce((s,n,i) => s+n*plane.normal[i],0)) > .99 && Math.abs(p.offset-plane.offset) < .05);
+          return support ? {...plane,kind:'ceiling',supportingFrameIds:support.supportingFrameIds} : plane;
+        }),
         floorY: options.floorY,
         allowRepair: (center) => {
           let agrees = 0, contradicts = 0;
@@ -5428,26 +5512,27 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
             if (!projected) continue;
             const index = gridIndex(frame, projected.u, projected.v);
             if (!frame.measuredMask[index]) continue;
-            const difference = frame.filteredDepth[index] - projected.depth;
+            const difference = (frame.originalFilteredDepth || frame.filteredDepth)[index] - projected.depth;
             if (Math.abs(difference) < 0.05) agrees++;
             else if (Math.abs(difference) > 0.09) contradicts++;
           }
           // Measured background/foreground is evidence of an opening/object,
           // not permission to put an estimated wall over it.
-          return contradicts === 0 || (agrees >= 3 && contradicts / (agrees + contradicts) < 0.1);
+          return agrees >= 2 && (contradicts === 0 || (agrees >= 3 && contradicts / (agrees + contradicts) < 0.1));
         },
       });
       stages.surfaceRepair = {
         mode: "bounded-planar-estimate",
-        estimatedHoleCount: surface.filledHoleCount,
-        estimatedTriangles: surface.filledHoleTriangles,
-        estimatedArea: surface.filledHoleArea,
-        maxDiameterMeters: 0.42,
+        estimatedHoleCount: surface.filledHoleCount + (stages.structuralRebuild?.estimatedHoleCount || 0),
+        estimatedTriangles: surface.filledHoleTriangles + (stages.structuralRebuild?.estimatedTriangles || 0),
+        estimatedArea: surface.filledHoleArea + (stages.structuralRebuild?.estimatedArea || 0),
+        maxDiameterMeters: options.conformTopology ? 0.9 : 0.42,
       };
       surface = { ...surface,
         filledHoleCount: previousCount + surface.filledHoleCount,
         filledHoleTriangles: previousTriangles + surface.filledHoleTriangles };
     }
+    if (options.conformTopology) stages.topologyAfterRepair = surfaceTopologyDiagnostics(surface);
   }
   wallStructure = meshWallStructureDiagnostics(surface);
   stages.wallStructure = wallStructure;

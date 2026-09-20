@@ -33,7 +33,7 @@ function recordsFor(mesh) {
 
 // Area-weighted orthogonal fit (smallest covariance eigenvector). Unlike the
 // old 9-degree orientation bins, this retains the actual measured wall angle.
-function fitPlane(records, previous) {
+export function fitPlane(records, previous) {
   const center = [0, 0, 0];
   let weight = 0;
   for (const r of records) {
@@ -163,6 +163,29 @@ function hasMeasuredThickness(group, available, plane) {
     return Math.abs(Math.min(...offsets) - Math.min(first, last)) < 0.009 &&
       Math.abs(Math.max(...offsets) - Math.max(first, last)) < 0.009;
   });
+}
+
+function supportedObjectFace(records, plane, frames) {
+  if (!frames?.length) return false;
+  const area=records.reduce((s,r)=>s+r.area,0),[u,v]=basis(plane.n),bounds=[Infinity,Infinity,-Infinity,-Infinity];
+  for(const r of records) for(const p of r.p) {
+    const x=dot(u,p),y=dot(v,p);bounds[0]=Math.min(bounds[0],x);bounds[1]=Math.min(bounds[1],y);
+    bounds[2]=Math.max(bounds[2],x);bounds[3]=Math.max(bounds[3],y);
+  }
+  if(area<.22 || bounds[2]-bounds[0]<.35 || bounds[3]-bounds[1]<.35) return false;
+  const supporters=[];
+  for(const frame of frames) {
+    if(supporters.some(f=>Math.hypot(...[0,1,2].map(i=>f.camera[i]-frame.camera[i]))<.06)) continue;
+    let close=0,total=0,error=0;
+    for(let i=0;i<frame.positions.length;i+=6) {
+      if(!frame.measuredMask[i/3]) continue;
+      const p=Array.from(frame.positions.subarray(i,i+3)),x=dot(u,p),y=dot(v,p),d=Math.abs(dot(plane.n,p)-plane.d);
+      if(x<bounds[0]||x>bounds[2]||y<bounds[1]||y>bounds[3]||d>.18) continue;
+      total++;if(d<.045){close++;error+=d;}
+    }
+    if(close>=18&&close/Math.max(1,total)>.75&&error/close<.027) supporters.push(frame);
+  }
+  return supporters.length>=3;
 }
 
 // Look for spatially coherent relief BEFORE projection. A broad normal vote
@@ -301,6 +324,30 @@ function protectMeasuredRelief(group, plane, sourcePositions, frames, protectedV
 
 function detectPlanes(records, distanceLimit, options, protectedVertices) {
   const planes = [], ignored = new Set();
+  // Raw multi-view planes survive even when the extracted TSDF facets are too
+  // curled to vote for their true orientation. Restrict this wider correction
+  // to independently observed horizontal footprint cells; furniture and
+  // unobserved room bounds are never replaced by an infinite plane.
+  for (const support of options.structuralPlanes || []) {
+    if (support.kind === 'wall' || support.supportingFrameIds.length < 3) continue;
+    const plane = { n:support.normal, d:support.offset };
+    const supported = p => {
+      const key = `${Math.floor(dot(support.axes[0],p)/support.cellSize)},${Math.floor(dot(support.axes[1],p)/support.cellSize)}`;
+      return (support.cells.get(key)?.size || 0) >= 2;
+    };
+    const group = records.filter(r => r.plane < 0 && Math.abs(dot(r.normal,plane.n)) > .55 &&
+      r.p.every(p => Math.abs(dot(plane.n,p)-plane.d) < .18) && supported(r.center));
+    if (group.reduce((s,r) => s+r.area,0) < .6) continue;
+    // Preserve actual beams/risers/fixtures using the same per-view relief
+    // evidence as pictures and curtains. Numerical noise alone is not relief.
+    protectMeasuredRelief(group,plane,options.sourcePositions,options.evidenceFrames,protectedVertices);
+    const eligible = group.filter(r => !r.ids.some(id => protectedVertices.has(id)));
+    if (eligible.reduce((s,r) => s+r.area,0) < .5) continue;
+    const id = planes.length;
+    planes.push({...plane,kind:support.kind,supportingFrameIds:support.supportingFrameIds,
+      maximumCorrection:.18});
+    eligible.forEach(r => {r.plane=id;});
+  }
   for (let pass = 0; pass < 12 && planes.length < 10; pass++) {
     const available = records.filter((r) => r.plane < 0 && !ignored.has(r));
     if (!available.length) break;
@@ -357,7 +404,8 @@ function detectPlanes(records, distanceLimit, options, protectedVertices) {
     for (const group of connectedPatches(neighborhood, plane)) {
       protectMeasuredRelief(group, plane, options.sourcePositions, options.evidenceFrames, protectedVertices);
       const eligible = group.filter((r) => inlierSet.has(r) && !r.ids.some((id) => protectedVertices.has(id)));
-      if (!supportedPatch(group, plane, options.report) || !supportedPatch(eligible, plane)) continue;
+      const broad = supportedPatch(group, plane, options.report) && supportedPatch(eligible, plane);
+      if (!broad && !supportedObjectFace(eligible,plane,options.evidenceFrames)) continue;
       if (hasMeasuredThickness(eligible, available, plane)) continue;
       const id = planes.length;
       // Protected foreground relief must not tilt the remaining wall fit.
@@ -436,24 +484,35 @@ export function consolidatePlanarSurfaces(mesh, options = {}) {
       ...(restored ? { surfaceArea: recordsFor({ ...mesh, positions }).reduce((sum, r) => sum + r.area, 0) } : {}),
       planarConsolidation: diagnostics };
   }
-  const constraints = new Map();
-  for (const r of records) if (r.plane >= 0) for (const id of r.ids) {
-    if (!constraints.has(id)) constraints.set(id, new Set());
-    constraints.get(id).add(r.plane);
-  }
-  for (const [id, ids] of constraints) {
-    const p = Array.from(positions.subarray(id * 3, id * 3 + 3));
-    const values = [...ids].map((i) => planes[i]);
-    let q = [...p];
-    // Alternating orthogonal projections keep shared wall/floor corners joined.
-    // Final per-face projection below is exact, including at atlas UV seams.
-    for (let iteration = 0; iteration < 24; iteration++) for (const plane of values) {
-      const residual = dot(plane.n, q) - plane.d;
-      q = q.map((v, i) => v - plane.n[i] * residual);
+  // Solve corners once for EVERY incident face, including unflattened object
+  // faces. A rejected corner must also reject its face projection; otherwise
+  // the final per-face projection silently tears it away from its neighbor.
+  let solutions = new Map();
+  for (let pass = 0; pass < 3; pass++) {
+    const constraints = new Map(), rejected = new Set();
+    for (const r of records) if (r.plane >= 0) for (const id of r.ids) {
+      if (!constraints.has(id)) constraints.set(id, new Set());
+      constraints.get(id).add(r.plane);
     }
-    if (Math.hypot(...sub(p, q)) > distanceLimit * 1.5) continue;
-    positions.set(q, id * 3);
-    diagnostics.correctedVertices++;
+    solutions = new Map();
+    for (const [id, ids] of constraints) {
+      const p = Array.from(positions.subarray(id * 3, id * 3 + 3));
+      const values = [...ids].map((i) => planes[i]);
+      let q = [...p];
+      for (let iteration = 0; iteration < 40; iteration++) for (const plane of values) {
+        const residual = dot(plane.n, q) - plane.d;
+        q = q.map((v, i) => v - plane.n[i] * residual);
+      }
+      const limit = Math.max(...values.map(p => p.maximumCorrection || distanceLimit * 1.5));
+      if (Math.hypot(...sub(p, q)) > limit || values.some(p => Math.abs(dot(p.n,q)-p.d)>1e-6))
+        rejected.add(id);
+      else solutions.set(id,q);
+    }
+    if (!rejected.size) break;
+    for (const r of records) if (r.ids.some(id => rejected.has(id))) r.plane = -1;
+  }
+  for (const [id,q] of solutions) {
+    positions.set(q,id*3); diagnostics.correctedVertices++;
   }
   const outputPositions = [], outputIndices = [], outputPatches = [], attributes = {}, vertexLookup = new Map();
   let outputArea = 0;
@@ -504,7 +563,8 @@ export function consolidatePlanarSurfaces(mesh, options = {}) {
     // Opposite sides of a spurious sheet can have opposite winding. Once they
     // represent one surface, use a coherent normal so shared vertex normals
     // cannot cancel and disable texture seam voting.
-    const reverseOutput = faces.reduce((sum, r) => sum + r.area * dot(r.normal, plane.n), 0) < 0;
+    const reverseOutput = plane.kind === 'floor' ? false : plane.kind === 'ceiling' ? true
+      : faces.reduce((sum, r) => sum + r.area * dot(r.normal, plane.n), 0) < 0;
     let projectedArea = 0, retainedArea = 0, maxResidual = 0;
     for (const r of faces) {
       for (const point of r.p) maxResidual = Math.max(maxResidual, Math.abs(dot(plane.n, point) - plane.d));
@@ -535,7 +595,8 @@ export function consolidatePlanarSurfaces(mesh, options = {}) {
       });
     }
     diagnostics.removedOverlapArea += Math.max(0, projectedArea - retainedArea);
-    diagnostics.planes.push({ normal: plane.n, offset: plane.d, inputArea: projectedArea, retainedArea, maxInputResidual: maxResidual });
+    diagnostics.planes.push({ normal: plane.n, offset: plane.d, inputArea: projectedArea, retainedArea, maxInputResidual: maxResidual,
+      ...(plane.kind ? {kind:plane.kind,supportingFrameIds:plane.supportingFrameIds} : {}) });
   });
   const result = { ...mesh, positions: new Float32Array(outputPositions), indices: new Uint32Array(outputIndices), surfacePatchIds: new Int32Array(outputPatches), planarConsolidation: diagnostics };
   for (const [name, attribute] of Object.entries(attributes)) result[name] = new mesh[name].constructor(attribute.values);

@@ -142,6 +142,16 @@ test("planar reconstruction diagnostics survive export and import", () => {
   expect(restored.mesh.indices).toEqual(scan.mesh.indices);
 });
 
+test("structural reconstruction and topology diagnostics survive raw-file round trips",()=>{
+  const scan=rawScan();
+  scan.captureQuality={algorithmVersion:42,structuralDepth:{correctedSamples:42},
+    structuralRebuild:{reconstructedArea:1.2},topology:{boundaryEdges:8},
+    recoveredCaptureGroups:{appliedFrameIds:[3,4,5]}};
+  const restored=parsePartialScan(serializePartialScan(scan));
+  expect(restored.captureQuality).toEqual(scan.captureQuality);
+  expect(restored.rawCapture.keyframes[0].positions).toEqual(scan.rawCapture.keyframes[0].positions);
+});
+
 test("incomplete scan imports reject unsafe geometry", () => {
   const value = JSON.parse(serializePartialScan(measuredScan()));
   value.scan.mesh.indices.data = btoa(

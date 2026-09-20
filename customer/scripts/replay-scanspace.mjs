@@ -1,15 +1,12 @@
 import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 
 // Load the same core modules used by the browser worker, without changing the
 // application's CommonJS package configuration for this Node-only CLI.
-const loadCore = async (name) => {
-  let source = await readFile(new URL(`../src/features/scanspace/core/${name}.js`, import.meta.url), "utf8");
-  if (name === "fusion") {
-    const planes = await readFile(new URL('../src/features/scanspace/core/planarSurface.js', import.meta.url), 'utf8');
-    source = source.replace('./planarSurface.js', `data:text/javascript;base64,${Buffer.from(planes).toString('base64')}`);
-  }
-  return import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
-};
+// Use the recursive production-module loader: fusion now has multiple local
+// dependencies, which cannot resolve relative to a data: module URL.
+const { load } = createRequire(import.meta.url)("./replay-scanspace.cjs");
+const loadCore = async name => load(`src/features/scanspace/core/${name}.js`);
 
 try {
   const capturePath = process.argv[2];

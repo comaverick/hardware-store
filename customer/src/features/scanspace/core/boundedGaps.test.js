@@ -40,3 +40,19 @@ test('horizontal repair is limited to the floor, not shelf tops or ceilings', ()
   for (const height of [0.8, 2.8]) expect(fillSmallMeshHoles(grid(missing, true, height), { ...options,
     supportedPlanes: [{ normal: [0, 1, 0], offset: height }] }).filledHoleCount).toBe(0);
 });
+
+test('a ceiling gap requires explicit independent raw-depth support', () => {
+  const source=grid((x,y)=>x===4&&y===5,true,2.8);
+  const plane={normal:[0,1,0],offset:2.8,kind:'ceiling',supportingFrameIds:[1,2,3]};
+  expect(fillSmallMeshHoles(source,{...options,supportedPlanes:[plane],triangulateConcave:true}).filledHoleCount).toBe(1);
+  expect(fillSmallMeshHoles(source,{...options,supportedPlanes:[{...plane,supportingFrameIds:[1,2]}]}).filledHoleCount).toBe(0);
+});
+
+test('supported concave gaps use interior triangles rather than a crossing fan', () => {
+  const source=grid((x,y)=>(y===3&&x>=3&&x<=5)||((x===3||x===5)&&y>=3&&y<=5));
+  const result=fillSmallMeshHoles(source,{...options,triangulateConcave:true});
+  expect(result.filledHoleCount).toBe(1);
+  expect(result.filledHoleArea).toBeCloseTo(.0175,6);
+  let calls=0;
+  expect(fillSmallMeshHoles(source,{...options,triangulateConcave:true,allowRepair:()=>++calls<3}).filledHoleCount).toBe(0);
+});

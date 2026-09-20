@@ -21,6 +21,10 @@ export function scanFusionOptions(raw, completionMode = "surface", extra = {}) {
     surfaceTexture: completionMode === "surface",
     textureRegistration: completionMode === "surface",
     repairPlanarGaps: completionMode === "surface",
+    recoverCaptureGroups: completionMode === "surface",
+    structuralDepth: completionMode === "surface",
+    structuralRebuild: completionMode === "surface",
+    conformTopology: completionMode === "surface",
     // A correction still needs three consecutive, held-out-validated poses.
     // Permit the small change across that run seen when mobile tracking drift
     // settles, while rejecting isolated pose jumps.

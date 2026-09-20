@@ -59,6 +59,192 @@ function rotationDelta(vector, pivot) {
     translation: pivot.map((v, i) => v + vector[i + 3] - dot(rotation.slice(i * 3, i * 3 + 3), pivot))
   };
 }
+
+// Recover a coherent submap as ONE rigid body. Isolated bad frames are never
+// promoted, and the already validated main component remains an immovable
+// reference. This runs before the small per-capture joint refinement.
+export function recoverFrameComponents(input, selection, helpers) {
+  const coreIds = new Set(selection.selectedFrameIds || []);
+  const frames = input.filter(f => !f.textureOnly),
+    core = frames.filter(f => coreIds.has(f.frameId));
+  const adjacency = new Map(frames.map(f => [f.frameId, []]));
+  for (const p of selection.pairs || []) if (p.accepted) {
+    adjacency.get(p.firstFrame)?.push(p.secondFrame);
+    adjacency.get(p.secondFrame)?.push(p.firstFrame);
+  }
+  const seen = new Set(coreIds),
+    components = [];
+  for (const f of frames) {
+    if (seen.has(f.frameId)) continue;
+    const ids = [f.frameId];
+    seen.add(f.frameId);
+    for (let i = 0; i < ids.length; i++) for (const next of adjacency.get(ids[i]) || []) if (!seen.has(next)) {
+      seen.add(next);
+      ids.push(next);
+    }
+    components.push(ids);
+  }
+  const corrections = new Map(),
+    diagnostics = {
+      attemptedComponents: 0,
+      recoveredFrameIds: [],
+      components: []
+    };
+  const normalCache = new Map(frames.map(f => [f.frameId, normalsFor(f)]));
+  const independentCount = values => {
+    const poses = [];
+    for (const f of values) if (poses.every(p => norm(sub(Array.from(p.camera), Array.from(f.camera))) >= .06)) poses.push(f);
+    return poses.length;
+  };
+  for (const ids of components.filter(g => g.length >= 3)) {
+    diagnostics.attemptedComponents++;
+    const original = frames.filter(f => ids.includes(f.frameId));
+    if (independentCount(original) < 3 || independentCount(core) < 3) {
+      diagnostics.components.push({
+        frameIds: ids,
+        accepted: false,
+        reason: 'insufficient-independent-viewpoints'
+      });
+      continue;
+    }
+    const pivot = [0, 1, 2].map(axis => original.reduce((s, f) => s + f.camera[axis], 0) / original.length);
+    const pairs = [];
+    for (const moving of original) for (const reference of core) {
+      const a = moving.transformMatrix,
+        b = reference.transformMatrix;
+      if (norm(sub(Array.from(moving.camera), Array.from(reference.camera))) < .04 || norm(sub(Array.from(moving.camera), Array.from(reference.camera))) > 1.8 || a[8] * b[8] + a[9] * b[9] + a[10] * b[10] < .3) continue;
+      pairs.push([moving, reference]);
+    }
+    function matches(values) {
+      const delta = rotationDelta(Array.from(values), pivot),
+        records = [];
+      for (const [native, reference] of pairs) {
+        const moving = helpers.apply(native, delta);
+        for (const reverse of [false, true]) {
+          const source = reverse ? reference : moving,
+            target = reverse ? moving : reference;
+          const normals = normalCache.get(reference.frameId),
+            local = [];
+          for (let index = 2; index < source.filteredDepth.length; index += Math.max(3, Math.ceil(source.filteredDepth.length / 180))) {
+            if (!source.measuredMask[index]) continue;
+            const p = point(source, index),
+              uv = helpers.project(target, ...p);
+            if (!uv) continue;
+            const ti = Math.floor(uv.v * target.rows) * target.columns + Math.floor(uv.u * target.columns);
+            if (!target.measuredMask[ti]) continue;
+            const depth = helpers.sample(target, uv.u, uv.v);
+            if (!depth || Math.abs(depth - uv.depth) > .32) continue;
+            const q = helpers.unproject(target, uv.u, uv.v, depth);
+            if (!q) continue;
+            const ni = reverse ? index : ti,
+              normal = Array.from(normals.subarray(ni * 3, ni * 3 + 3));
+            if (norm(normal) < .9) continue;
+            const a = reverse ? q : p,
+              b = reverse ? p : q,
+              residual = dot(sub(a, b), normal);
+            if (Math.abs(residual) > .28) continue;
+            local.push({
+              a,
+              b,
+              normal,
+              residual,
+              key: `${native.frameId}:${reference.frameId}:${reverse}:${index}`,
+              movingId: native.frameId,
+              referenceId: reference.frameId,
+              reverse
+            });
+          }
+          if (local.length >= 15) records.push(...local.map(r => ({
+            ...r,
+            weight: 1 / local.length
+          })));
+        }
+      }
+      return records;
+    }
+    let values = new Float64Array(6);
+    const initial = matches(values),
+      heldOut = initial.filter((_, i) => i % 4 === 0),
+      heldKeys = new Set(heldOut.map(r => r.key));
+    const report = {
+      frameIds: ids,
+      accepted: false,
+      heldOutSamples: heldOut.length
+    };
+    diagnostics.components.push(report);
+    if (heldOut.length < 90 || new Set(heldOut.map(r => r.movingId)).size < 3 || new Set(heldOut.map(r => r.referenceId)).size < 3) {
+      report.reason = 'insufficient-independent-overlap';
+      continue;
+    }
+    const cost = proposal => {
+      const delta = rotationDelta(Array.from(proposal), pivot);
+      let sum = 0,
+        weight = 0;
+      for (const r of heldOut) {
+        const error = dot(sub(helpers.transform(r.a, delta), r.b), r.normal);
+        sum += Math.min(.28, Math.abs(error)) ** 2 * r.weight;
+        weight += r.weight;
+      }
+      return Math.sqrt(sum / weight);
+    };
+    report.beforeMeters = cost(values);
+    for (let pass = 0; pass < 12; pass++) {
+      const matrix = new Float64Array(36),
+        rhs = new Float64Array(6);
+      for (let i = 0; i < 6; i++) {
+        matrix[i * 6 + i] = i < 3 ? 3 : .25;
+        rhs[i] = -matrix[i * 6 + i] * values[i];
+      }
+      for (const r of matches(values)) {
+        if (heldKeys.has(r.key)) continue;
+        const j = [...cross(sub(r.a, pivot), r.normal), ...r.normal],
+          w = r.weight * Math.min(1, .045 / Math.max(.001, Math.abs(r.residual)));
+        for (let a = 0; a < 6; a++) {
+          rhs[a] -= j[a] * r.residual * w;
+          for (let b = 0; b < 6; b++) matrix[a * 6 + b] += j[a] * j[b] * w;
+        }
+      }
+      const change = solvePositive(matrix, rhs, 6);
+      if (!change) break;
+      const scale = Math.min(1, .02 / Math.max(1e-8, norm(Array.from(change.slice(0, 3)))), .035 / Math.max(1e-8, norm(Array.from(change.slice(3)))));
+      const proposal = values.map((v, i) => v + change[i] * scale),
+        delta = rotationDelta(Array.from(proposal), pivot);
+      if (norm(Array.from(proposal.slice(0, 3))) > .1 || original.some(f => norm(sub(helpers.transform(Array.from(f.camera), delta), Array.from(f.camera))) > .3) || cost(proposal) >= cost(values)) break;
+      values = proposal;
+    }
+    report.afterMeters = cost(values);
+    const final = matches(values),
+      improvedViews = new Set(),
+      finalDelta = rotationDelta(Array.from(values), pivot);
+    for (const id of ids) {
+      const before = heldOut.filter(r => r.movingId === id);
+      const oldError = before.reduce((s, r) => s + Math.abs(r.residual) * r.weight, 0);
+      const newError = before.reduce((s, r) => s + Math.abs(dot(sub(helpers.transform(r.a, finalDelta), r.b), r.normal)) * r.weight, 0);
+      if (before.length >= 15 && newError < oldError * .9) improvedViews.add(id);
+    }
+    report.accepted = report.afterMeters < .065 && report.afterMeters < report.beforeMeters * .75 && final.length >= initial.length * .85 && improvedViews.size >= Math.max(3, Math.ceil(ids.length * .6)) && final.some(r => Math.abs(r.normal[1]) > .8) && final.some(r => Math.abs(r.normal[1]) < .3);
+    report.initialMatches = initial.length;
+    report.finalMatches = final.length;
+    report.improvedViews = improvedViews.size;
+    report.reason = report.accepted ? 'validated-rigid-submap' : 'held-out-or-multi-angle-check-failed';
+    if (!report.accepted) continue;
+    const delta = rotationDelta(Array.from(values), pivot);
+    report.maxCameraShiftMeters = Math.max(...original.map(f => norm(sub(helpers.transform(Array.from(f.camera), delta), Array.from(f.camera)))));
+    for (const id of ids) corrections.set(id, delta);
+    diagnostics.recoveredFrameIds.push(...ids);
+  }
+  return {
+    diagnostics,
+    frames: input.map(frame => {
+      let delta = corrections.get(frame.frameId);
+      if (frame.textureOnly) {
+        const nearest = frames.reduce((best, f) => Math.abs(f.timestamp - frame.timestamp) < Math.abs(best.timestamp - frame.timestamp) ? f : best, frames[0]);
+        if (nearest && Math.abs(nearest.timestamp - frame.timestamp) < 1000) delta = corrections.get(nearest.frameId);
+      }
+      return delta ? helpers.apply(frame, delta) : frame;
+    })
+  };
+}
 export function refineJointTrajectory(input, helpers, options = {}) {
   const diagnostics = {
     mode: 'joint-point-to-plane',

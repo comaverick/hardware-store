@@ -113,6 +113,24 @@ function render(mesh, camera, file, plain = false, width = 1000, height = 750) {
   }
   writePng(file, width, height, rgba);
 }
+function inspectionShots(mesh, raw) {
+  const b=mesh.bounds, center=[(b.min.x+b.max.x)/2,1.45,(b.min.z+b.max.z)/2];
+  const observer=mesh.observer || raw?.observer;
+  const eye=observer ? [observer.x,1.6,observer.z] : [b.max.x+1,1.6,b.max.z+1];
+  const last=raw?.keyframes?.at(-1)?.transformMatrix;
+  const forward=last ? [-last[8],0,-last[10]] : [center[0]-eye[0],0,center[2]-eye[2]];
+  const length=Math.hypot(forward[0],forward[2]) || 1;
+  forward[0]/=length;forward[2]/=length;
+  const right=[-forward[2],0,forward[0]], target=[eye[0]+forward[0]*2.5,1.45,eye[2]+forward[2]*2.5];
+  return [
+    ['front',eye,target],
+    ['left',eye.map((v,i)=>v-right[i]*.85),target],
+    ['right',eye.map((v,i)=>v+right[i]*.85),target],
+    ['ceiling',eye,[target[0],b.max.y-.15,target[2]]],
+    ['ground',eye,[target[0],0,target[2]]],
+    ['elevated',[eye[0],2.35,eye[2]],[target[0],.8,target[2]]],
+  ];
+}
 if (require.main === module) {
   const input = path.resolve(process.argv[2]),
     out = path.resolve(process.argv[3]);
@@ -144,13 +162,19 @@ if (require.main === module) {
   const mesh = result.mesh,
     d = result.diagnostics;
   const center = new THREE.Vector3().addVectors(new THREE.Vector3(...Object.values(mesh.bounds.min)), new THREE.Vector3(...Object.values(mesh.bounds.max))).multiplyScalar(0.5);
-  const shots = [['overview', [2.8, 2.7, 3.1], center.toArray()], ['curtains', [0.25, 1.65, -0.25], [-1.6, 1.55, -0.2]], ['painting', [-0.2, 1.85, 0.7], [-0.2, 1.85, -1.4]], ['shelf', [-0.2, 1.0, 0.7], [-0.2, 0.65, -1.4]], ['floor', [0.6, 2.7, 0.5], [-0.5, -0.14, -0.2]], ['side', [1.5, 1.7, -1.9], [-0.9, 1.2, -0.7]]];
+  const manifest = options.inspectionCameras ? JSON.parse(fs.readFileSync(path.resolve(options.inspectionCameras),'utf8')) : null;
+  const multiAngle = options.inspectionViews === 'multi-angle' || !!manifest;
+  const shots = manifest?.shots || (multiAngle ? inspectionShots(mesh,scan?.rawCapture) : [['overview', [2.8, 2.7, 3.1], center.toArray()], ['curtains', [0.25, 1.65, -0.25], [-1.6, 1.55, -0.2]], ['painting', [-0.2, 1.85, 0.7], [-0.2, 1.85, -1.4]], ['shelf', [-0.2, 1.0, 0.7], [-0.2, 0.65, -1.4]], ['floor', [0.6, 2.7, 0.5], [-0.5, -0.14, -0.2]], ['side', [1.5, 1.7, -1.9], [-0.9, 1.2,-.7]]]);
+  const fov=manifest?.fov || (multiAngle?65:48);
+  // Reuse this file for a baseline .bin replay: identical viewpoints are
+  // essential when checking parallax, exposed gaps, and disconnected layers.
+  fs.writeFileSync(path.join(out,'inspection-cameras.json'),JSON.stringify({fov,shots},null,2));
   for (const [name, position, target] of shots) {
-    const camera = new THREE.PerspectiveCamera(48, 4 / 3, 0.025, 100);
+    const camera = new THREE.PerspectiveCamera(fov, 4 / 3, 0.025, 100);
     camera.position.fromArray(position);
     camera.lookAt(...target);
     render(mesh, camera, path.join(out, name + '.png'));
-    if (['painting', 'floor', 'side'].includes(name)) render(mesh, camera, path.join(out, name + '-geometry.png'), true);
+    if (multiAngle || ['painting', 'floor', 'side'].includes(name)) render(mesh, camera, path.join(out, name + '-geometry.png'), true);
   }
   console.log(JSON.stringify({
     elapsedSeconds: (Date.now() - started) / 1000,
@@ -164,5 +188,6 @@ if (require.main === module) {
 }
 module.exports = {
   render,
-  writePng
+  writePng,
+  inspectionShots,
 };

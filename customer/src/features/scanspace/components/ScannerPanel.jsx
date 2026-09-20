@@ -69,6 +69,12 @@ const captureQualitySummary = (stats, fusion = null) => ({
   denoising: fusion?.denoising || null,
   synchronizedTextureFrames: fusion?.alignment?.synchronizedTextureFrames || 0,
   poseRefinement: fusion?.alignment?.poseRefinement || null,
+  jointPoseRefinement: fusion?.alignment?.jointPoseRefinement || null,
+  structuralDepth: fusion?.structuralDepth || null,
+  structuralRebuild: fusion?.structuralRebuild || null,
+  topology: fusion?.topologyAfterRepair || null,
+  recoveredCaptureGroups: fusion?.alignment?.componentRecovery || null,
+  surfaceRepair: fusion?.surfaceRepair || null,
 });
 
 function CoverageCompass({ sectors = [], heading = 0 }) {

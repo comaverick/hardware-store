@@ -135,3 +135,59 @@ node scripts/check-scanspace-planes.mjs C:/path/to/scanspace-scan.json
 ```
 
 This is a geometry-only inspection, not a raw-depth or photo-texture replay.
+
+### Algorithm 42: shared boundaries and evidence-gated reconstruction
+
+Raw imports and live surface completion share these changes:
+
+- Coherent rejected capture groups may be registered as a single rigid body.
+  The trusted component stays fixed. Recovery requires translated views,
+  horizontal AND vertical overlap, held-out improvement, bounded movement,
+  and reconnection to the normal overlap graph without losing the trusted core.
+- Broad floor/ceiling planes need agreement from at least three translated
+  views. Supported noisy depth is corrected along its original camera ray;
+  original depth is retained for independent repair validation. Empty pixels
+  never become measured observations, and adjusted rays cannot claim free space.
+- Shared corners are solved for all incident faces. If a corner correction is
+  unsafe or incompatible, its faces are not independently projected anyway.
+  This prevents a flattened patch from tearing away from an adjacent wall.
+- Supported horizontal footprints use shared triangulation. Only already
+  coplanar faces are replaced, using exact clipping; perpendicular baseboards,
+  object sides, separate levels and unobserved outer boundaries are preserved.
+  Candidate cells are checked at five positions against original depth.
+- Numerical T-junctions are split and exact duplicates removed before texturing.
+  Coincident points on crossing sheets alone do not establish adjacency.
+  Nearby layers are never welded just because they look adjacent from one camera.
+- Bounded, enclosed, supported planar holes can use concave triangulation.
+  Ceiling repairs require explicit multi-view plane support. The limits are
+  0.9 m diameter / 0.4 square metres; missing object faces are not fabricated.
+
+Diagnostics expose `alignment.componentRecovery`, `structuralDepth`,
+`structuralRebuild`, `topologyBeforeRepair`, `topologyAfterRepair`, and
+`surfaceRepair`. Boundary counts measure geometric adjacency independent of
+texture UV seams; they are diagnostics, not a watertightness guarantee.
+The same summaries are retained in live reviews and raw-file round trips.
+Re-import a raw export to reconstruct it; an already baked mesh does not contain
+the original depth needed by these passes.
+
+For reproducible visual checks, run the production pipeline and save six
+camera positions, both textured and geometry-only:
+
+```powershell
+node scripts/inspect-scanspace.cjs C:/path/to/raw-scan.json C:/path/to/after inspectionViews=multi-angle
+node scripts/inspect-scanspace.cjs C:/path/to/before/result.bin C:/path/to/comparison inspectionCameras=C:/path/to/after/inspection-cameras.json
+```
+
+Compare front, left, right, ceiling, ground and elevated views, not only the
+default view. The original capture is read-only. Outputs stay in the explicitly
+named local directory and include the camera manifest and reconstruction
+diagnostics. For ablation, append `recoverCaptureGroups=false`,
+`structuralDepth=false`, `structuralRebuild=false`, or `conformTopology=false`.
+
+The September 19 debugging capture still contains a rejected 11-frame group
+and uncertain ceiling/monitor-side depth. Version 42 improves the supported
+floor and shared boundaries, but does not turn this partial capture into a
+complete, distortion-free room. Larger gaps or genuinely unseen object sides
+still need targeted capture. The September 16 painting/curtain capture is also
+used as a relief-preservation regression; these surfaces must not be flattened
+into walls to conceal their remaining reconstruction errors.
