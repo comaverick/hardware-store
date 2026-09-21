@@ -77,8 +77,15 @@ const protect = async (req, res, next) => {
 
     next();
   } catch (error) {
-    return res.status(401).json({
-      message: "Not authorized. Invalid or expired token.",
+    if (["TokenExpiredError", "JsonWebTokenError", "NotBeforeError"].includes(error.name)) {
+      return res.status(401).json({
+        message: "Not authorized. Invalid or expired token.",
+      });
+    }
+
+    console.error("Session verification failed:", error.message);
+    return res.status(503).json({
+      message: "Unable to verify your session right now. Please try again shortly.",
     });
   }
 };

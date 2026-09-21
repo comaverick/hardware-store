@@ -7,6 +7,7 @@ import { useNavigate } from "react-router-dom";
 
 import api from "../../services/api";
 import { useAuth } from "../../context/AuthContext";
+import { SESSION_EXPIRED_MESSAGE } from "../../services/authSession";
 
 import "./Login.css";
 
@@ -18,7 +19,8 @@ const Login = () => {
 
   const navigate = useNavigate();
 
-  const { login } = useAuth();
+  const { login, sessionExpired } = useAuth();
+  const feedback = errorMessage || (sessionExpired ? SESSION_EXPIRED_MESSAGE : "");
 
   const handleLogin = async (values) => {
     try {
@@ -31,9 +33,9 @@ const Login = () => {
 
       message.success("Welcome back!");
 
-      navigate("/dashboard");
+      navigate("/dashboard", { replace: true });
     } catch (error) {
-      const nextErrorMessage = error.response?.data?.message || "Login failed";
+      const nextErrorMessage = error.userMessage || error.response?.data?.message || "Login failed";
 
       setErrorMessage(nextErrorMessage);
       message.error(nextErrorMessage);
@@ -77,12 +79,12 @@ const Login = () => {
               </div>
 
               <div
-                className={errorMessage ? "login-feedback login-feedback-visible" : "login-feedback"}
+                className={feedback ? "login-feedback login-feedback-visible" : "login-feedback"}
                 role="alert"
                 aria-live="assertive"
                 aria-atomic="true"
               >
-                {errorMessage}
+                {feedback}
               </div>
 
               <Form
