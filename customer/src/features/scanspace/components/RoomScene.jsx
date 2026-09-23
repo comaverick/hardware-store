@@ -786,7 +786,7 @@ export default function RoomScene({
             : "Drag to orbit · Pinch to zoom"}
       </span>
       <button className="ss-quality" onClick={() => setLow(!low)}>
-        {low ? "Battery saver" : "High quality"}
+        {low ? "Display: saver" : "Display: high"}
       </button>
     </div>
   );

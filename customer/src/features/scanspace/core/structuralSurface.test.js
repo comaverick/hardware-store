@@ -71,6 +71,32 @@ test('two stationary repeats cannot authorize a rebuilt footprint',()=>{
   expect(result.structuralRebuild.reconstructedArea).toBe(0);
 });
 
+test('a plane cell needs three independent observations before rebuilding',()=>{
+  const {mesh,plane,frames}=fixture();
+  for(const key of plane.cells.keys()) plane.cells.set(key,new Set([0,1]));
+  const result=rebuildStructuralSurfaces(mesh,[plane],frames,helpers);
+  expect(result.structuralRebuild.reconstructedArea).toBe(0);
+  expect(result.indices).toBe(mesh.indices);
+});
+
+test('rebuilt cells replace nearby owned fragments while preserving separate foreground geometry',()=>{
+  const {mesh,plane,frames}=fixture();
+  const base=mesh.positions.length/3;
+  mesh.positions=new Float32Array([...mesh.positions,
+    .3,.025,-.3, .42,.025,-.3, .3,.025,-.42,
+    .6,.15,-.6, .72,.15,-.6, .6,.15,-.72]);
+  mesh.indices=new Uint32Array([...mesh.indices,base,base+1,base+2,base+3,base+4,base+5]);
+  mesh.colors=new Uint8Array(mesh.positions.length).fill(90);
+  mesh.surfacePatchIds=new Int32Array([...mesh.surfacePatchIds,0,0]);
+  const result=rebuildStructuralSurfaces(mesh,[plane],frames,helpers);
+  expect(result.structuralRebuild.removedCompetingTriangles).toBeGreaterThan(0);
+  const trianglePositions=[];
+  for(let i=0;i<result.indices.length;i+=3)
+    trianglePositions.push([0,1,2].map(k=>result.positions[result.indices[i+k]*3+1]));
+  expect(trianglePositions.some(y=>y.every(value=>Math.abs(value-.15)<.001))).toBe(true);
+  expect(trianglePositions.some(y=>y.every(value=>Math.abs(value-.025)<.001))).toBe(false);
+});
+
 test('short evidence-supported runs reconnect neighboring planar patches',()=>{
   const {mesh,plane,frames}=fixture();
   for(let y=0;y<10;y++) plane.cells.delete(`5,${y}`);

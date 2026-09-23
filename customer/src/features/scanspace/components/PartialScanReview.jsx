@@ -8,9 +8,9 @@ import { buildScanCloud } from "../core/scanCloud";
 import { scanFusionOptions } from "../core/fusionOptions";
 import { createFusionWorker } from "../core/createFusionWorker";
 import {
-  MIN_CAMERA_BASELINE_METERS,
-  MIN_DIRECTION_COVERAGE,
+  MIN_SURFACE_CAMERA_BASELINE_METERS,
 } from "../core/readiness";
+import { auditCapture } from "../core/adaptiveCapture";
 
 const hasCheckedPreview = scan => !!(scan.mesh && scan.fusionDiagnostics &&
   scan.captureQuality?.captureAudit?.checkedReconstruction === true);
@@ -110,6 +110,9 @@ export default function PartialScanReview({
           surfaceRepair: fused.diagnostics?.surfaceRepair || null,
           structuralDepth: fused.diagnostics?.structuralDepth || null,
           structuralRebuild: fused.diagnostics?.structuralRebuild || null,
+          structuralRebuildValidation: fused.diagnostics?.structuralRebuildValidation || null,
+          untexturedEstimatedTriangles: fused.diagnostics?.untexturedEstimatedTriangles || 0,
+          captureAudit: auditCapture(scan.rawCapture.stats || {}, fused.diagnostics),
           topology: fused.diagnostics?.topologyAfterRepair || null,
           fragmentPruning: fused.diagnostics?.fragmentPruning || null,
           recoveredCaptureGroups: fused.diagnostics?.alignment?.componentRecovery || null,
@@ -147,6 +150,8 @@ export default function PartialScanReview({
   const displayScan = renderedScan || scan;
   const quality = displayScan.captureQuality;
   const repair = displayScan.mesh?.surfaceRepair || quality?.surfaceRepair;
+  const reviewMessages = new Set(displayScan.measuredReviewWarning?.issues?.map(issue => issue.message) || []);
+  const additionalAuditIssues = (quality?.captureAudit?.issues || []).filter(issue => !reviewMessages.has(issue));
   const rawRendering = !!scan.rawCapture && !renderedScan && !renderError;
   if (rawRendering)
     return (
@@ -217,20 +222,17 @@ export default function PartialScanReview({
           </p>
         )}
       </header>
-      {quality &&
-        (quality.coverage < MIN_DIRECTION_COVERAGE ||
-          quality.cameraBaseline < MIN_CAMERA_BASELINE_METERS) && (
+      {quality && quality.cameraBaseline > 0 &&
+        quality.cameraBaseline < MIN_SURFACE_CAMERA_BASELINE_METERS && (
           <div className="ss-notice ss-notice--guidance">
             <div className="ss-notice-title">
               <Info size={17} weight="fill" aria-hidden="true" />
               <strong>Capture coverage</strong>
             </div>
             <p>
-              This scan covers {quality.coverage}% of the heading sweep with {Math.round(
-                quality.cameraBaseline * 100,
-              )} cm of horizontal camera-position spread. ScanSpace only shows
-              supported surfaces and separately identifies estimated repairs; curved walls can indicate unreliable depth.
-              For the next scan, move sideways while keeping each wall in view.
+              The camera moved only {Math.round(quality.cameraBaseline * 100)} cm sideways.
+              More overlapping viewpoints from different positions can strengthen the captured surfaces.
+              A partial room sweep is fine; unscanned areas remain open.
             </p>
           </div>
         )}
@@ -262,6 +264,13 @@ export default function PartialScanReview({
           </p>
         </div>
       ) : null}
+      {!!additionalAuditIssues.length && <div className="ss-notice ss-notice--warning" role="status">
+        <div className="ss-notice-title">
+          <WarningCircle size={17} weight="fill" aria-hidden="true" />
+          <strong>Capture checks need review</strong>
+        </div>
+        <ul>{additionalAuditIssues.map(issue => <li key={issue}>{issue}</li>)}</ul>
+      </div>}
       {repair?.estimatedHoleCount > 0 && (
         <div className="ss-notice ss-notice--guidance" role="status">
           <strong>Estimated gap repairs</strong>
@@ -270,9 +279,9 @@ export default function PartialScanReview({
             These patches are estimates, not measured depth.</p>
         </div>
       )}
-      {quality?.structuralRebuild?.reconstructedArea > 0 && (
+      {quality?.structuralRebuild?.reconstructedArea > 0 && !quality.structuralRebuild.reverted && (
         <p className="ss-notice-detail" role="status">
-          Supported floor and ceiling regions were rebuilt from overlapping depth views.
+          Supported {quality.structuralRebuild.planes?.map(plane => plane.kind).filter((kind, index, kinds) => kinds.indexOf(kind) === index).join(" and ") || "horizontal"} regions were rebuilt from overlapping depth views.
           Check the sides and the ceiling in Walk inside; unscanned object faces remain open.
         </p>
       )}

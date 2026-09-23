@@ -51,6 +51,18 @@ export function captureFeedback(stats) {
   return stats.captureFeedback || captureFeedbackCandidate(stats);
 }
 
+// A recent-window signal can recover after the user slows down; the full
+// capture share is retained for the final quality audit.
+export function fastMotionShare(stats = {}, recentOnly = false) {
+  const diagnostics = stats.captureDiagnostics || {};
+  const recent = Array.isArray(diagnostics.recent) ? diagnostics.recent : [];
+  const attempts = recentOnly && recent.length ? recent.length : Number(diagnostics.attempts) || 0;
+  const rejected = recentOnly && recent.length
+    ? recent.filter(event => event.reason === "moving-too-fast").length
+    : Number(diagnostics.decisions?.["moving-too-fast"]) || 0;
+  return attempts >= 20 ? rejected / attempts : 0;
+}
+
 // Local, bounded telemetry: no images or coordinates. The same sanitizer is
 // used for exports and imports so a raw file cannot add unbounded event data.
 export function sanitizeCaptureDiagnostics(value) {

@@ -60,6 +60,11 @@ function outsideCell(polygon, x, y) {
   return outside;
 }
 export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options = {}) {
+  const minimumCellViews = Math.max(2, Number(options.minimumCellViews) || 3);
+  const replacementBandMeters = Math.max(
+    0.001,
+    Math.min(0.1, Number(options.replacementBandMeters) || 0.05),
+  );
   const diagnostics = {
     planes: [],
     removedTriangles: 0,
@@ -70,14 +75,17 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
     bridgedRuns: 0,
     estimatedHoleCount: 0,
     estimatedArea: 0,
-    estimatedTriangles: 0
+    estimatedTriangles: 0,
+    removedCompetingTriangles: 0,
+    minimumCellViews,
+    replacementBandMeters,
   };
   const patches = [];
   for (const plane of planes) {
     if (plane.kind === 'wall' || plane.supportingFrameIds.length < 3 || plane.area < .7) continue;
     const cell = plane.cellSize,
       occupied = new Map();
-    for (const [k, views] of plane.cells) if (views.size >= 2) occupied.set(k, {
+    for (const [k, views] of plane.cells) if (views.size >= minimumCellViews) occupied.set(k, {
       estimated: false
     });
     const coordinates = [...occupied.keys()].map(k => k.split(',').map(Number));
@@ -116,7 +124,7 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
       const [x, y] = k.split(',').map(Number);
       if ([[.5, .5], [.15, .15], [.85, .15], [.15, .85], [.85, .85]].some(([dx, dy]) => {
         const e = evidence(world(x + dx, y + dy));
-        return e.agrees < 2 || e.contradicts > Math.max(1, e.agrees * .25);
+        return e.agrees < minimumCellViews || e.contradicts > Math.max(1, e.agrees * .25);
       })) occupied.delete(k);
     }
     const visited = new Set();
@@ -140,7 +148,7 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
       if (boundary || group.length * cell * cell > .4) continue;
       if (group.some(([a, b]) => {
         const e = evidence(world(a + .5, b + .5));
-        return e.agrees < 2 || e.contradicts > 0;
+        return e.agrees < minimumCellViews || e.contradicts > 0;
       })) continue;
       diagnostics.estimatedHoleCount++;
       for (const [a, b] of group) occupied.set(key(a, b), {
@@ -158,7 +166,7 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
         if (!run.length || run.length > 3 || bridgeCells.size + run.length > maxBridgeCells) return;
         for (const [x, y] of run) {
           const e = evidence(world(x + .5, y + .5));
-          if (e.agrees < 2 || e.contradicts > 0) return;
+          if (e.agrees < minimumCellViews || e.contradicts > 0) return;
         }
         run.forEach(([x, y]) => bridgeCells.add(key(x, y)));
       };
@@ -202,13 +210,16 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
     // The grid and retained fragments must share EXACTLY the same plane.
     // Do not replace independently fitted, nearby sheets or perpendicular
     // furniture faces: lack of evidence is not permission to delete them.
-    const matching = (mesh.planarConsolidation?.planes || []).find(p => p.kind === plane.kind && dot(p.normal, plane.normal) > .999999 && Math.abs(p.offset - plane.offset) < 1e-5);
-    if (matching) patches.push({
+    const matchingPatchId = (mesh.planarConsolidation?.planes || []).findIndex(p =>
+      p.kind === plane.kind && dot(p.normal, plane.normal) > .999999 &&
+      Math.abs(p.offset - plane.offset) < 1e-5);
+    if (matchingPatchId >= 0) patches.push({
       plane,
       occupied,
       world,
       cell,
-      grid: gridComponents(occupied)
+      grid: gridComponents(occupied),
+      matchingPatchId,
     });
   }
   if (!patches.length) return {
@@ -218,7 +229,8 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
   const positions = Array.from(mesh.positions),
     colors = Array.from(mesh.colors || []),
     indices = [],
-    patchIds = [];
+    patchIds = [],
+    estimatedTriangleMask = [];
   const point = id => positions.slice(id * 3, id * 3 + 3);
   // Boundary vertices shared with perpendicular object/wall faces are kept;
   // only the supported floor/ceiling fragments themselves are replaced.
@@ -231,9 +243,14 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
     const replacement = patches.find(({
       plane,
       occupied,
-      cell
+      cell,
     }) => {
-      if (Math.abs(dot(n, plane.normal)) / l < .999 || !p.every(q => Math.abs(dot(plane.normal, q) - plane.offset) < 1e-5)) return false;
+      // A cell with confirmed structural depth owns nearby horizontal faces
+      // even when consolidation failed to label a torn fragment. The normal,
+      // distance band and occupied footprint keep walls and fixtures intact.
+      if (Math.abs(dot(n, plane.normal)) / l < .985) return false;
+      const maximumResidual = Math.max(...p.map(q => Math.abs(dot(plane.normal, q) - plane.offset)));
+      if (maximumResidual > replacementBandMeters) return false;
       const x = Math.floor(dot(plane.axes[0], center) / cell),
         y = Math.floor(dot(plane.axes[1], center) / cell);
       if (!occupied.has(key(x, y)) && !p.some(q => occupied.has(key(Math.floor(dot(plane.axes[0], q) / cell), Math.floor(dot(plane.axes[1], q) / cell))))) return false;
@@ -242,6 +259,7 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
     if (!replacement) {
       indices.push(...ids);
       patchIds.push(mesh.surfacePatchIds?.[t / 3] ?? -1);
+      estimatedTriangleMask.push(mesh.estimatedTriangleMask?.[t / 3] ? 1 : 0);
       continue;
     }
     const {
@@ -258,6 +276,8 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
       bounds = [Math.floor(Math.min(...xy.map(q => q[0]))), Math.floor(Math.min(...xy.map(q => q[1]))), Math.floor(Math.max(...xy.map(q => q[0]))), Math.floor(Math.max(...xy.map(q => q[1])))];
     for (let y = bounds[1]; y <= bounds[3]; y++) for (let x = bounds[0]; x <= bounds[2]; x++) if (occupied.has(key(x, y))) pieces = pieces.flatMap(polygon => outsideCell(polygon, x, y));
     diagnostics.removedTriangles++;
+    if (p.some(q => Math.abs(dot(plane.normal, q) - plane.offset) > 1e-5))
+      diagnostics.removedCompetingTriangles++;
     for (const polygon of pieces) {
       const base = positions.length / 3;
       for (const vertex of polygon) {
@@ -267,6 +287,7 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
       for (let k = 1; k < polygon.length - 1; k++) {
         indices.push(base, base + k, base + k + 1);
         patchIds.push(mesh.surfacePatchIds?.[t / 3] ?? -1);
+        estimatedTriangleMask.push(mesh.estimatedTriangleMask?.[t / 3] ? 1 : 0);
       }
     }
   }
@@ -319,6 +340,7 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
           d = vertex(x + (dx + 1) * .5, y + (dy + 1) * .5);
         if (plane.kind === 'floor') indices.push(a, b, c, b, d, c);else indices.push(a, c, b, b, c, d);
         patchIds.push(patchId, patchId);
+        estimatedTriangleMask.push(info.estimated ? 1 : 0, info.estimated ? 1 : 0);
         diagnostics.reconstructedTriangles += 2;
         if (info.estimated) diagnostics.estimatedTriangles += 2;
       }
@@ -338,6 +360,7 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
     indices: new Uint32Array(indices),
     colors: mesh.colors?.length ? new Uint8Array(colors) : mesh.colors,
     surfacePatchIds: new Int32Array(patchIds),
+    estimatedTriangleMask: new Uint8Array(estimatedTriangleMask),
     structuralRebuild: diagnostics,
     planarConsolidation: {
       ...(mesh.planarConsolidation || {}),

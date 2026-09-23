@@ -3,10 +3,8 @@ import {
   MIN_REGION_CONFIRMATION,
   MIN_REGION_OBSERVATIONS,
 } from "../core/adaptiveCapture";
-import {
-  MIN_DIRECTION_COVERAGE,
-  MIN_SURFACE_FUSION_KEYFRAMES,
-} from "../core/readiness";
+import { MIN_SURFACE_CAMERA_BASELINE_METERS, MIN_SURFACE_FUSION_KEYFRAMES } from "../core/readiness";
+import { fastMotionShare } from "../core/captureExperience";
 
 const regionIds = ["lower", "middle", "upper"];
 const names = {
@@ -41,7 +39,6 @@ export function captureProgressSummary(stats = {}) {
     state: regionState(region),
     percent: clampPercent(region.ratio * 100),
   }));
-  const sweep = clampPercent(stats.coverage);
   const overlap = clampPercent(
     Number.isFinite(coverage.ratio)
       ? coverage.ratio * 100
@@ -49,25 +46,28 @@ export function captureProgressSummary(stats = {}) {
   );
   const frames = Math.max(0, Number(stats.fusionKeyframes) || 0);
   const weak = normalized.find(region => region.state === "weak");
-  const unfinished = normalized.find(region =>
-    region.state === "unseen" || region.state === "building");
+  const building = normalized.find(region => region.state === "building");
+  const observed = normalized.some(region => region.observed > 0);
+  const movingTooFast = fastMotionShare(stats, true) >= 0.25;
+  const shortBaseline = Number.isFinite(stats.cameraBaseline) && frames >= MIN_SURFACE_FUSION_KEYFRAMES &&
+    stats.cameraBaseline < MIN_SURFACE_CAMERA_BASELINE_METERS;
   const hasCapture = frames >= 2 && adaptive.connected !== false;
   const reviewReady = frames >= MIN_SURFACE_FUSION_KEYFRAMES &&
-    adaptive.connected !== false && sweep >= MIN_DIRECTION_COVERAGE &&
-    !weak && !unfinished && !(adaptive.pendingCount || 0);
+    adaptive.connected !== false && observed && !weak && !building &&
+    !(adaptive.pendingCount || 0) && !movingTooFast && !shortBaseline;
   const checking = adaptive.state === "checking" || stats.currentViewChecked === false;
   let next = "Keep one surface in view and take a small step sideways.";
-  if (frames >= 2 && weak) {
+  if (movingTooFast) {
+    next = "Slow down and repeat the affected area with a small sideways move; many attempted views were rejected.";
+  } else if (shortBaseline) {
+    next = "Take a small sideways step while keeping the same surface in view to add depth from another position.";
+  } else if (frames >= 2 && weak) {
     next = `Aim at ${names[weak.id].long.toLowerCase()} and make another overlapping pass.`;
   } else if (frames >= 2 && frames < MIN_SURFACE_FUSION_KEYFRAMES) {
     const remaining = MIN_SURFACE_FUSION_KEYFRAMES - frames;
     next = `Keep moving sideways for ${remaining} more overlapping ${remaining === 1 ? "view" : "views"}.`;
-  } else if (frames >= MIN_SURFACE_FUSION_KEYFRAMES && unfinished) {
-    next = `For a fuller room scan, include ${names[unfinished.id].long.toLowerCase()}.`;
-  } else if (sweep < MIN_DIRECTION_COVERAGE) {
-    next = "Turn slowly toward a new part of the room while keeping some captured area visible.";
   } else if (reviewReady) {
-    next = "Coverage looks ready. Finish and review the result.";
+    next = "Your selected area has overlapping views. Finish and inspect the result.";
   }
   return {
     checking,
@@ -76,13 +76,13 @@ export function captureProgressSummary(stats = {}) {
     overlap,
     regions: normalized,
     reviewReady,
-    sweep,
+    frames,
   };
 }
 
 export function CaptureCoverage({ coverage }) {
   return (
-    <div className="ss-connected-coverage" aria-label="Coverage of observed surfaces">
+    <div className="ss-connected-coverage" aria-label="Overlap by view height; unscanned heights are optional">
       {normalizedRegions(coverage).map(region => {
         const state = regionState(region);
         const percent = clampPercent(region.ratio * 100);
@@ -97,7 +97,7 @@ export function CaptureCoverage({ coverage }) {
             ? "Another pass"
             : state === "building"
               ? "Keep scanning"
-              : "Not seen";
+              : "Not scanned";
         return (
           <div className={`ss-coverage-region is-${state}`} key={region.id}>
             <span>
@@ -127,18 +127,12 @@ export function CaptureProgress({ stats }) {
   return (
     <section className="ss-capture-progress" aria-label="Scan progress">
       <div className="ss-capture-progress-head">
-        <p><span>Room sweep</span><strong>{summary.sweep}%</strong></p>
+        <p><span>Saved depth views</span><strong>{summary.frames}</strong></p>
         <span className={`ss-capture-state ${summary.reviewReady ? "is-ready" : ""}`}>
           {stateLabel}
         </span>
       </div>
-      <progress
-        className="ss-room-sweep"
-        aria-label="Accepted room-direction sweep"
-        max="100"
-        value={summary.sweep}
-      />
-      <p className="ss-capture-overlap">Surface overlap <strong>{summary.overlap}%</strong></p>
+      <p className="ss-capture-overlap">Observed-surface overlap <strong>{summary.overlap}%</strong> · Unscanned areas may stay open.</p>
       <p className="ss-capture-next" id="ss-capture-next"><strong>Next:</strong> {summary.next}</p>
       <CaptureCoverage coverage={stats.adaptiveCapture?.coverage} />
     </section>

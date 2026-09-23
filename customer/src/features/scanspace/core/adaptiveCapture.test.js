@@ -264,4 +264,8 @@ test("finish audit accepts separate objects and flags alignment or structural ga
   expect(auditCapture(stats, { alignment: { disconnectedFrameIds: [5] } }).passed).toBe(false);
   expect(auditCapture(stats, { measuredReviewWarning: { issues: [{ code: "missing-depth", message: "Wall gap" }] } }).issues).toContain("Wall gap");
   expect(auditCapture({ ...stats, adaptiveCapture: { ...stats.adaptiveCapture, state: "recovering" } }).passed).toBe(false);
+  expect(auditCapture({ ...stats, captureDiagnostics: { attempts: 40,
+    decisions: { "moving-too-fast": 16 } } }).issues.join(" ")).toMatch(/fast motion/);
+  expect(auditCapture({ ...stats, cameraBaseline: .12 }).issues.join(" ")).toMatch(/too close together/);
+  expect(auditCapture(stats, { triangles: 10000, topologyAfterRepair: { nonManifoldEdges: 250 } }).issues.join(" ")).toMatch(/overlapping or torn edges/);
 });

@@ -2453,6 +2453,9 @@ export function fillSmallMeshHoles(mesh, options = {}) {
   const colors = Array.from(mesh.colors || []);
   const indices = Array.from(mesh.indices);
   const patches = mesh.surfacePatchIds ? Array.from(mesh.surfacePatchIds) : null;
+  const estimated = Array.from(
+    mesh.estimatedTriangleMask || new Uint8Array(mesh.indices.length / 3),
+  );
   const maxDiameter = options.maxDiameter || 0.42;
   const maxPerimeter = options.maxPerimeter || maxDiameter * 5.5;
   const maxPlanarity = options.maxPlanarity || 0.055;
@@ -2562,7 +2565,11 @@ export function fillSmallMeshHoles(mesh, options = {}) {
         if (options.allowRepair && samples.some(w => !options.allowRepair([0,1,2].map(axis => p.reduce((s,q,k) => s+q[axis]*w[k],0)),points))) return;
       }
       if (area < .0005 || area > (options.maxArea || .4)) return;
-      for (const face of triangles) { indices.push(...face.map(i => loop.vertices[i])); patches?.push(patch); }
+      for (const face of triangles) {
+        indices.push(...face.map(i => loop.vertices[i]));
+        patches?.push(patch);
+        estimated.push(1);
+      }
       addedArea += area; filledHoleCount++; filledHoleTriangles += triangles.length;
       return;
     }
@@ -2601,6 +2608,7 @@ export function fillSmallMeshHoles(mesh, options = {}) {
     }
     addedArea += holeArea;
     if (patches) loop.edges.forEach(() => patches.push(patch));
+    loop.edges.forEach(() => estimated.push(1));
     filledHoleCount++;
     filledHoleTriangles += loop.edges.length;
   });
@@ -2614,6 +2622,7 @@ export function fillSmallMeshHoles(mesh, options = {}) {
     filledHoleTriangles,
     filledHoleArea: addedArea,
     ...(patches ? { surfacePatchIds: new Int32Array(patches) } : {}),
+    estimatedTriangleMask: new Uint8Array(estimated),
   };
 }
 
@@ -2683,7 +2692,7 @@ export function pruneUnsupportedMeshBridges(mesh, voxelSize, options = {}) {
   const diagnostics = meshBridgeDiagnostics(mesh, voxelSize, options);
   if (!diagnostics.longEdgeTriangles)
     return { ...mesh, removedBridgeTriangles: 0, meshBridgeDiagnostics: diagnostics };
-  const kept = [];
+  const kept = [], keptEstimated = [];
   let removedArea = 0;
   const protectedIndexStart = diagnostics.checkedTriangles * 3;
   for (let index = 0; index < mesh.indices.length; index += 3) {
@@ -2692,11 +2701,13 @@ export function pruneUnsupportedMeshBridges(mesh, voxelSize, options = {}) {
     const third = mesh.indices[index + 2];
     if (index >= protectedIndexStart) {
       kept.push(first, second, third);
+      if (mesh.estimatedTriangleMask) keptEstimated.push(mesh.estimatedTriangleMask[index / 3] || 0);
       continue;
     }
     const edge = triangleMaximumEdge(mesh.positions, first, second, third);
     if (edge <= diagnostics.maxEdgeMeters) {
       kept.push(first, second, third);
+      if (mesh.estimatedTriangleMask) keptEstimated.push(mesh.estimatedTriangleMask[index / 3] || 0);
       continue;
     }
     const normal = meshTriangleNormal(mesh.positions, first, second, third);
@@ -2705,6 +2716,7 @@ export function pruneUnsupportedMeshBridges(mesh, voxelSize, options = {}) {
   return {
     ...mesh,
     indices: new Uint32Array(kept),
+    ...(mesh.estimatedTriangleMask ? { estimatedTriangleMask: new Uint8Array(keptEstimated) } : {}),
     surfaceArea: Math.max(0, (mesh.surfaceArea || 0) - removedArea),
     removedBridgeTriangles: diagnostics.longEdgeTriangles,
     meshBridgeDiagnostics: diagnostics,
@@ -4382,7 +4394,11 @@ export function texturedMesh(mesh, frames, precomputedCalibration = null, option
     faceNormal.y /= faceNormalLength;
     faceNormal.z /= faceNormalLength;
     const candidates = [];
+    const isEstimated = !!mesh.estimatedTriangleMask?.[index / 3];
     atlas.frames.forEach((frame) => {
+      // A filled crack has no original camera ray of its own. A nearby image
+      // can show a different surface even when its projected depth is close.
+      if (isEstimated) return;
       const colorProjection = projectColorWorld(
         frame,
         center.x,
@@ -4586,6 +4602,7 @@ export function texturedMesh(mesh, frames, precomputedCalibration = null, option
       area: faceNormalLength * 0.5,
       center: [center.x, center.y, center.z],
       patch: mesh.surfacePatchIds?.[index / 3] ?? -1,
+      estimated: isEstimated,
       candidates: viableCandidates,
       selected: 0,
       neighbors: [],
@@ -4790,6 +4807,7 @@ export function texturedMesh(mesh, frames, precomputedCalibration = null, option
   let texturedTriangles = 0;
   let recoveredTextureTriangles = 0;
   let softTextureFallbackTriangles = 0;
+  let untexturedEstimatedTriangles = 0;
   // Where a texture-valid triangle meets a color-only triangle, carry its
   // measured corner color into the fallback. Keep the best observation, never
   // average different camera images or propagate across gaps/folds.
@@ -4817,6 +4835,7 @@ export function texturedMesh(mesh, frames, precomputedCalibration = null, option
     const triangle = record.triangle;
     const best = record.candidates[record.selected] || null;
     if (best) texturedTriangles++;
+    if (record.estimated) untexturedEstimatedTriangles++;
     if (best?.recoveredTexture) recoveredTextureTriangles++;
     if (best && !best.qualityPreferred) softTextureFallbackTriangles++;
     // The atlas was photographed from one side of this thin measured sheet.
@@ -4856,7 +4875,8 @@ export function texturedMesh(mesh, frames, precomputedCalibration = null, option
           (tileX * atlas.strideX + atlas.strideX * 0.5) / atlas.width,
           (tileY * atlas.strideY + atlas.strideY * 0.5) / atlas.height,
         );
-        colors.push(fallbackColors[vertex * 3], fallbackColors[vertex * 3 + 1], fallbackColors[vertex * 3 + 2]);
+        if (record.estimated) colors.push(115, 122, 118);
+        else colors.push(fallbackColors[vertex * 3], fallbackColors[vertex * 3 + 1], fallbackColors[vertex * 3 + 2]);
       }
       indices.push(target);
     });
@@ -4871,6 +4891,7 @@ export function texturedMesh(mesh, frames, precomputedCalibration = null, option
     textureCoverage: mesh.indices.length ? Math.round(texturedTriangles / (mesh.indices.length / 3) * 100) : 0,
     recoveredTextureTriangles,
     softTextureFallbackTriangles,
+    untexturedEstimatedTriangles,
     textureProjectionMode,
     fallbackBoundaryVertices: boundaryScores.reduce((count, score) => count + (Number.isFinite(score) ? 1 : 0), 0),
     texturePatchCount,
@@ -4914,6 +4935,29 @@ export function refineTrajectoryPoses(frames, options = {}) {
       return [value.x, value.y, value.z];
     },
   }, options);
+}
+
+// A structural replacement is optional. Reject it if the resulting surface
+// is materially less connected or creates new ambiguous topology. Partial
+// scan boundaries are allowed, so this compares against the same capture
+// immediately before rebuilding rather than requiring a closed room.
+export function structuralRebuildRegression(before, after) {
+  const original = surfaceTopologyDiagnostics(before);
+  const candidate = surfaceTopologyDiagnostics(after);
+  const reasons = [];
+  if (!after.indices.length) reasons.push("empty-mesh");
+  if (candidate.disconnectedArea > original.disconnectedArea +
+    Math.max(0.12, original.disconnectedArea * 0.1))
+    reasons.push("disconnected-area");
+  if (candidate.dominantComponentAreaRatio < original.dominantComponentAreaRatio - 0.02)
+    reasons.push("dominant-component");
+  if (candidate.nonManifoldEdges > original.nonManifoldEdges +
+    Math.max(64, original.nonManifoldEdges * 0.1))
+    reasons.push("non-manifold-edges");
+  if (candidate.windingConflicts > original.windingConflicts +
+    Math.max(64, original.windingConflicts * 0.1))
+    reasons.push("winding-conflicts");
+  return { accepted: !reasons.length, reasons, before: original, after: candidate };
 }
 
 export function recoverOverlappingCaptures(frames, selection) {
@@ -5127,15 +5171,29 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   if (localLayerConsensus.diagnostics)
     alignment.localLayerConsensus = localLayerConsensus.diagnostics;
   const structuralPlanes = options.structuralDepth
-    ? discoverStructuralPlanes(usable, { floorY: options.floorY }) : [];
-  const structural = regularizeStructuralDepth(structuralPlanes.length ? [...usable,...extraTextureFrames] : [], structuralPlanes, {unproject:depthPosition});
+    ? discoverStructuralPlanes(usable, {
+      floorY: options.floorY,
+      // Broad plane discovery can use two local views once the plane itself
+      // has three translated observers. Moving depth and replacing geometry
+      // still require three independent observations in each cell.
+      minimumCellViews: options.structuralPlaneMinimumCellViews ?? 2,
+    }) : [];
+  const structural = regularizeStructuralDepth(
+    structuralPlanes.length ? [...usable, ...extraTextureFrames] : [],
+    structuralPlanes,
+    { unproject: depthPosition },
+    {
+      minimumCellViews: options.structuralCorrectionMinimumCellViews ?? 3,
+      maximumDisplacementMeters: options.maximumStructuralDisplacementMeters,
+    },
+  );
   if (structuralPlanes.length) {
     const ids = new Set(usable.map(f => f.frameId));
     usable = structural.frames.filter(f => ids.has(f.frameId));
     extraTextureFrames = structural.frames.filter(f => !ids.has(f.frameId));
   }
   const stages = {
-    algorithmVersion: 44,
+    algorithmVersion: 45,
     completionMode: options.completionMode === "surface" ? "surface" : "room",
     reconstructionProfile: options.reconstructionProfile || "quality",
     supportMode: "translated-camera-viewpoints",
@@ -5522,8 +5580,21 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       preserveDenoisedRelief: true,
     });
     stages.planarConsolidation = surface.planarConsolidation;
+    const beforeRebuild = surface;
     if (options.structuralRebuild) {
-      surface = rebuildStructuralSurfaces(surface,structuralPlanes,usable,{project:projectWorld,linearByte},{repairPlanarGaps:options.repairPlanarGaps});
+      const rebuildKinds = typeof options.structuralRebuildKinds === "string"
+        ? options.structuralRebuildKinds.split(",")
+        : options.structuralRebuildKinds;
+      const rebuildPlanes = Array.isArray(rebuildKinds)
+        ? structuralPlanes.filter(plane => rebuildKinds.includes(plane.kind))
+        : structuralPlanes;
+      surface = rebuildStructuralSurfaces(surface, rebuildPlanes, usable,
+        { project: projectWorld, linearByte },
+        {
+          repairPlanarGaps: options.repairPlanarGaps,
+          minimumCellViews: options.structuralRebuildMinimumCellViews ?? 3,
+          replacementBandMeters: options.structuralReplacementBandMeters,
+        });
       stages.structuralRebuild = surface.structuralRebuild;
     }
     if (options.conformTopology) {
@@ -5531,6 +5602,35 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       surface = conformSurfaceTopology(surface);
       stages.topologyRepair = surface.topologyRepair;
       stages.topologyAfterRepair = surfaceTopologyDiagnostics(surface);
+    }
+    if (stages.structuralRebuild?.reconstructedTriangles &&
+        options.structuralRebuildGuard !== false) {
+      // Compare like with like. Conforming T-junctions changes edge counts
+      // even with no structural rebuild, so both alternatives must receive
+      // the same topology pass before the guard makes its decision.
+      const fallback = options.conformTopology
+        ? conformSurfaceTopology(beforeRebuild)
+        : beforeRebuild;
+      const validation = structuralRebuildRegression(fallback, surface);
+      stages.structuralRebuildValidation = validation;
+      if (!validation.accepted) {
+        stages.structuralRebuild = { ...stages.structuralRebuild,
+          reverted: true, revertReasons: validation.reasons,
+          proposedArea: stages.structuralRebuild.reconstructedArea,
+          proposedTriangles: stages.structuralRebuild.reconstructedTriangles,
+          proposedRemovedTriangles: stages.structuralRebuild.removedTriangles,
+          proposedRemovedCompetingTriangles: stages.structuralRebuild.removedCompetingTriangles,
+          reconstructedArea: 0, reconstructedTriangles: 0,
+          removedTriangles: 0, removedCompetingTriangles: 0,
+          estimatedArea: 0, estimatedTriangles: 0, estimatedHoleCount: 0,
+          bridgedArea: 0, bridgedCells: 0, bridgedRuns: 0,
+          planes: [] };
+        surface = fallback;
+        if (options.conformTopology) {
+          stages.topologyRepair = surface.topologyRepair;
+          stages.topologyAfterRepair = validation.before;
+        }
+      }
     }
     if (options.repairPlanarGaps) {
       const previousCount = surface.filledHoleCount || 0;

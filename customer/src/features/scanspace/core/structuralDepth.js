@@ -1,4 +1,7 @@
 import { fitPlane } from './planarSurface';
+export const MIN_STRUCTURAL_CELL_VIEWS = 3;
+export const MAX_STRUCTURAL_DISPLACEMENT_METERS = 0.05;
+export const MIN_STRUCTURAL_CAMERA_BASELINE_METERS = 0.06;
 const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const sub = (a, b) => a.map((v, i) => v - b[i]);
 const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
@@ -11,6 +14,16 @@ const basis = n => {
   return [u, cross(n, u)];
 };
 const cameraDistance = (a, b) => length(sub(Array.from(a.camera), Array.from(b.camera)));
+function independentFrameIds(ids, framesById, minimumBaseline) {
+  const independent = [];
+  for (const id of ids) {
+    const frame = framesById.get(id);
+    if (!frame?.camera?.length) continue;
+    if (independent.every(other => cameraDistance(frame, other) >= minimumBaseline))
+      independent.push(frame);
+  }
+  return new Set(independent.map(frame => frame.frameId));
+}
 function samplesFor(frame) {
   const samples = [],
     w = frame.columns,
@@ -90,7 +103,9 @@ function planeCandidate(samples, kind, floorY, seed) {
   };
 }
 export function discoverStructuralPlanes(frames, {
-  floorY = NaN
+  floorY = NaN,
+  minimumCellViews = MIN_STRUCTURAL_CELL_VIEWS,
+  minimumCameraBaseline = MIN_STRUCTURAL_CAMERA_BASELINE_METERS,
 } = {}) {
   if (!Number.isFinite(floorY) || frames.length < 3) return [];
   const candidates = [];
@@ -110,8 +125,10 @@ export function discoverStructuralPlanes(frames, {
     if (used.has(seed)) continue;
     const group = candidates.filter(c => !used.has(c) && c.kind === seed.kind && dot(c.n, seed.n) > .993 && Math.abs(dot(seed.n, c.inliers[Math.floor(c.inliers.length / 2)].p) - seed.d) < (seed.kind === 'wall' ? .09 : .14));
     const independent = [];
-    for (const c of group) if (independent.every(other => cameraDistance(c.frame, other.frame) >= .06)) independent.push(c);
-    if (independent.length < 3) continue;
+    for (const c of group)
+      if (independent.every(other => cameraDistance(c.frame, other.frame) >= minimumCameraBaseline))
+        independent.push(c);
+    if (independent.length < Math.max(3, minimumCellViews)) continue;
     const records = independent.flatMap(c => c.inliers.filter((_, i) => i % 3 === 0).map(s => ({
       p: [s.p],
       center: s.p,
@@ -126,8 +143,14 @@ export function discoverStructuralPlanes(frames, {
       if (!cells.has(key)) cells.set(key, new Set());
       cells.get(key).add(c.frame.frameId);
     }
-    const supported = [...cells.values()].filter(ids => ids.size >= 2).length;
-    if (supported * .0144 < .65) continue;
+    const framesById = new Map(frames.map(frame => [frame.frameId, frame]));
+    for (const [key, ids] of cells)
+      cells.set(key, independentFrameIds(ids, framesById, minimumCameraBaseline));
+    const supported = [...cells.values()].filter(ids => ids.size >= minimumCellViews).length;
+    // Partial captures often include only a ceiling corner. Its observed
+    // footprint can be smaller than a wall/floor while still spanning three
+    // independent camera positions; never extrapolate beyond these cells.
+    if (supported * .0144 < (seed.kind === 'ceiling' ? .35 : .65)) continue;
     // Extend the footprint using nearby observations, but never over a stable
     // second height (a real step, beam or suspended panel). Each cell votes
     // once per camera view so dense sampling does not masquerade as evidence.
@@ -144,12 +167,13 @@ export function discoverStructuralPlanes(frames, {
         views.set(f.frameId, values);
       }
       for (const [k, views] of nearby) {
-        if (views.size < 3 || (cells.get(k)?.size || 0) >= 2) continue;
+        const independentIds = independentFrameIds(views.keys(), framesById, minimumCameraBaseline);
+        if (independentIds.size < minimumCellViews || (cells.get(k)?.size || 0) >= minimumCellViews) continue;
         const values = [...views.values()].map(v => v.reduce((s, x) => s + x, 0) / v.length).sort((a, b) => a - b);
         const median = values[Math.floor(values.length / 2)],
           spread = values[Math.floor(values.length * .8)] - values[Math.floor(values.length * .2)];
         if (Math.abs(median) > .09 || (Math.abs(median) > .045 && spread < .035)) continue;
-        cells.set(k, new Set(views.keys()));
+        cells.set(k, independentIds);
       }
     }
     group.forEach(c => used.add(c));
@@ -160,13 +184,14 @@ export function discoverStructuralPlanes(frames, {
       axes,
       cells,
       cellSize: .12,
+      minimumCellViews,
       supportingFrameIds: independent.map(c => c.frame.frameId),
       area: supported * .0144
     });
   }
   return planes;
 }
-export function structuralSupportAt(plane, p, minimum = 2) {
+export function structuralSupportAt(plane, p, minimum = MIN_STRUCTURAL_CELL_VIEWS) {
   const x = Math.floor(dot(plane.axes[0], p) / plane.cellSize),
     y = Math.floor(dot(plane.axes[1], p) / plane.cellSize);
   return (plane.cells.get(`${x},${y}`)?.size || 0) >= minimum;
@@ -175,7 +200,17 @@ export function structuralSupportAt(plane, p, minimum = 2) {
 // Correct depth along its original camera ray. An orthogonal vertex snap alone
 // would change the pixel/point correspondence and stretch its photograph.
 // Never turn an empty ray into measured support or change the original arrays.
-export function regularizeStructuralDepth(frames, planes, helpers) {
+export function regularizeStructuralDepth(frames, planes, helpers, {
+  maximumDisplacementMeters = MAX_STRUCTURAL_DISPLACEMENT_METERS,
+  minimumCellViews = MIN_STRUCTURAL_CELL_VIEWS,
+} = {}) {
+  const displacementLimit = Math.max(
+    0,
+    Math.min(
+      MAX_STRUCTURAL_DISPLACEMENT_METERS,
+      Number(maximumDisplacementMeters) || MAX_STRUCTURAL_DISPLACEMENT_METERS,
+    ),
+  );
   const diagnostics = {
     planes: planes.map(p => ({
       kind: p.kind,
@@ -186,6 +221,9 @@ export function regularizeStructuralDepth(frames, planes, helpers) {
     })),
     correctedSamples: 0,
     maxDisplacementMeters: 0,
+    maximumAllowedDisplacementMeters: displacementLimit,
+    minimumCellViews,
+    rejectedLargeCorrections: 0,
     frames: []
   };
   const corrected = frames.map(frame => {
@@ -194,9 +232,10 @@ export function regularizeStructuralDepth(frames, planes, helpers) {
       for (const plane of planes) {
         // Walls carry pictures and curtain relief. Their measured geometry is
         // handled by the relief-aware mesh pass; this depth pass is horizontal.
-        if (plane.kind === 'wall' || Math.abs(dot(plane.normal, s.n)) < .94 || !structuralSupportAt(plane, s.p)) continue;
+        if (plane.kind === 'wall' || Math.abs(dot(plane.normal, s.n)) < .94 ||
+          !structuralSupportAt(plane, s.p, minimumCellViews)) continue;
         const residual = dot(plane.normal, s.p) - plane.offset;
-        if (Math.abs(residual) > (plane.kind === 'floor' ? .2 : .26)) continue;
+        if (Math.abs(residual) > displacementLimit) continue;
         const ray = sub(s.p, Array.from(frame.camera)),
           denominator = dot(plane.normal, ray);
         if (Math.abs(denominator) / length(ray) < .18) continue;
@@ -205,7 +244,10 @@ export function regularizeStructuralDepth(frames, planes, helpers) {
         if (!(scale > .75 && scale < 1.25)) continue;
         const p = helpers.unproject(frame, s.i, depth),
           movement = length(sub(p, s.p));
-        if (movement > .28) continue;
+        if (movement > displacementLimit) {
+          diagnostics.rejectedLargeCorrections++;
+          continue;
+        }
         // A sharp local depth step may be a real riser, beam or fixture.
         const w = frame.columns,
           neighborhood = [s.i - 2, s.i + 2, s.i - 2 * w, s.i + 2 * w];

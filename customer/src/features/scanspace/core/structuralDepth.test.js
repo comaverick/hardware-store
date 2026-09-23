@@ -1,4 +1,5 @@
-import { discoverStructuralPlanes, regularizeStructuralDepth } from './structuralDepth';
+import { discoverStructuralPlanes, regularizeStructuralDepth,
+  MAX_STRUCTURAL_DISPLACEMENT_METERS } from './structuralDepth';
 
 function grid(frameId,height=()=>0) {
   const columns=36,rows=36,positions=[];
@@ -21,16 +22,33 @@ test('independent broad floor and ceiling measurements establish separate struct
 
 test('a supported warped depth sample moves along its original ray without mutating the capture',()=>{
   const frames=[0,1,2,3].map(i=>grid(i));
-  const warped=grid(4,()=>.07),before=warped.positions.slice();
+  const warped=grid(4,()=>.03),before=warped.positions.slice();
   const planes=discoverStructuralPlanes(frames,{floorY:0});
   const result=regularizeStructuralDepth([warped],planes,helpers);
   expect(result.diagnostics.correctedSamples).toBeGreaterThan(100);
-  const frame=result.frames[0],i=18*36+18;
+  const frame=result.frames[0];
+  const i=Array.from({length:frame.columns*frame.rows},(_,index)=>index)
+    .find(index=>Math.abs(frame.positions[index*3+1])<1e-5);
+  expect(i).toBeDefined();
   expect(frame.positions[i*3+1]).toBeCloseTo(0,5);
   expect(frame.originalFilteredDepth).toBe(warped.filteredDepth);
   expect(frame.freeSpaceMask[i]).toBe(0);
   expect(warped.positions).toEqual(before);
   expect(warped.filteredDepth[i]).toBe(2);
+  expect(result.diagnostics.maxDisplacementMeters).toBeLessThanOrEqual(MAX_STRUCTURAL_DISPLACEMENT_METERS);
+});
+
+test('large ceiling or floor displacement is left as measured instead of snapped to a plane',()=>{
+  const frames=[0,1,2,3].map(i=>grid(i));
+  const warped=grid(4,()=>.12),before=warped.positions.slice();
+  const planes=discoverStructuralPlanes(frames,{floorY:0});
+  const result=regularizeStructuralDepth([warped],planes,helpers);
+  expect(result.diagnostics.correctedSamples).toBe(0);
+  expect(result.frames[0].positions).toEqual(before);
+});
+
+test('two translated views do not authorize a structural footprint',()=>{
+  expect(discoverStructuralPlanes([grid(0),grid(1)],{floorY:0})).toHaveLength(0);
 });
 
 test('repeated stationary observations and desk tops cannot establish structural repairs',()=>{

@@ -1,5 +1,5 @@
 // Reconstruct a raw export using the application's parser and shared options.
-// Usage: node scripts/replay-scanspace.cjs <raw-scan.json>
+// Usage: node scripts/replay-scanspace.cjs <raw-scan.json> [key=value ...]
 // No capture files or application sources are modified.
 const fs = require("node:fs");
 const path = require("node:path");
@@ -35,8 +35,14 @@ if (require.main !== module) {
   const { fuseRgbdKeyframes } = load("src/features/scanspace/core/fusion.js");
   const scan = parsePartialScan(fs.readFileSync(path.resolve(process.argv[2]), "utf8"));
   if (!scan.rawCapture) throw new Error("A raw RGB-D export is required.");
+  const overrides = Object.fromEntries(process.argv.slice(3).filter(arg => arg.includes("=")).map(arg => {
+    const [key, ...value] = arg.split("=");
+    const raw = value.join("=");
+    try { return [key, JSON.parse(raw)]; } catch { return [key, raw]; }
+  }));
   const start = Date.now();
-  const result = fuseRgbdKeyframes(scan.rawCapture.keyframes, scanFusionOptions(scan.rawCapture));
+  const result = fuseRgbdKeyframes(scan.rawCapture.keyframes,
+    scanFusionOptions(scan.rawCapture, "surface", overrides));
   const d = result.diagnostics, mesh = result.mesh;
   console.log(JSON.stringify({
     elapsedSeconds: (Date.now() - start) / 1000,
@@ -52,6 +58,37 @@ if (require.main !== module) {
     } : null,
     synchronizedTextureFrames: d.alignment?.synchronizedTextureFrames,
     softTextureTriangles: d.softTextureFallbackTriangles,
+    untexturedEstimatedTriangles: d.untexturedEstimatedTriangles,
+    structuralDepth: d.structuralDepth && {
+      correctedSamples: d.structuralDepth.correctedSamples,
+      maxDisplacementMeters: d.structuralDepth.maxDisplacementMeters,
+      rejectedLargeCorrections: d.structuralDepth.rejectedLargeCorrections,
+      planes: d.structuralDepth.planes?.map(plane => ({ kind: plane.kind, area: plane.area,
+        views: plane.supportingFrameIds?.length })),
+    },
+    structuralRebuild: d.structuralRebuild && {
+      reconstructedArea: d.structuralRebuild.reconstructedArea,
+      removedCompetingTriangles: d.structuralRebuild.removedCompetingTriangles,
+      reverted: d.structuralRebuild.reverted || false,
+      revertReasons: d.structuralRebuild.revertReasons || [],
+    },
+    structuralRebuildValidation: d.structuralRebuildValidation && {
+      accepted: d.structuralRebuildValidation.accepted,
+      before: {
+        disconnectedArea: d.structuralRebuildValidation.before.disconnectedArea,
+        nonManifoldEdges: d.structuralRebuildValidation.before.nonManifoldEdges,
+      },
+      after: {
+        disconnectedArea: d.structuralRebuildValidation.after.disconnectedArea,
+        nonManifoldEdges: d.structuralRebuildValidation.after.nonManifoldEdges,
+      },
+    },
+    topology: d.topologyAfterRepair && {
+      nonManifoldEdges: d.topologyAfterRepair.nonManifoldEdges,
+      windingConflicts: d.topologyAfterRepair.windingConflicts,
+      disconnectedArea: d.topologyAfterRepair.disconnectedArea,
+      dominantComponentAreaRatio: d.topologyAfterRepair.dominantComponentAreaRatio,
+    },
     settings: d.fusionSettings,
   }, null, 2));
   if (!mesh) process.exitCode = 1;

@@ -1,4 +1,6 @@
 import { depthPosition, filterDepth, gridIndex, projectWorld, sampleProjectiveDepth } from "./fusion";
+import { fastMotionShare } from "./captureExperience";
+import { MIN_SURFACE_CAMERA_BASELINE_METERS } from "./readiness";
 
 export const ADAPTIVE_CAPTURE_VERSION = 2;
 export const MIN_REGION_OBSERVATIONS = 12;
@@ -442,6 +444,10 @@ export class AdaptiveCapture {
 
 export function auditCapture(stats, diagnostics = null) {
   const issues = [], capture = stats.adaptiveCapture;
+  if (fastMotionShare(stats) >= 0.25)
+    issues.push("Many attempted views were rejected for fast motion. Inspect the result for torn areas and repeat them slowly if possible.");
+  if (Number.isFinite(stats.cameraBaseline) && stats.cameraBaseline < MIN_SURFACE_CAMERA_BASELINE_METERS)
+    issues.push("Camera positions were too close together for strong depth overlap. Repeat the area from a small sideways step.");
   if (capture && !capture.connected) issues.push("The saved views need a reliable connection.");
   if (["recovering", "checking"].includes(capture?.state)) issues.push("The latest view could not be connected. Previously saved views are included.");
   if (capture?.pendingCount) issues.push(`${capture.pendingCount} unconfirmed views were left out of this result.`);
@@ -454,6 +460,9 @@ export function auditCapture(stats, diagnostics = null) {
   }
   if ((stats.fusionKeyframes || 0) < 6) issues.push("A few more overlapping viewpoints will strengthen this surface.");
   if (diagnostics?.alignment?.disconnectedFrameIds?.length) issues.push("Some views failed the final alignment check.");
+  const ambiguousEdges = diagnostics?.topologyAfterRepair?.nonManifoldEdges || 0;
+  if (ambiguousEdges >= 200 && ambiguousEdges / Math.max(1, diagnostics?.triangles || 0) >= 0.01)
+    issues.push("The reconstructed mesh has possible overlapping or torn edges. Inspect Geometry from the side before saving; depth points can help distinguish a reconstruction defect from missing capture data.");
   for (const issue of diagnostics?.measuredReviewWarning?.issues || []) {
     // Detached furniture is not evidence that the capture path is broken.
     if (issue.code !== "disconnected-mesh-patches" && issue.code !== "disconnected-capture-frames") issues.push(issue.message);

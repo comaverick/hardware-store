@@ -86,6 +86,8 @@ const captureQualitySummary = (stats, fusion = null) => ({
   jointPoseRefinement: fusion?.alignment?.jointPoseRefinement || null,
   structuralDepth: fusion?.structuralDepth || null,
   structuralRebuild: fusion?.structuralRebuild || null,
+  structuralRebuildValidation: fusion?.structuralRebuildValidation || null,
+  untexturedEstimatedTriangles: fusion?.untexturedEstimatedTriangles || 0,
   topology: fusion?.topologyAfterRepair || null,
   recoveredCaptureGroups: fusion?.alignment?.componentRecovery || null,
   surfaceRepair: fusion?.surfaceRepair || null,
@@ -405,7 +407,7 @@ export default function ScannerPanel({
             <ul>
               <li><Camera aria-hidden="true" size={20} weight="bold" /><span><strong>Move slowly</strong><small>Keep one surface in view as you take a small sideways step.</small></span></li>
               <li><ArrowsLeftRight aria-hidden="true" size={20} weight="bold" /><span><strong>Overlap each pass</strong><small>Keep part of the previous area visible while you turn.</small></span></li>
-              <li><SquaresFour aria-hidden="true" size={20} weight="bold" /><span><strong>Cover every height</strong><small>Include lower surfaces, walls and objects, then upper surfaces.</small></span></li>
+              <li><SquaresFour aria-hidden="true" size={20} weight="bold" /><span><strong>Choose your area</strong><small>Two walls, a floor, and a ceiling are fine. Unscanned space will stay open.</small></span></li>
             </ul>
           </section>
         )}

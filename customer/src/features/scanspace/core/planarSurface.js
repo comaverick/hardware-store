@@ -25,7 +25,7 @@ function recordsFor(mesh) {
     const normal = cross(sub(p[1], p[0]), sub(p[2], p[0]));
     const area = Math.hypot(...normal) / 2;
     if (area < 1e-10) continue;
-    records.push({ ids, p, normal: unit(normal), area,
+    records.push({ ids, p, sourceFace: i / 3, normal: unit(normal), area,
       center: [0, 1, 2].map((axis) => (p[0][axis] + p[1][axis] + p[2][axis]) / 3), plane: -1 });
   }
   return records;
@@ -324,10 +324,9 @@ function protectMeasuredRelief(group, plane, sourcePositions, frames, protectedV
 
 function detectPlanes(records, distanceLimit, options, protectedVertices) {
   const planes = [], ignored = new Set();
-  // Raw multi-view planes survive even when the extracted TSDF facets are too
-  // curled to vote for their true orientation. Restrict this wider correction
-  // to independently observed horizontal footprint cells; furniture and
-  // unobserved room bounds are never replaced by an infinite plane.
+  // Raw multi-view planes survive even when extracted facets are too curled
+  // to vote for their true orientation. Do not let this later mesh pass undo
+  // the bounded correction already applied to the depth samples.
   for (const support of options.structuralPlanes || []) {
     if (support.kind === 'wall' || support.supportingFrameIds.length < 3) continue;
     const plane = { n:support.normal, d:support.offset };
@@ -336,7 +335,7 @@ function detectPlanes(records, distanceLimit, options, protectedVertices) {
       return (support.cells.get(key)?.size || 0) >= 2;
     };
     const group = records.filter(r => r.plane < 0 && Math.abs(dot(r.normal,plane.n)) > .55 &&
-      r.p.every(p => Math.abs(dot(plane.n,p)-plane.d) < .18) && supported(r.center));
+      r.p.every(p => Math.abs(dot(plane.n,p)-plane.d) < .05) && supported(r.center));
     if (group.reduce((s,r) => s+r.area,0) < .6) continue;
     // Preserve actual beams/risers/fixtures using the same per-view relief
     // evidence as pictures and curtains. Numerical noise alone is not relief.
@@ -345,7 +344,7 @@ function detectPlanes(records, distanceLimit, options, protectedVertices) {
     if (eligible.reduce((s,r) => s+r.area,0) < .5) continue;
     const id = planes.length;
     planes.push({...plane,kind:support.kind,supportingFrameIds:support.supportingFrameIds,
-      maximumCorrection:.18});
+      maximumCorrection:.05});
     eligible.forEach(r => {r.plane=id;});
   }
   for (let pass = 0; pass < 12 && planes.length < 10; pass++) {
@@ -474,7 +473,8 @@ export function consolidatePlanarSurfaces(mesh, options = {}) {
   const planes = detectPlanes(records, distanceLimit, options, protectedVertices);
   // Protection discovered by another plane must also win at shared corners.
   for (const r of records) if (r.ids.some((id) => protectedVertices.has(id))) r.plane = -1;
-  const diagnostics = { version: 3, planes: [], protectedVertices: protectedVertices.size, correctedVertices: 0, removedOverlapArea: 0, inputTriangles: mesh.indices.length / 3, outputTriangles: mesh.indices.length / 3 };
+  const diagnostics = { version: 4, planes: [], protectedVertices: protectedVertices.size, correctedVertices: 0,
+    maxDisplacementMeters: 0, removedOverlapArea: 0, inputTriangles: mesh.indices.length / 3, outputTriangles: mesh.indices.length / 3 };
   const positions = new Float32Array(mesh.positions);
   if (options.sourcePositions && !options.preserveDenoisedRelief)
     for (const id of protectedVertices) positions.set(options.sourcePositions.subarray(id * 3, id * 3 + 3), id * 3);
@@ -503,7 +503,8 @@ export function consolidatePlanarSurfaces(mesh, options = {}) {
         const residual = dot(plane.n, q) - plane.d;
         q = q.map((v, i) => v - plane.n[i] * residual);
       }
-      const limit = Math.max(...values.map(p => p.maximumCorrection || distanceLimit * 1.5));
+      const limit = values.some(plane => plane.kind === 'floor' || plane.kind === 'ceiling')
+        ? .05 : Math.max(...values.map(plane => plane.maximumCorrection || distanceLimit * 1.5));
       if (Math.hypot(...sub(p, q)) > limit || values.some(p => Math.abs(dot(p.n,q)-p.d)>1e-6))
         rejected.add(id);
       else solutions.set(id,q);
@@ -512,9 +513,11 @@ export function consolidatePlanarSurfaces(mesh, options = {}) {
     for (const r of records) if (r.ids.some(id => rejected.has(id))) r.plane = -1;
   }
   for (const [id,q] of solutions) {
+    diagnostics.maxDisplacementMeters = Math.max(diagnostics.maxDisplacementMeters,
+      Math.hypot(...sub(Array.from(positions.subarray(id * 3, id * 3 + 3)), q)));
     positions.set(q,id*3); diagnostics.correctedVertices++;
   }
-  const outputPositions = [], outputIndices = [], outputPatches = [], attributes = {}, vertexLookup = new Map();
+  const outputPositions = [], outputIndices = [], outputPatches = [], outputEstimated = [], attributes = {}, vertexLookup = new Map();
   let outputArea = 0;
   for (const [name, size] of [['colors', 3], ['portableColors', 3], ['uvs', 2]])
     if (mesh[name]?.length === mesh.positions.length / 3 * size) attributes[name] = { size, values: [] };
@@ -551,6 +554,7 @@ export function consolidatePlanarSurfaces(mesh, options = {}) {
         let patch = r.plane;
         if (patch < 0) patch = planes.findIndex(plane => Math.abs(dot(plane.n, r.normal)) >= 0.35 && r.p.every(p => Math.abs(dot(plane.n, p) - plane.d) < 0.14));
         outputPatches.push(patch);
+        if (mesh.estimatedTriangleMask) outputEstimated.push(mesh.estimatedTriangleMask[r.sourceFace] || 0);
       }
     }
   };
@@ -598,7 +602,8 @@ export function consolidatePlanarSurfaces(mesh, options = {}) {
     diagnostics.planes.push({ normal: plane.n, offset: plane.d, inputArea: projectedArea, retainedArea, maxInputResidual: maxResidual,
       ...(plane.kind ? {kind:plane.kind,supportingFrameIds:plane.supportingFrameIds} : {}) });
   });
-  const result = { ...mesh, positions: new Float32Array(outputPositions), indices: new Uint32Array(outputIndices), surfacePatchIds: new Int32Array(outputPatches), planarConsolidation: diagnostics };
+  const result = { ...mesh, positions: new Float32Array(outputPositions), indices: new Uint32Array(outputIndices), surfacePatchIds: new Int32Array(outputPatches), planarConsolidation: diagnostics,
+    ...(mesh.estimatedTriangleMask ? { estimatedTriangleMask: new Uint8Array(outputEstimated) } : {}) };
   for (const [name, attribute] of Object.entries(attributes)) result[name] = new mesh[name].constructor(attribute.values);
   // Normals belong to the final topology, never to the discarded duplicate sheet.
   delete result.normals;

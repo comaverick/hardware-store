@@ -128,6 +128,14 @@ test("direct depth samples tolerate fused relief without crossing a deeper occlu
   expect(texturedMesh(occluded, [cameraFrame()]).textureCoverage).toBe(0);
 });
 
+test("estimated repair triangles stay neutral instead of borrowing a nearby photograph", () => {
+  const repaired = { ...triangleMesh(), estimatedTriangleMask: new Uint8Array([1]) };
+  const result = texturedMesh(repaired, [cameraFrame()]);
+  expect(result.textureCoverage).toBe(0);
+  expect(result.untexturedEstimatedTriangles).toBe(1);
+  expect(Array.from(result.colors)).toEqual([115, 122, 118, 115, 122, 118, 115, 122, 118]);
+});
+
 test("unrelated dark and bright camera views do not recolor one another", () => {
   const frames = [cameraFrame(60), cameraFrame(210, 20)];
   const result = texturedMesh(triangleMesh(), frames);

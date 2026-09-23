@@ -936,7 +936,7 @@ test("allows validated multi-view surface fusion without a room heading sweep", 
   expect(result.mesh?.kind).toBe("projective-tsdf-surface-net");
   expect(result.mesh?.triangleCount).toBeGreaterThan(0);
   expect(result.diagnostics.completionMode).toBe("surface");
-  expect(result.diagnostics.algorithmVersion).toBe(44);
+  expect(result.diagnostics.algorithmVersion).toBe(45);
   expect(result.diagnostics.planarConsolidation.planes.length).toBeGreaterThan(0);
   expect(result.diagnostics.globalSurfaceConsensus).toBeUndefined();
   expect(result.diagnostics.measuredSurfaceQuality.assessed).toBe(true);

@@ -1,8 +1,8 @@
 import { consolidatePlanarSurfaces } from './planarSurface';
 import { conformSurfaceTopology, surfaceTopologyDiagnostics } from './surfaceTopology';
 
-test('a supported horizontal correction keeps its shared wall corner attached',()=>{
-  const positions=new Float32Array([0,.14,0,1.2,.14,0,0,.14,-1.2,1.2,.14,-1.2,0,1.5,0,0,1.5,-1.2]);
+test('a supported bounded horizontal correction keeps its shared wall corner attached',()=>{
+  const positions=new Float32Array([0,.035,0,1.2,.035,0,0,.035,-1.2,1.2,.035,-1.2,0,1.5,0,0,1.5,-1.2]);
   const source={positions,indices:new Uint32Array([0,1,2,1,3,2,0,2,4,2,5,4]),colors:new Uint8Array(18)};
   const support={kind:'floor',normal:[0,1,0],offset:0,axes:[[1,0,0],[0,0,-1]],cellSize:.12,
     supportingFrameIds:[0,1,2],cells:new Map()};
@@ -13,7 +13,18 @@ test('a supported horizontal correction keeps its shared wall corner attached',(
   const lower=Array.from(result.positions).filter((_,i)=>i%3===1&&result.positions[i]<.5);
   expect(lower.length).toBeGreaterThan(0);
   expect(lower.every(y=>Math.abs(y)<1e-6)).toBe(true);
-  expect(source.positions[1]).toBeCloseTo(.14,5);
+  expect(source.positions[1]).toBeCloseTo(.035,5);
+});
+
+test('a distant horizontal fragment is not pulled onto a supported plane', () => {
+  const positions = new Float32Array([0,.14,0, 1.2,.14,0, 0,.14,-1.2, 1.2,.14,-1.2]);
+  const source = { positions, indices: new Uint32Array([0,1,2,1,3,2]), colors: new Uint8Array(12) };
+  const support = { kind: 'ceiling', normal: [0,1,0], offset: 0, axes: [[1,0,0],[0,0,-1]], cellSize: .12,
+    supportingFrameIds: [0,1,2], cells: new Map() };
+  for (let y = 0; y <= 10; y++) for (let x = 0; x <= 10; x++) support.cells.set(`${x},${y}`,new Set([0,1,2]));
+  const result = consolidatePlanarSurfaces(source,{ structuralPlanes: [support] });
+  expect(result.planarConsolidation.planes.some(plane => plane.kind === 'ceiling')).toBe(false);
+  expect(Array.from(result.positions).filter((_, index) => index % 3 === 1).every(y => y > .13)).toBe(true);
 });
 
 function sheet({ z = () => 0, origin = [0, 0, 0], rotate = false, hole = false, size = 2, step = 0.1 } = {}) {
@@ -44,6 +55,14 @@ function area(mesh) {
   }
   return value;
 }
+test('planar consolidation preserves estimated labels when it changes triangle topology', () => {
+  const source = sheet({ z: (x) => 0.015 * Math.sin(x * Math.PI) });
+  source.estimatedTriangleMask = new Uint8Array(source.indices.length / 3).fill(1);
+  const result = consolidatePlanarSurfaces(source);
+  expect(result.planarConsolidation.planes.length).toBeGreaterThan(0);
+  expect(result.estimatedTriangleMask).toHaveLength(result.indices.length / 3);
+  expect(Array.from(result.estimatedTriangleMask).every(Boolean)).toBe(true);
+});
 test('bowed, overlapping wall sheets become one exact plane without losing their unique extent', () => {
   const source = join(sheet({ z: (x) => 0.025 * Math.sin(x * Math.PI) }), sheet({ origin: [0.04, 0, 0.035], z: (x) => 0.02 * Math.sin(x * Math.PI) }));
   const before = new Float32Array(source.positions);

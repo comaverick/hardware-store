@@ -270,14 +270,16 @@ export function pruneUnsupportedFragments(mesh, frames, project, {
   }
   if (!removed.size)
     return { ...mesh, fragmentPruning: { removedComponents, removedArea } };
-  const indices = [], patches = [];
+  const indices = [], patches = [], estimated = [];
   for (let face = 0; face < count; face++) {
     if (removed.has(find(face))) continue;
     indices.push(...mesh.indices.subarray(face * 3, face * 3 + 3));
     if (mesh.surfacePatchIds) patches.push(mesh.surfacePatchIds[face]);
+    if (mesh.estimatedTriangleMask) estimated.push(mesh.estimatedTriangleMask[face]);
   }
   return { ...mesh, indices: new Uint32Array(indices),
     ...(mesh.surfacePatchIds ? { surfacePatchIds: new Int32Array(patches) } : {}),
+    ...(mesh.estimatedTriangleMask ? { estimatedTriangleMask: new Uint8Array(estimated) } : {}),
     surfaceArea: Math.max(0, (mesh.surfaceArea ?? [...groups.values()].reduce((sum, group) => sum + group.area, 0)) - removedArea),
     fragmentPruning: { removedComponents, removedArea } };
 }
@@ -350,6 +352,7 @@ export function conformSurfaceTopology(mesh, {
   const positions = [],
     indices = [],
     patches = [],
+    estimated = [],
     attributes = {},
     lookup = new Map(),
     faces = new Set();
@@ -373,7 +376,7 @@ export function conformSurfaceTopology(mesh, {
   let splitFaces = 0,
     duplicateFaces = 0,
     surfaceArea = 0;
-  const addFace = (a, b, c, patch) => {
+  const addFace = (a, b, c, patch, isEstimated) => {
     const key = [a, b, c].sort((x, y) => x - y).join(',');
     if (faces.has(key)) {
       duplicateFaces++;
@@ -385,6 +388,7 @@ export function conformSurfaceTopology(mesh, {
     faces.add(key);
     indices.push(a, b, c);
     patches.push(patch);
+    estimated.push(isEstimated ? 1 : 0);
     surfaceArea += area;
   };
   for (let t = 0; t < mesh.indices.length; t += 3) {
@@ -404,11 +408,13 @@ export function conformSurfaceTopology(mesh, {
       }
     }
     const patch = mesh.surfacePatchIds?.[t / 3] ?? -1;
-    if (!split) addFace(...polygon, patch);else {
+    const isEstimated = mesh.estimatedTriangleMask?.[t / 3] || 0;
+    if (!split) addFace(...polygon, patch, isEstimated);else {
       splitFaces++;
       const center = [0, 1, 2].map(axis => source.reduce((s, id) => s + mesh.positions[id * 3 + axis] / 3, 0));
       const id = append(center, source, [1 / 3, 1 / 3, 1 / 3]);
-      for (let k = 0; k < polygon.length; k++) addFace(id, polygon[k], polygon[(k + 1) % polygon.length], patch);
+      for (let k = 0; k < polygon.length; k++)
+        addFace(id, polygon[k], polygon[(k + 1) % polygon.length], patch, isEstimated);
     }
   }
   const result = {
@@ -416,6 +422,7 @@ export function conformSurfaceTopology(mesh, {
     positions: new Float32Array(positions),
     indices: new Uint32Array(indices),
     surfacePatchIds: new Int32Array(patches),
+    estimatedTriangleMask: new Uint8Array(estimated),
     surfaceArea,
     topologyRepair: {
       splitFaces,

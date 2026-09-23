@@ -265,7 +265,7 @@ export default function PartialScanScene({ scan, compact = false }) {
         aria-pressed={low}
         onClick={() => setLow((value) => !value)}
       >
-        {low ? "Battery saver" : "High quality"}
+        {low ? "Display: saver" : "Display: high"}
       </button>}
     </div>
   );
