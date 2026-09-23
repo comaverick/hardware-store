@@ -27,16 +27,20 @@ export or guarantee a closed mesh of unseen object faces.
   pass the original geometry tests. Drop causes are counted separately.
 - At the 60-view limit, only graph-safe redundant views can be removed. If none
   can be removed safely, the user is prompted to save this section.
-- Coverage describes observed surfaces, not a percentage of the entire room.
-  Unseen regions remain "Not seen". Details are optional, and an unchecked
-  current view is shown as checking, not as lost saved progress.
+- The live progress panel separates accepted room-direction sweep from confirmed
+  overlap on observed surfaces. Unseen regions remain "Not seen", completed
+  lower/wall/upper regions stay marked as covered, and the weakest area becomes
+  the next suggested target. Routine view checking is a passive saved-state
+  update rather than a replacement for the primary scanning instruction.
   Sharing a voxel is not sufficient confirmation: the depth must agree along
   the projected camera ray. Current-view confirmation needs two independently
   positioned, retained depth views; a stationary unsaved frame cannot add votes.
-- One primary instruction is shown at a time. Non-critical warnings wait 800 ms
-  and repeated prompts have a 3-second cooldown; good observations clear warnings
-  immediately. The amber target is only shown with actual reconnection guidance,
-  never as a routine coverage obligation. Coordinate-reset warnings are immediate.
+- One primary instruction is shown at a time. Non-critical warnings wait 1.8
+  seconds and repeated prompts have a 4.5-second cooldown. A completed-area
+  message remains visible for four seconds, while a sustained warning can still
+  replace it. The amber target is only shown with directional reconnection
+  guidance, never as a routine coverage obligation. Coordinate-reset warnings
+  are immediate.
 - Review builds the saved, connected result directly and shows an orbitable
   preview before asking to save or continue. Coverage/alignment concerns remain
   in an expandable audit, with explicit partial save. Separate furniture alone
@@ -46,7 +50,7 @@ export or guarantee a closed mesh of unseen object faces.
 - Raw exports retain capture IDs, validated links, and a bounded quality summary.
   Imported links are diagnostic metadata, never a substitute for reconstruction
   validation. Provisional observations are not exported as confirmed geometry.
-- Bounded local diagnostics include per-reason decisions, useful commits,
+- Development-only local diagnostics include per-reason decisions, useful commits,
   elapsed/active/recovery time, prompt counts, age/capacity/redundancy drops,
   actual motion-gate peaks and thresholds, and sampled motion for comparison.
   Only the last 48 decision summaries are retained, without images or camera
@@ -72,8 +76,8 @@ node scripts/preview-capture-feedback.cjs
 ```
 
 This serves static snapshots of the actual capture components and stylesheet
-at `http://127.0.0.1:3977/layout`, including `/tracking`, `/checking`, `/motion`,
-`/recovering`, and `/review`. Sensor values and the review scene are simulated;
+at `http://127.0.0.1:3977/layout`, including `/start`, `/tracking`, `/checking`,
+`/motion`, `/recovering`, and `/review`. Sensor values and the review scene are simulated;
 action buttons are non-interactive snapshots, and no camera or scan files are
 accessed. Restart after JSX edits; CSS is read on each request.
 Use the component tests for button behavior and a real phone for sensor checks.

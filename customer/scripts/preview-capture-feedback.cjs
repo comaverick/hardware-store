@@ -13,6 +13,13 @@ global.window = dom.window;
 global.document = dom.window.document;
 global.IS_REACT_ACT_ENVIRONMENT = true;
 const React = require("react");
+const iconModule = new Proxy({ __esModule: true }, { get(target, name) {
+  if (name === "__esModule") return true;
+  return function PreviewIcon({ size = 16, weight, mirrored, ...props }) {
+    return React.createElement("span", { ...props, "data-preview-icon": String(name),
+      style: { display: "inline-block", width: size, height: size, border: "1px solid currentColor", borderRadius: 3 } });
+  };
+} });
 const { createRoot } = require("react-dom/client");
 const rootDirectory = path.resolve(__dirname, "..");
 const cache = new Map();
@@ -51,6 +58,7 @@ function load(file) {
   loaded.paths = Module._nodeModulePaths(path.dirname(file));
   cache.set(file, loaded);
   loaded.require = id => {
+    if (id === "@phosphor-icons/react") return iconModule;
     if (!id.startsWith(".")) return require(id);
     const base = path.resolve(path.dirname(file), id);
     return load(require.resolve(fs.existsSync(`${base}.jsx`) ? `${base}.jsx` : base));
@@ -67,13 +75,14 @@ async function fixture(name) {
   activeStats = {
     tracking: true, depthActive: true, depthCurrent: true, depthState: "active", floorY: 0,
     floorAutoDetected: true, fusionKeyframes: 12, cameraBaseline: 0.5, stablePointCount: 1600,
+    coverage: 58,
     currentViewChecked: !(recovering || checking || moving),
     currentConfirmedRatio: recovering || checking || moving ? 0 : 0.72, connectedSurfaceCoverage: 65,
     movingTooFast: moving, frameQuality: moving ? "moving-too-fast" : recovering ? "overlap-lost" : "connected",
     features: [], errors: [], colorActive: true, captureProfile: "careful",
-    recoveryDirection: "Turn gently left toward your last scanned area.",
+    recoveryDirection: "Hold still and turn slowly left toward your last scanned area.",
     adaptiveCapture: { connected: true, state: recovering ? "recovering" : checking ? "checking" : "tracking", pendingCount: recovering ? 4 : 0,
-      coverage: { regions: [
+      coverage: { ratio: 0.65, regions: [
         { id: "lower", observed: 100, confirmed: 70, ratio: 0.7 },
         { id: "middle", observed: 160, confirmed: 140, ratio: 0.875 },
         { id: "upper", observed: 80, confirmed: 16, ratio: 0.2 },
@@ -89,8 +98,8 @@ async function fixture(name) {
     if (!button) throw new Error(`Missing fixture action: ${label}`);
     button.click();
   });
-  await click("Start camera scan");
-  if (name === "review") await click("Review scan");
+  if (name !== "start") await click("Start camera scan");
+  if (name === "review") await click("Finish & review");
   const markup = document.getElementById("root").innerHTML;
   await React.act(() => root.unmount());
   return markup;
@@ -98,7 +107,7 @@ async function fixture(name) {
 
 (async () => {
   const pages = new Map();
-  for (const name of ["tracking", "checking", "motion", "recovering", "review"]) pages.set(`/${name}`, await fixture(name));
+  for (const name of ["start", "tracking", "checking", "motion", "recovering", "review"]) pages.set(`/${name}`, await fixture(name));
   const cssPath = path.join(rootDirectory, "src/features/scanspace/scanspace.css");
   const server = http.createServer((request, response) => {
     const url = new URL(request.url, "http://127.0.0.1");
@@ -109,8 +118,9 @@ async function fixture(name) {
       return;
     }
     const markup = pages.get(url.pathname);
+    const previewBackground = url.pathname === "/start" ? "#fafbf8" : "#35453e";
     response.writeHead(markup ? 200 : 404, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
-    response.end(markup ? `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Simulated capture layout</title><style>body{margin:0;font-family:Arial,sans-serif}*{box-sizing:border-box}${fs.readFileSync(cssPath, "utf8")}.ss-app{background:#35453e}</style></head><body><main class="ss-app">${markup}</main></body></html>` : "Use /layout, /tracking, /checking, /motion, /recovering, or /review. Sensor data is simulated.");
+    response.end(markup ? `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Simulated capture layout</title><style>body{margin:0;font-family:Arial,sans-serif}*{box-sizing:border-box}${fs.readFileSync(cssPath, "utf8")}.ss-app{background:${previewBackground}}</style></head><body><main class="ss-app">${markup}</main></body></html>` : "Use /layout, /start, /tracking, /checking, /motion, /recovering, or /review. Sensor data is simulated.");
   });
   const port = Number(process.argv[2]) || 3977;
   server.listen(port, "127.0.0.1", () => console.log(`Static capture UI fixtures: http://127.0.0.1:${port}/tracking (PID ${process.pid})`));

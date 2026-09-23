@@ -1,5 +1,6 @@
-const WARNING_DELAY_MS = 800;
-const PROMPT_COOLDOWN_MS = 3000;
+const WARNING_DELAY_MS = 1800;
+const PROMPT_COOLDOWN_MS = 4500;
+const COMPLETION_HOLD_MS = 4000;
 const MAX_RECENT_DECISIONS = 48;
 const states = ["starting", "tracking", "checking", "recovering", "tracking-lost", "paused"];
 const reasons = ["connected", "starting", "moving-too-fast", "sparse-depth", "near-field-obstruction",
@@ -11,8 +12,8 @@ const measurements = ["gateLinearSpeed", "gateAngularSpeed", "maxLinearSpeed", "
   "upperResidual", "captureIntervalMs", "processingMs"];
 const number = value => Number.isFinite(value) ? Math.max(0, Math.min(1e12, value)) : 0;
 const counts = (value, keys) => Object.fromEntries(keys.map(key => [key, number(value?.[key])]));
-const checking = () => ({ code: "checking", tone: "pending", label: "Checking this view",
-  hint: "Your captured area is kept while this view is checked." });
+const scanning = () => ({ code: "scanning", tone: "active", label: "Scanning",
+  hint: "Move slowly and keep part of the last captured area in view." });
 
 // One source for the live instruction. The scanner applies timing below; the
 // pure fallback also serves restored/legacy status snapshots and UI fixtures.
@@ -20,30 +21,30 @@ export function captureFeedbackCandidate(stats) {
   const capture = stats.adaptiveCapture;
   if (stats.originChanged) return { code: "reset", tone: "warning", immediate: true,
     label: "Camera position reset", hint: "Start a new scan to keep the surfaces aligned." };
-  if (stats.paused) return { code: "paused", tone: "busy", label: "Scan paused", hint: "Your captured area is kept." };
+  if (stats.paused) return { code: "paused", tone: "busy", label: "Scan paused", hint: "Your capture is saved. Resume when you are ready." };
   if (stats.depthState === "unavailable") return { code: "unsupported", tone: "warning", immediate: true,
     label: "Depth is unavailable", hint: "This device cannot capture depth in this browser." };
   if (!stats.tracking) return { code: "tracking", tone: "warning", label: "Finding your position",
-    hint: "Point toward an area you already scanned." };
+    hint: "Hold still and point toward an area you already scanned." };
   if (!stats.depthCurrent || stats.depthState === "error") return { code: "depth", tone: "warning",
-    label: "Waiting for the camera", hint: "Keep a well-lit surface in view. Your captured area is kept." };
+    label: "Waiting for the camera", hint: "Hold still with a well-lit surface in view." };
   if (stats.movingTooFast) return { code: "motion", tone: "warning", label: "Move a little more slowly",
-    hint: "Your captured area is kept. Continue when the view settles." };
+    hint: "Pause briefly, then continue with a slow sideways movement." };
   if (capture?.capacityReached) return { code: "capacity", tone: "warning", immediate: true,
     label: "This section is captured", hint: "Review and save this section before starting another." };
   if (capture?.state === "recovering") {
-    if (stats.frameQuality === "confirming-recovery") return { ...checking(), label: "Checking the connection" };
+    if (stats.frameQuality === "confirming-recovery") return scanning();
     return { code: "reconnect", tone: "warning", label: "Reconnect this view",
-      hint: stats.recoveryDirection || "Point back toward the last area you scanned." };
+      hint: stats.recoveryDirection || "Hold still and point back toward the last area you scanned." };
   }
   if (["sparse-depth", "near-field-obstruction"].includes(stats.frameQuality)) return {
-    code: "depth", tone: "warning", label: "This surface is hard to capture", hint: "Try a different angle or continue to another surface." };
+    code: "depth", tone: "warning", label: "This surface is hard to capture", hint: "Step back slightly and try a small side angle." };
   if (capture?.state === "starting" || (stats.fusionKeyframes || 0) < 2) return {
     code: "starting", tone: "pending", label: "Getting started", hint: "Move a little sideways with the same surface in view." };
-  if (capture?.state === "checking" || stats.currentViewChecked === false) return checking();
+  if (capture?.state === "checking" || stats.currentViewChecked === false) return scanning();
   if ((stats.currentConfirmedRatio || 0) >= 0.85) return { code: "confirmed", tone: "complete",
     label: "This area has good coverage", hint: "Continue to another area, or review your scan." };
-  return { code: "scanning", tone: "active", label: "Scanning", hint: "Move around the surfaces you want to include." };
+  return scanning();
 }
 
 export function captureFeedback(stats) {
@@ -103,11 +104,19 @@ export class CaptureExperience {
       this.candidateCode = candidate.code;
       this.candidateSince = now;
     }
+    if (candidate.code === "confirmed") {
+      this.completedFeedback = candidate;
+      this.completedHoldUntil = now + COMPLETION_HOLD_MS;
+    }
     let feedback = candidate;
     if (candidate.tone === "warning" && !candidate.immediate &&
         (now - this.candidateSince < WARNING_DELAY_MS ||
           (this.feedback?.code !== candidate.code && now - (this.lastPromptAt.get(candidate.code) ?? -Infinity) < PROMPT_COOLDOWN_MS))) {
-      feedback = checking();
+      feedback = this.completedHoldUntil > now && this.completedFeedback
+        ? this.completedFeedback
+        : scanning();
+    } else if (candidate.code === "scanning" && this.completedHoldUntil > now && this.completedFeedback) {
+      feedback = this.completedFeedback;
     }
     if (feedback.tone === "warning" && feedback.code !== this.feedback?.code) {
       this.lastPromptAt.set(feedback.code, now);

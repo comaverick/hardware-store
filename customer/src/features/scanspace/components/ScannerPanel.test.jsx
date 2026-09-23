@@ -51,14 +51,22 @@ async function startPanel() {
   const onSurface = jest.fn();
   render(<ScannerPanel capabilities={{ ar: true, secure: true }} onSurface={onSurface} onCancel={jest.fn()} />);
   fireEvent.click(screen.getByRole("button", { name: "Start camera scan" }));
-  await screen.findByRole("button", { name: "Review scan" });
+  await screen.findByRole("button", { name: "Finish & review" });
   return onSurface;
 }
+
+test("the pre-scan guide explains movement, overlap, and height coverage", () => {
+  render(<ScannerPanel capabilities={{ ar: true, secure: true }} onSurface={jest.fn()} onCancel={jest.fn()} />);
+  expect(screen.getByRole("heading", { name: "Before you start" })).toBeInTheDocument();
+  expect(screen.getByText("Move slowly")).toBeInTheDocument();
+  expect(screen.getByText("Overlap each pass")).toBeInTheDocument();
+  expect(screen.getByText("Cover every height")).toBeInTheDocument();
+});
 
 test("weak coverage builds the preview directly, preserves frames, and can resume", async () => {
   result.stats.adaptiveCapture.coverage.regions[0].ratio = 0.3;
   const onSurface = await startPanel();
-  fireEvent.click(screen.getByRole("button", { name: "Review scan" }));
+  fireEvent.click(screen.getByRole("button", { name: "Finish & review" }));
   expect(await screen.findByRole("status", { name: "Capture review" })).toBeInTheDocument();
   expect(scanner.paused).toBe(true);
   expect(createFusionWorker).toHaveBeenCalledTimes(1);
@@ -73,7 +81,7 @@ test("weak coverage builds the preview directly, preserves frames, and can resum
 test("explicit partial save retains the failed audit and original raw capture", async () => {
   result.stats.adaptiveCapture.pendingCount = 2;
   const onSurface = await startPanel();
-  fireEvent.click(screen.getByRole("button", { name: "Review scan" }));
+  fireEvent.click(screen.getByRole("button", { name: "Finish & review" }));
   fireEvent.click(await screen.findByRole("button", { name: "Save partial scan" }));
   await waitFor(() => expect(onSurface).toHaveBeenCalledTimes(1));
   const saved = onSurface.mock.calls[0][0];
@@ -86,7 +94,7 @@ test("explicit partial save retains the failed audit and original raw capture", 
 test("final reconstruction rechecks disconnections even when live coverage passed", async () => {
   diagnostics = { alignment: { disconnectedFrameIds: [4] } };
   const onSurface = await startPanel();
-  fireEvent.click(screen.getByRole("button", { name: "Review scan" }));
+  fireEvent.click(screen.getByRole("button", { name: "Finish & review" }));
   expect(await screen.findByText("Some views failed the final alignment check.")).toBeInTheDocument();
   expect(onSurface).not.toHaveBeenCalled();
   expect(scanner.paused).toBe(true);
@@ -97,7 +105,7 @@ test("final reconstruction rechecks disconnections even when live coverage passe
 
 test("a clean scan can be inspected before saving without reconstructing twice", async () => {
   const onSurface = await startPanel();
-  fireEvent.click(screen.getByRole("button", { name: "Review scan" }));
+  fireEvent.click(screen.getByRole("button", { name: "Finish & review" }));
   const save = await screen.findByRole("button", { name: "Save scan" });
   expect(onSurface).not.toHaveBeenCalled();
   expect(await screen.findByTestId("scan-preview")).toBeInTheDocument();
@@ -109,21 +117,22 @@ test("a clean scan can be inspected before saving without reconstructing twice",
   });
 });
 
-test("checking a view keeps saved progress visible and gives one instruction", async () => {
+test("checking a view keeps saved progress visible and gives one stable instruction", async () => {
   result.stats.currentViewChecked = false;
   result.stats.currentConfirmedRatio = 0;
   result.stats.adaptiveCapture.state = "checking";
   await startPanel();
-  expect(screen.getByText("Your captured area is kept")).toBeInTheDocument();
-  expect(screen.getByRole("status")).toHaveTextContent("Checking this view");
+  expect(screen.getByText("Checking new view")).toBeInTheDocument();
+  expect(screen.getByRole("status")).toHaveTextContent("Scanning");
   expect(screen.queryByText("0% of this view has confirmed overlap.")).not.toBeInTheDocument();
   expect(screen.queryByText(/Keep moving until the visible surface/)).not.toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Review scan" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "Finish & review" })).toBeEnabled();
+  expect(screen.queryByText("Device diagnostics")).not.toBeInTheDocument();
 });
 
 test.each(["during", "after"])("the captured result can be saved if XR ends %s reconstruction", async timing => {
   const onSurface = await startPanel();
-  fireEvent.click(screen.getByRole("button", { name: "Review scan" }));
+  fireEvent.click(screen.getByRole("button", { name: "Finish & review" }));
   if (timing === "after") await screen.findByTestId("scan-preview");
   act(() => scanner.onEnd());
   expect(await screen.findByTestId("scan-preview")).toBeInTheDocument();
@@ -139,7 +148,7 @@ test("a preview failure keeps the checked capture and save controls available", 
   try {
     mockPreviewUnavailable = true;
     const onSurface = await startPanel();
-    fireEvent.click(screen.getByRole("button", { name: "Review scan" }));
+    fireEvent.click(screen.getByRole("button", { name: "Finish & review" }));
     expect(await screen.findByText(/The preview could not open/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Save scan" }));
     await waitFor(() => expect(onSurface).toHaveBeenCalledTimes(1));
@@ -150,7 +159,7 @@ test("a preview failure keeps the checked capture and save controls available", 
 
 test("a reference-space reset during review does not discard the preview or allow resume", async () => {
   await startPanel();
-  fireEvent.click(screen.getByRole("button", { name: "Review scan" }));
+  fireEvent.click(screen.getByRole("button", { name: "Finish & review" }));
   await screen.findByTestId("scan-preview");
   scanner.originChanged = result.stats.originChanged = true;
   act(() => scanner.publish());
@@ -162,11 +171,11 @@ test("a reference-space reset during review does not discard the preview or allo
 test("a tracking reset cannot be bypassed with finish or resume", async () => {
   result.stats.originChanged = true;
   await startPanel();
-  expect(screen.getByRole("button", { name: "Review scan" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Finish & review" })).toBeDisabled();
   result.stats.originChanged = false;
   act(() => scanner.publish());
   scanner.result.mockImplementation(() => { throw new Error("Tracking origin changed. Start a new scan."); });
-  fireEvent.click(screen.getByRole("button", { name: "Review scan" }));
+  fireEvent.click(screen.getByRole("button", { name: "Finish & review" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("Tracking origin changed");
   expect(createFusionWorker).not.toHaveBeenCalled();
 });

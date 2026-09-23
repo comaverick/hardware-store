@@ -1,6 +1,8 @@
 import { depthPosition, filterDepth, gridIndex, projectWorld, sampleProjectiveDepth } from "./fusion";
 
 export const ADAPTIVE_CAPTURE_VERSION = 2;
+export const MIN_REGION_OBSERVATIONS = 12;
+export const MIN_REGION_CONFIRMATION = 0.55;
 const OVERLAP_GRACE_MS = 900;
 const RECOVERY_EVIDENCE_MS = 1800;
 const PENDING_AGE_MS = 8000;
@@ -199,7 +201,7 @@ export function connectedCoverage(frames) {
     return { id, observed: values.length, confirmed, ratio: confirmed / Math.max(1, values.length) };
   });
   const confirmed = [...cells.values()].filter(cell => cell.confirmed).length;
-  const weakest = regions.filter(region => region.observed >= 12).sort((a, b) => a.ratio - b.ratio)[0];
+  const weakest = regions.filter(region => region.observed >= MIN_REGION_OBSERVATIONS).sort((a, b) => a.ratio - b.ratio)[0];
   const target = weakest && [...cells.values()].find(cell => cell.region === weakest.id && !cell.confirmed)?.point;
   return { observed: cells.size, confirmed, ratio: confirmed / Math.max(1, cells.size), regions, target: target || null };
 }
@@ -447,7 +449,8 @@ export function auditCapture(stats, diagnostics = null) {
   const coverage = capture?.coverage;
   const labels = { upper: "Upper surfaces", middle: "Walls and objects", lower: "Lower surfaces" };
   for (const region of coverage?.regions || []) {
-    if (region.observed >= 12 && region.ratio < 0.55) issues.push(`${labels[region.id]} have limited overlapping coverage.`);
+    if (region.observed >= MIN_REGION_OBSERVATIONS && region.ratio < MIN_REGION_CONFIRMATION)
+      issues.push(`${labels[region.id]} have limited overlapping coverage.`);
   }
   if ((stats.fusionKeyframes || 0) < 6) issues.push("A few more overlapping viewpoints will strengthen this surface.");
   if (diagnostics?.alignment?.disconnectedFrameIds?.length) issues.push("Some views failed the final alignment check.");

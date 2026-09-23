@@ -7,17 +7,17 @@ test("a short shake is quiet; sustained motion gets one prompt that clears immed
   const experience = new CaptureExperience(), stats = good();
   expect(experience.update(stats, 0).code).toBe("scanning");
   const moving = { ...stats, movingTooFast: true, currentViewChecked: false };
-  expect(experience.update(moving, 100).code).toBe("checking");
+  expect(experience.update(moving, 100).code).toBe("scanning");
   expect(experience.update(stats, 300).code).toBe("scanning");
   expect(experience.snapshot().promptCount).toBe(0);
   experience.update(moving, 400);
-  expect(experience.update(moving, 1300).code).toBe("motion");
-  expect(experience.update(moving, 1600).code).toBe("motion");
-  expect(experience.update(stats, 1700).code).toBe("scanning");
-  experience.update(moving, 1800);
-  expect(experience.update(moving, 2700).code).toBe("checking");
+  expect(experience.update(moving, 2100).code).toBe("scanning");
+  expect(experience.update(moving, 2300).code).toBe("motion");
+  expect(experience.update(stats, 2400).code).toBe("scanning");
+  experience.update(moving, 2500);
+  expect(experience.update(moving, 4400).code).toBe("scanning");
   expect(experience.snapshot().prompts.motion).toBe(1);
-  expect(experience.update(moving, 4400).code).toBe("motion");
+  expect(experience.update(moving, 6900).code).toBe("motion");
   expect(experience.snapshot().prompts.motion).toBe(2);
 });
 
@@ -25,10 +25,19 @@ test("reconnection guidance waits through a hiccup and disappears when overlap i
   const experience = new CaptureExperience();
   const stats = { ...good(), currentViewChecked: false, adaptiveCapture: { state: "recovering" },
     recoveryDirection: "Turn gently left toward your last scanned area." };
-  expect(experience.update(stats, 0).code).toBe("checking");
-  expect(experience.update(stats, 900)).toMatchObject({ code: "reconnect", hint: stats.recoveryDirection });
-  expect(experience.update({ ...stats, frameQuality: "confirming-recovery" }, 1000).code).toBe("checking");
-  expect(captureFeedback({ ...good(), currentViewChecked: false }).label).toBe("Checking this view");
+  expect(experience.update(stats, 0).code).toBe("scanning");
+  expect(experience.update(stats, 1700).code).toBe("scanning");
+  expect(experience.update(stats, 1900)).toMatchObject({ code: "reconnect", hint: stats.recoveryDirection });
+  expect(experience.update({ ...stats, frameQuality: "confirming-recovery" }, 2000).code).toBe("scanning");
+  expect(captureFeedback({ ...good(), currentViewChecked: false }).label).toBe("Scanning");
+});
+
+test("good coverage stays visible long enough to be understood", () => {
+  const experience = new CaptureExperience();
+  const confirmed = { ...good(), currentConfirmedRatio: 0.9 };
+  expect(experience.update(confirmed, 0).code).toBe("confirmed");
+  expect(experience.update(good(), 1000).code).toBe("confirmed");
+  expect(experience.update(good(), 4100).code).toBe("scanning");
 });
 
 test("tracking reset overrides motion guidance immediately and stale depth cannot request slowing", () => {
@@ -36,7 +45,8 @@ test("tracking reset overrides motion guidance immediately and stale depth canno
   expect(experience.update({ ...good(), originChanged: true, movingTooFast: true }, 0).code).toBe("reset");
   const noDepth = { ...good(), depthCurrent: false, movingTooFast: true };
   experience.update(noDepth, 100);
-  expect(experience.update(noDepth, 1000).code).toBe("depth");
+  expect(experience.update(noDepth, 1800).code).toBe("scanning");
+  expect(experience.update(noDepth, 2000).code).toBe("depth");
 });
 
 test("diagnostics distinguish gate peaks, useful commits, recovery time and paused time", () => {

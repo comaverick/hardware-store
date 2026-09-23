@@ -1,4 +1,5 @@
 import { Component, lazy, Suspense, useEffect, useRef, useState } from "react";
+import { ArrowsLeftRight, Camera, SquaresFour } from "@phosphor-icons/react";
 import { RoomScanner } from "../xr/RoomScanner";
 import { buildScanCloud } from "../core/scanCloud";
 import { snapshotDepthCapture, downloadDepthCapture } from "../core/captureDebug";
@@ -7,9 +8,10 @@ import { scanFusionOptions } from "../core/fusionOptions";
 import ScanRenderProgress from "./ScanRenderProgress";
 import { auditCapture } from "../core/adaptiveCapture";
 import { captureFeedback } from "../core/captureExperience";
-import { CaptureAuditNotice, CaptureCoverage } from "./CaptureFeedback";
+import { CaptureAuditNotice, CaptureProgress } from "./CaptureFeedback";
 import { createFusionWorker } from "../core/createFusionWorker";
 const PartialScanScene = lazy(() => import("./PartialScanScene"));
+const SHOW_SCAN_DIAGNOSTICS = process.env.NODE_ENV === "development";
 
 class CapturePreviewBoundary extends Component {
   state = { failed: false };
@@ -101,6 +103,7 @@ export default function ScannerPanel({
     debugCapture = useRef(null),
     reviewing = useRef(false),
     finished = useRef(false),
+    lastFeedbackCode = useRef(""),
     [active, setActive] = useState(false),
     [busy, setBusy] = useState(false),
     [stats, setStats] = useState({
@@ -116,6 +119,13 @@ export default function ScannerPanel({
   const hasReconstructableCapture = (stats.fusionKeyframes || 0) >= 2 &&
     stats.adaptiveCapture?.connected !== false;
   const targetState = captureFeedback(stats);
+  useEffect(() => {
+    if (!active || busy || partial || lastFeedbackCode.current === targetState.code) return;
+    lastFeedbackCode.current = targetState.code;
+    if (typeof navigator === "undefined" || typeof navigator.vibrate !== "function") return;
+    if (targetState.tone === "warning") navigator.vibrate(45);
+    if (targetState.tone === "complete") navigator.vibrate([20, 45, 20]);
+  }, [active, busy, partial, targetState.code, targetState.tone]);
   useEffect(
     () => () => {
       fusionWorker.current?.terminate();
@@ -128,6 +138,7 @@ export default function ScannerPanel({
     setError("");
     setPartial(null);
     reviewing.current = false;
+    lastFeedbackCode.current = "";
     setBusy(true);
     finished.current = false;
     const s = new RoomScanner({
@@ -384,10 +395,20 @@ export default function ScannerPanel({
               : active
                 ? stats.paused
                   ? "Scanning paused."
-                  : "Your captured area stays available as you move."
+                  : "Move slowly and overlap each pass."
               : "Your scan stays on this phone during capture. Depth and captured colors depend on the capabilities granted by your browser."}
           </p>
         </div>
+        {!active && !busy && !partial && (
+          <section className="ss-scan-guide" aria-labelledby="ss-scan-guide-title">
+            <h3 id="ss-scan-guide-title">Before you start</h3>
+            <ul>
+              <li><Camera aria-hidden="true" size={20} weight="bold" /><span><strong>Move slowly</strong><small>Keep one surface in view as you take a small sideways step.</small></span></li>
+              <li><ArrowsLeftRight aria-hidden="true" size={20} weight="bold" /><span><strong>Overlap each pass</strong><small>Keep part of the previous area visible while you turn.</small></span></li>
+              <li><SquaresFour aria-hidden="true" size={20} weight="bold" /><span><strong>Cover every height</strong><small>Include lower surfaces, walls and objects, then upper surfaces.</small></span></li>
+            </ul>
+          </section>
+        )}
         {!active && !busy && !partial && (
           <div className="ss-actions">
             <button onClick={onCancel}>Back</button>
@@ -402,21 +423,7 @@ export default function ScannerPanel({
         )}
         {(active || partial) && !busy && (
           <>
-            {!partial && <div className="ss-capture-progress">
-              <p className="ss-capture-saved">
-                <i className={hasReconstructableCapture ? "is-saved" : ""} aria-hidden="true" />
-                {hasReconstructableCapture ? "Your captured area is kept" : "Building your first captured area"}
-              </p>
-              <details className="ss-capture-coverage-details">
-                <summary>Coverage details</summary>
-                <CaptureCoverage coverage={stats.adaptiveCapture?.coverage} />
-                <p>These percentages describe surfaces you have shown the camera, not the whole room.</p>
-                <p>{stats.currentViewChecked
-                  ? `${Math.round((stats.currentConfirmedRatio || 0) * 100)}% of this view has confirmed overlap.`
-                  : "The current view is being checked. Saved coverage is kept."}</p>
-                <p>Mint marks confirmed coverage. You can review the captured area whenever you are ready.</p>
-              </details>
-            </div>}
+            {!partial && <CaptureProgress stats={stats} />}
             <div className="ss-scan-bottom">
               {!partial && <div className={`ss-scanning-target is-${targetState.tone}`} role="status" aria-live="polite" aria-atomic="true">
                 <i aria-hidden="true" />
@@ -448,10 +455,11 @@ export default function ScannerPanel({
                   </button>
                   <button
                     className="ss-primary"
+                    aria-describedby="ss-capture-next"
                     disabled={busy || stats.originChanged || !hasReconstructableCapture}
                     onClick={finishScan}
                   >
-                    Review scan
+                    Finish &amp; review
                   </button>
                 </div>
               ) : (
@@ -498,7 +506,7 @@ export default function ScannerPanel({
             {error}
           </p>
         )}
-        {!busy && (
+        {!busy && SHOW_SCAN_DIAGNOSTICS && (
           <details className="ss-diagnostics">
             <summary>Device diagnostics</summary>
             <dl>

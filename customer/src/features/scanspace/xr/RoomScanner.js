@@ -35,7 +35,7 @@ function coverageSplatTexture() {
 }
 
 export function coveragePreviewSize(voxelSize = 0.08) {
-  return Math.max(0.09, Math.min(0.22, voxelSize * 1.5));
+  return Math.max(0.045, Math.min(0.11, voxelSize * 0.85));
 }
 
 export const MAX_FUSION_KEYFRAMES = 60;
@@ -477,7 +477,7 @@ export class RoomScanner {
         map: this.pointTexture,
         alphaTest: 0.01,
         transparent: true,
-        opacity: 0.22,
+        opacity: 0.16,
         depthWrite: false,
         toneMapped: false,
       });
@@ -920,9 +920,9 @@ export class RoomScanner {
     if (!target) return;
     this.recoveryMarker.position.fromArray(target);
     const local = new THREE.Vector3().fromArray(target).applyMatrix4(new THREE.Matrix4().fromArray(view.transform.matrix).invert());
-    this.stats.recoveryDirection = local.z > 0 ? "Turn back toward the last area you scanned." :
-      Math.abs(local.x) > Math.abs(local.z) * 0.3 ? (local.x > 0 ? "Turn gently right toward your last scanned area." : "Turn gently left toward your last scanned area.") :
-      Math.abs(local.y) > Math.abs(local.z) * 0.3 ? (local.y > 0 ? "Aim a little higher toward your last scanned area." : "Aim a little lower toward your last scanned area.") : "Keep this area in view for a moment while the connection is checked.";
+    this.stats.recoveryDirection = local.z > 0 ? "Hold still and turn back toward the last area you scanned." :
+      Math.abs(local.x) > Math.abs(local.z) * 0.3 ? (local.x > 0 ? "Hold still and turn slowly right toward your last scanned area." : "Hold still and turn slowly left toward your last scanned area.") :
+      Math.abs(local.y) > Math.abs(local.z) * 0.3 ? (local.y > 0 ? "Hold still and aim a little higher toward your last scanned area." : "Hold still and aim a little lower toward your last scanned area.") : "Hold this area in view while the connection is checked.";
   }
   updatePreview() {
     const allPoints = this.cloud.values();

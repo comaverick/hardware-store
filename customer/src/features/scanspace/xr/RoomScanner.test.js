@@ -93,10 +93,10 @@ test("stationary unsaved frames cannot turn the preview green", () => {
   expect(scanner.stats.errors).toEqual([]);
 });
 
-test("confirmed coverage splats overlap a normal preview voxel without becoming huge", () => {
-  expect(coveragePreviewSize(0.08)).toBeGreaterThan(0.08);
-  expect(coveragePreviewSize(0.08)).toBeLessThanOrEqual(0.12);
-  expect(coveragePreviewSize(0.18)).toBeLessThanOrEqual(0.22);
+test("confirmed coverage splats stay smaller than the measured surface detail", () => {
+  expect(coveragePreviewSize(0.08)).toBeGreaterThanOrEqual(0.045);
+  expect(coveragePreviewSize(0.08)).toBeLessThan(0.08);
+  expect(coveragePreviewSize(0.18)).toBeLessThanOrEqual(0.11);
 });
 
 test("higher-resolution texture snapshots stay bounded without dropping depth frames", () => {
@@ -515,7 +515,7 @@ test("an out-and-back shake is rejected even when the sampled depth poses are id
   expect(event.sampledLinearSpeed).toBe(0);
   expect(event.gateLinearSpeed).toBeGreaterThan(event.maxLinearSpeed);
   expect(event.matched).toBe(false);
-  expect(scanner.stats.captureFeedback.code).toBe("checking");
+  expect(scanner.stats.captureFeedback.code).toBe("confirmed");
 });
 
 test("three brief motion skips preserve the saved map and resume without recovery prompts", () => {
@@ -580,6 +580,9 @@ test("the amber target is reserved for sustained reconnection, not routine cover
   scanner.updateRecoveryTarget(view);
   expect(scanner.recoveryMarker.visible).toBe(false);
   scanner.updateExperience(2300);
+  scanner.updateRecoveryTarget(view);
+  expect(scanner.recoveryMarker.visible).toBe(false);
+  scanner.updateExperience(3300);
   scanner.updateRecoveryTarget(view);
   expect(scanner.recoveryMarker.visible).toBe(true);
   expect(scanner.stats.recoveryDirection).not.toMatch(/amber/);
