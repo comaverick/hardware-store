@@ -48,6 +48,19 @@ test('a ceiling gap requires explicit independent raw-depth support', () => {
   expect(fillSmallMeshHoles(source,{...options,supportedPlanes:[{...plane,supportingFrameIds:[1,2]}]}).filledHoleCount).toBe(0);
 });
 
+test('a bounded hole on a measured slanted panel needs plane support and depth agreement', () => {
+  const source=grid((x,y)=>x===4&&y===5);
+  for(let i=2;i<source.positions.length;i+=3)
+    source.positions[i]=source.positions[i-1]*.3;
+  const length=Math.hypot(.3,1);
+  const panel={normal:[0,-.3/length,1/length],offset:0,
+    retainedArea:.4,maxInputResidual:.06};
+  const allowRepair=()=>true;
+  expect(fillSmallMeshHoles(source,{...options,supportedPlanes:[panel],allowRepair}).filledHoleCount).toBe(1);
+  expect(fillSmallMeshHoles(source,{...options,supportedPlanes:[panel],allowRepair:()=>false}).filledHoleCount).toBe(0);
+  expect(fillSmallMeshHoles(source,{...options,supportedPlanes:[{...panel,retainedArea:.1}],allowRepair}).filledHoleCount).toBe(0);
+});
+
 test('supported concave gaps use interior triangles rather than a crossing fan', () => {
   const source=grid((x,y)=>(y===3&&x>=3&&x<=5)||((x===3||x===5)&&y>=3&&y<=5));
   const result=fillSmallMeshHoles(source,{...options,triangulateConcave:true});

@@ -25,3 +25,10 @@ test.each([false, true])("an imported or unchecked raw file still goes through r
   unmount();
   expect(worker.terminate).toHaveBeenCalledTimes(1);
 });
+
+test("review reports remaining disconnected area without calling every separate object a defect", () => {
+  render(<PartialScanReview scan={{ mesh: { triangleCount: 12 },
+    captureQuality: { topology: { disconnectedArea: .4, disconnectedComponentCount: 8 } } }} />);
+  expect(screen.getByText(/8 surface islands remain/)).toBeInTheDocument();
+  expect(screen.getByText(/Separate objects can be legitimate/)).toBeInTheDocument();
+});

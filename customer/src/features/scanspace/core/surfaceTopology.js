@@ -110,6 +110,8 @@ function connectivityFromGeometry(mesh, edges) {
     dominantComponentAreaRatio: dominantArea / Math.max(1e-9, totalArea),
     disconnectedComponentCount: Math.max(0, entries.length - 1),
     disconnectedArea: Math.max(0, totalArea - dominantArea),
+    largestDisconnectedArea: entries[1]?.area || 0,
+    tinyDisconnectedCount: entries.slice(1).filter(component => component.area < 0.001).length,
     components: entries.slice(0, 12).map(component => ({
       triangles: component.triangles,
       area: component.area,
@@ -146,6 +148,138 @@ export function surfaceTopologyDiagnostics(mesh, tolerance = 0.00001) {
     windingConflicts,
     ...connectivityFromGeometry(mesh, edges)
   };
+}
+
+// Once T-junctions and bounded holes have been resolved, make neighboring
+// manifold faces agree on an orientation. This changes only triangle index
+// order: measured positions, texture coordinates, and open boundaries stay
+// exactly where they were. Non-manifold edges do not establish an orientation
+// constraint because they may join genuinely separate depth layers.
+export function orientManifoldFaces(mesh, tolerance = 0.00001) {
+  if (!mesh?.indices?.length)
+    return { ...mesh, faceOrientation: { flippedFaces: 0, unresolvedGroups: 0 } };
+  const { edges } = geometricEdges(mesh, tolerance);
+  const faceCount = mesh.indices.length / 3;
+  const neighbors = Array.from({ length: faceCount }, () => []);
+  for (const edge of edges.values()) {
+    if (edge.faces.length !== 2) continue;
+    const [a, b] = edge.faces;
+    const different = edge.directions[0] === edge.directions[1] ? 1 : 0;
+    neighbors[a].push([b, different]);
+    neighbors[b].push([a, different]);
+  }
+  const orientation = new Int8Array(faceCount).fill(-1);
+  const indices = new Uint32Array(mesh.indices);
+  let flippedFaces = 0, unresolvedGroups = 0;
+  for (let start = 0; start < faceCount; start++) {
+    if (orientation[start] !== -1) continue;
+    const group = [start];
+    orientation[start] = 0;
+    let inconsistent = false, keepCost = 0, reverseCost = 0;
+    for (let cursor = 0; cursor < group.length; cursor++) {
+      const face = group[cursor];
+      const ids = Array.from(indices.subarray(face * 3, face * 3 + 3));
+      const p = ids.map(id => Array.from(mesh.positions.subarray(id * 3, id * 3 + 3)));
+      const area = Math.hypot(...cross(sub(p[1], p[0]), sub(p[2], p[0]))) * 0.5;
+      if (orientation[face]) keepCost += area;
+      else reverseCost += area;
+      for (const [next, different] of neighbors[face]) {
+        const expected = orientation[face] ^ different;
+        if (orientation[next] === -1) {
+          orientation[next] = expected;
+          group.push(next);
+        } else if (orientation[next] !== expected) inconsistent = true;
+      }
+    }
+    // An inconsistent cycle indicates intersecting/ambiguous topology. Do
+    // not force a speculative flip through that region.
+    if (inconsistent) {
+      unresolvedGroups++;
+      continue;
+    }
+    const reverseGroup = reverseCost < keepCost;
+    for (const face of group) {
+      if (!(orientation[face] ^ Number(reverseGroup))) continue;
+      const offset = face * 3;
+      [indices[offset + 1], indices[offset + 2]] =
+        [indices[offset + 2], indices[offset + 1]];
+      flippedFaces++;
+    }
+  }
+  return { ...mesh, indices,
+    faceOrientation: { flippedFaces, unresolvedGroups } };
+}
+
+// Remove only tiny isolated fragments that cannot be verified by two camera
+// positions. Separate shelf items and artwork relief with actual repeat depth
+// are retained; distance to the main room mesh alone is not a deletion rule.
+export function pruneUnsupportedFragments(mesh, frames, project, {
+  maxArea = 0.001, minimumBaseline = 0.06, depthTolerance = 0.055,
+} = {}) {
+  if (!mesh?.indices?.length || !frames?.length || !project)
+    return { ...mesh, fragmentPruning: { removedComponents: 0, removedArea: 0 } };
+  const { edges } = geometricEdges(mesh, 0.00001);
+  const count = mesh.indices.length / 3, parent = new Int32Array(count);
+  for (let i = 0; i < count; i++) parent[i] = i;
+  const find = value => {
+    while (parent[value] !== value) {
+      parent[value] = parent[parent[value]];
+      value = parent[value];
+    }
+    return value;
+  };
+  for (const edge of edges.values()) if (edge.faces.length > 1) {
+    const root = find(edge.faces[0]);
+    for (let i = 1; i < edge.faces.length; i++) parent[find(edge.faces[i])] = root;
+  }
+  const groups = new Map();
+  for (let face = 0; face < count; face++) {
+    const ids = Array.from(mesh.indices.subarray(face * 3, face * 3 + 3));
+    const p = ids.map(id => Array.from(mesh.positions.subarray(id * 3, id * 3 + 3)));
+    const area = Math.hypot(...cross(sub(p[1], p[0]), sub(p[2], p[0]))) * 0.5;
+    const root = find(face), group = groups.get(root) || { area: 0, samples: [] };
+    group.area += area;
+    if (group.samples.length < 8 && area > 1e-9)
+      group.samples.push([0, 1, 2].map(axis => p.reduce((sum, point) => sum + point[axis] / 3, 0)));
+    groups.set(root, group);
+  }
+  const supported = point => {
+    const views = [];
+    for (const frame of frames) {
+      const uv = project(frame, ...point);
+      if (!uv || uv.u < 0 || uv.v < 0 || uv.u >= 1 || uv.v >= 1) continue;
+      const x = Math.floor(uv.u * frame.columns), y = Math.floor(uv.v * frame.rows);
+      const index = y * frame.columns + x;
+      if (!frame.measuredMask?.[index]) continue;
+      const depth = (frame.originalFilteredDepth || frame.filteredDepth)?.[index];
+      if (!depth || Math.abs(depth - uv.depth) > depthTolerance) continue;
+      const camera = frame.camera;
+      if (!camera?.length || views.some(previous => Math.hypot(...sub(camera, previous)) < minimumBaseline)) continue;
+      views.push(camera);
+      if (views.length >= 2) return true;
+    }
+    return false;
+  };
+  const removed = new Set();
+  let removedComponents = 0, removedArea = 0;
+  for (const [root, group] of groups) {
+    if (group.area >= maxArea || group.samples.some(supported)) continue;
+    removed.add(root);
+    removedComponents++;
+    removedArea += group.area;
+  }
+  if (!removed.size)
+    return { ...mesh, fragmentPruning: { removedComponents, removedArea } };
+  const indices = [], patches = [];
+  for (let face = 0; face < count; face++) {
+    if (removed.has(find(face))) continue;
+    indices.push(...mesh.indices.subarray(face * 3, face * 3 + 3));
+    if (mesh.surfacePatchIds) patches.push(mesh.surfacePatchIds[face]);
+  }
+  return { ...mesh, indices: new Uint32Array(indices),
+    ...(mesh.surfacePatchIds ? { surfacePatchIds: new Int32Array(patches) } : {}),
+    surfaceArea: Math.max(0, (mesh.surfaceArea ?? [...groups.values()].reduce((sum, group) => sum + group.area, 0)) - removedArea),
+    fragmentPruning: { removedComponents, removedArea } };
 }
 export function conformSurfaceTopology(mesh, {
   tolerance = 0.00001

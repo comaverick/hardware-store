@@ -90,6 +90,7 @@ test("consolidated wall topology is textured at its corrected positions", () => 
   const frame = cameraFrame(), result = texturedMesh(corrected, [frame]);
   expect(result.textureProjectionMode).toBe("final-mesh-positions");
   expect(result.textureCoverage).toBeGreaterThan(95);
+  expect(result.texturePatchSummary[0].sources[0].tile).toBe(0);
   for (let vertex = 0; vertex < result.positions.length / 3; vertex++) {
     expect(result.positions[vertex * 3 + 2]).toBeCloseTo(-2.02, 4);
     const projected = projectWorld(frame, ...result.positions.slice(vertex * 3, vertex * 3 + 3));

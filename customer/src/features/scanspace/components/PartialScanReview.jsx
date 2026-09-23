@@ -111,6 +111,7 @@ export default function PartialScanReview({
           structuralDepth: fused.diagnostics?.structuralDepth || null,
           structuralRebuild: fused.diagnostics?.structuralRebuild || null,
           topology: fused.diagnostics?.topologyAfterRepair || null,
+          fragmentPruning: fused.diagnostics?.fragmentPruning || null,
           recoveredCaptureGroups: fused.diagnostics?.alignment?.componentRecovery || null,
           textureSelection: fused.diagnostics?.textureSelection || null,
           textureRegistration: fused.diagnostics?.textureRegistration || [],
@@ -276,6 +277,18 @@ export default function PartialScanReview({
         </p>
       )}
       <PartialScanScene scan={displayScan} />
+      {displayScan.mesh && displayScan.cloud && <p className="ss-notice-detail">
+        Inspect Photo, Geometry, and Depth points from the same angle and from the side.
+        A defect only in Photo suggests color alignment; a gap in Geometry with depth points
+        behind it suggests reconstruction. A wall can hide a missing foreground object from
+        the front, so also check from the side. If both lack data, the capture may need more views.
+      </p>}
+      {quality?.topology?.disconnectedArea > 0.12 && <p className="ss-notice-detail" role="status">
+        Connection check: {quality.topology.disconnectedComponentCount} surface islands remain
+        outside the main mesh ({quality.topology.disconnectedArea.toFixed(2)} m²).
+        Separate objects can be legitimate, but visible breaks from side views still need
+        overlapping depth coverage.
+      </p>}
       <div className="ss-partial-facts" aria-label="Scan measurements">
         <div>
           <strong>

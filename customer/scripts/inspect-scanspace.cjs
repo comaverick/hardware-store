@@ -113,6 +113,43 @@ function render(mesh, camera, file, plain = false, width = 1000, height = 750) {
   }
   writePng(file, width, height, rgba);
 }
+function renderPoints(sources, camera, file, width = 1000, height = 750) {
+  camera.updateMatrixWorld();
+  const matrix = new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse).elements;
+  const rgba = new Uint8Array(width * height * 4);
+  const depth = new Float64Array(width * height).fill(Infinity);
+  for (let pixel = 0; pixel < depth.length; pixel++) rgba.set([24, 33, 30, 255], pixel * 4);
+  for (const source of sources) {
+    const positions = source.positions;
+    const hue = source.frameId * 97 % 360;
+    const color = new THREE.Color().setHSL(hue / 360, .55, .7);
+    for (let i = 0; i < positions.length / 3; i++) {
+      if (source.depths && !(source.depths[i] > 0)) continue;
+      const x = positions[i * 3], y = positions[i * 3 + 1], z = positions[i * 3 + 2];
+      if (![x, y, z].every(Number.isFinite)) continue;
+      const w = matrix[3] * x + matrix[7] * y + matrix[11] * z + matrix[15];
+      if (!(w > 0)) continue;
+      const sx = Math.round(((matrix[0] * x + matrix[4] * y + matrix[8] * z + matrix[12]) / w * .5 + .5) * width);
+      const sy = Math.round((.5 - (matrix[1] * x + matrix[5] * y + matrix[9] * z + matrix[13]) / w * .5) * height);
+      const sz = (matrix[2] * x + matrix[6] * y + matrix[10] * z + matrix[14]) / w;
+      if (sz < -1 || sz > 1) continue;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const px = sx + dx, py = sy + dy;
+        if (px < 0 || py < 0 || px >= width || py >= height) continue;
+        const pixel = py * width + px;
+        if (sz >= depth[pixel]) continue;
+        depth[pixel] = sz;
+        const offset = pixel * 4;
+        // Colored by camera/frame, not photograph: displaced layers remain
+        // visible instead of blending into a deceptively smooth image.
+        rgba[offset] = Math.round(color.r * 255);
+        rgba[offset + 1] = Math.round(color.g * 255);
+        rgba[offset + 2] = Math.round(color.b * 255);
+      }
+    }
+  }
+  writePng(file, width, height, rgba);
+}
 function inspectionShots(mesh, raw) {
   const b=mesh.bounds, center=[(b.min.x+b.max.x)/2,1.45,(b.min.z+b.max.z)/2];
   const observer=mesh.observer || raw?.observer;
@@ -175,6 +212,15 @@ if (require.main === module) {
     camera.lookAt(...target);
     render(mesh, camera, path.join(out, name + '.png'));
     if (multiAngle || ['painting', 'floor', 'side'].includes(name)) render(mesh, camera, path.join(out, name + '-geometry.png'), true);
+    if (options.inspectionPoints && (name === 'front' || name === 'left' || name === 'right' || name === 'ceiling' || name === 'painting' || name === 'side')) {
+      if (scan?.rawCapture?.keyframes?.length)
+        renderPoints(scan.rawCapture.keyframes.map((frame, frameId) => ({
+          frameId, positions: frame.positions, depths: frame.depths,
+        })), camera, path.join(out, name + '-raw-points.png'));
+      if (result.observations?.positions?.length)
+        renderPoints([{frameId: 0, positions: result.observations.positions}], camera,
+          path.join(out, name + '-processed-sample-points.png'));
+    }
   }
   console.log(JSON.stringify({
     elapsedSeconds: (Date.now() - started) / 1000,
@@ -188,6 +234,7 @@ if (require.main === module) {
 }
 module.exports = {
   render,
+  renderPoints,
   writePng,
   inspectionShots,
 };

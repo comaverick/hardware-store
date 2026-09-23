@@ -2,7 +2,7 @@ import { consolidatePlanarSurfaces } from "./planarSurface.js";
 import { refineJointTrajectory, recoverFrameComponents } from "./trajectoryAlignment.js";
 import { discoverStructuralPlanes, regularizeStructuralDepth } from "./structuralDepth.js";
 import { rebuildStructuralSurfaces } from "./structuralSurface.js";
-import { conformSurfaceTopology, surfaceTopologyDiagnostics, triangulatePlanarLoop } from "./surfaceTopology.js";
+import { conformSurfaceTopology, orientManifoldFaces, pruneUnsupportedFragments, surfaceTopologyDiagnostics, triangulatePlanarLoop } from "./surfaceTopology.js";
 import { registerSurfaceTextures } from "./textureRegistration.js";
 import { selectSurfaceTextures } from "./surfaceTextures.js";
 import { textureAtlasLayout, buildTextureDetailGrid, projectedPatchDetail,
@@ -2538,7 +2538,11 @@ export function fillSmallMeshHoles(mesh, options = {}) {
         Math.abs(plane.normal.reduce((sum, value, axis) => sum + value * referenceNormal[axis], 0)) > 0.985 &&
         // A ceiling must have explicit independent raw-depth support. Height
         // alone cannot distinguish a ceiling from an elevated shelf or beam.
+        // A well-supported slanted picture panel may also have a small inner
+        // hole; its bounded repair still needs raw agreement at every face.
         (Math.abs(plane.normal[1]) < 0.15 ||
+          (Math.abs(plane.normal[1]) < .75 &&
+            plane.retainedArea >= .35 && plane.maxInputResidual <= .08) ||
           (plane.kind === 'ceiling' && plane.supportingFrameIds?.length >= 3) ||
           (Math.abs(plane.normal[1]) > 0.97 && Math.abs(center[1] - (options.floorY || 0)) < 0.25)) &&
         points.every(point => Math.abs(point.reduce((sum, value, axis) => sum + value * plane.normal[axis], 0) - plane.offset) < 0.025));
@@ -4764,6 +4768,20 @@ export function texturedMesh(mesh, frames, precomputedCalibration = null, option
     }
   }
   const textureSelection = options.surfaceTexture ? selectSurfaceTextures(records) : null;
+  const patchSources = new Map();
+  for (const record of records) {
+    if (record.patch < 0) continue;
+    const entry = patchSources.get(record.patch) || { patch: record.patch, area: 0, untexturedArea: 0, sources: new Map() };
+    entry.area += record.area;
+    const source = record.candidates[record.selected]?.frame.textureId;
+    if (source === undefined) entry.untexturedArea += record.area;
+    else entry.sources.set(source, (entry.sources.get(source) || 0) + record.area);
+    patchSources.set(record.patch, entry);
+  }
+  const texturePatchSummary = [...patchSources.values()]
+    .sort((a, b) => b.area - a.area).slice(0, 10)
+    .map(entry => ({ patch: entry.patch, area: entry.area, untexturedArea: entry.untexturedArea,
+      sources: [...entry.sources].sort((a, b) => b[1] - a[1]).map(([tile, area]) => ({ tile, area })) }));
   const positions = [];
   const normals = [];
   const colors = [];
@@ -4856,6 +4874,7 @@ export function texturedMesh(mesh, frames, precomputedCalibration = null, option
     textureProjectionMode,
     fallbackBoundaryVertices: boundaryScores.reduce((count, score) => count + (Number.isFinite(score) ? 1 : 0), 0),
     texturePatchCount,
+    texturePatchSummary,
     textureRegistration: textureRegistration?.diagnostics || [],
     textureSelection,
     observedSideOriented: true,
@@ -5116,7 +5135,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     extraTextureFrames = structural.frames.filter(f => !ids.has(f.frameId));
   }
   const stages = {
-    algorithmVersion: 42,
+    algorithmVersion: 44,
     completionMode: options.completionMode === "surface" ? "surface" : "room",
     reconstructionProfile: options.reconstructionProfile || "quality",
     supportMode: "translated-camera-viewpoints",
@@ -5556,7 +5575,13 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
         filledHoleCount: previousCount + surface.filledHoleCount,
         filledHoleTriangles: previousTriangles + surface.filledHoleTriangles };
     }
-    if (options.conformTopology) stages.topologyAfterRepair = surfaceTopologyDiagnostics(surface);
+    if (options.conformTopology) {
+      surface = pruneUnsupportedFragments(surface, usable, projectWorld);
+      stages.fragmentPruning = surface.fragmentPruning;
+      surface = orientManifoldFaces(surface);
+      stages.faceOrientation = surface.faceOrientation;
+      stages.topologyAfterRepair = surfaceTopologyDiagnostics(surface);
+    }
   }
   const finalConnectivity = stages.topologyAfterRepair;
   if (
@@ -5650,6 +5675,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       textureProjectionMode: mesh.textureProjectionMode || "mesh-positions",
       fallbackBoundaryVertices: mesh.fallbackBoundaryVertices || 0,
       texturePatchCount: mesh.texturePatchCount || 0,
+      texturePatchSummary: mesh.texturePatchSummary || [],
       textureSelection: mesh.textureSelection,
       textureRegistration: mesh.textureRegistration,
       textureCalibrationPairs: mesh.textureCalibrationPairs || 0,

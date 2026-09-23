@@ -120,11 +120,13 @@ function ScanControls({ cloud, mode, input, view, reset }) {
 export default function PartialScanScene({ scan, compact = false }) {
   const [mode, setMode] = useState("orbit");
   const [low, setLow] = useState(compact);
+  const [surfaceView, setSurfaceView] = useState("photo");
   const [reset, setReset] = useState(0);
   const [knob, setKnob] = useState({ x: 0, y: 0 });
   const input = useRef({ x: 0, y: 0, keys: {} });
   const mesh = scan.mesh;
   const cloud = scan.cloud;
+  const activeSurfaceView = surfaceView === "depth" && !cloud ? "photo" : surfaceView;
   const visual = mesh || cloud;
   const view = useMemo(() => {
     if (!visual)
@@ -187,8 +189,8 @@ export default function PartialScanScene({ scan, compact = false }) {
         <hemisphereLight args={["#fff8ed", "#66756f", 2.1]} />
         <ambientLight intensity={0.35} />
         <directionalLight position={[3, 7, 4]} intensity={1.6} />
-        {mesh ? (
-          <ScanMesh mesh={mesh} low={low} />
+        {mesh && activeSurfaceView !== "depth" ? (
+          <ScanMesh mesh={mesh} low={low} geometryOnly={activeSurfaceView === "geometry"} />
         ) : (
           <ScanPointCloud cloud={cloud} low={low} />
         )}
@@ -221,6 +223,12 @@ export default function PartialScanScene({ scan, compact = false }) {
           Reset
         </button>
       </div>
+      {!compact && mesh && <div className="ss-surface-modebar" role="group" aria-label="Inspect scan layers">
+        {[["photo", "Photo"], ["geometry", "Geometry"], ["depth", "Depth points"]].map(([value, label]) =>
+          <button key={value} type="button" className={activeSurfaceView === value ? "is-active" : ""}
+            aria-pressed={activeSurfaceView === value} disabled={value === "depth" && !cloud}
+            onClick={() => setSurfaceView(value)}>{label}</button>)}
+      </div>}
       {mode === "first" && (
         <div
           className="ss-joystick"
@@ -247,7 +255,10 @@ export default function PartialScanScene({ scan, compact = false }) {
       </span>
       <span className="ss-partial-legend" role="status">
         <i />{" "}
-        {mesh ? mesh.surfaceRepair?.estimatedHoleCount > 0 ? "Measured + estimated repairs" : "Captured measured surface" : "Captured depth points"}
+        {mesh && activeSurfaceView === "geometry" ? "Mesh only · inspect gaps and layers"
+          : mesh && activeSurfaceView === "depth" ? "Captured depth points"
+          : mesh ? mesh.surfaceRepair?.estimatedHoleCount > 0 ? "Measured + estimated repairs" : "Captured measured surface"
+          : "Captured depth points"}
       </span>
       {!compact && <button
         className="ss-quality"
