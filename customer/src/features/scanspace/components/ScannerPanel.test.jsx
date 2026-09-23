@@ -55,12 +55,12 @@ async function startPanel() {
   return onSurface;
 }
 
-test("the pre-scan guide explains movement, overlap, and height coverage", () => {
+test("the pre-scan guide explains movement, overlap, and choosing an area", () => {
   render(<ScannerPanel capabilities={{ ar: true, secure: true }} onSurface={jest.fn()} onCancel={jest.fn()} />);
   expect(screen.getByRole("heading", { name: "Before you start" })).toBeInTheDocument();
   expect(screen.getByText("Move slowly")).toBeInTheDocument();
   expect(screen.getByText("Overlap each pass")).toBeInTheDocument();
-  expect(screen.getByText("Cover every height")).toBeInTheDocument();
+  expect(screen.getByText("Choose your area")).toBeInTheDocument();
 });
 
 test("weak coverage builds the preview directly, preserves frames, and can resume", async () => {
@@ -118,6 +118,7 @@ test("a clean scan can be inspected before saving without reconstructing twice",
 });
 
 test("checking a view keeps saved progress visible and gives one stable instruction", async () => {
+  result.stats.fusionKeyframes = 4;
   result.stats.currentViewChecked = false;
   result.stats.currentConfirmedRatio = 0;
   result.stats.adaptiveCapture.state = "checking";
@@ -128,6 +129,19 @@ test("checking a view keeps saved progress visible and gives one stable instruct
   expect(screen.queryByText(/Keep moving until the visible surface/)).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Finish & review" })).toBeEnabled();
   expect(screen.queryByText("Device diagnostics")).not.toBeInTheDocument();
+});
+
+test("a stalled scan shows the same actionable reason in progress and live status", async () => {
+  result.stats.fusionKeyframes = 4;
+  result.stats.currentViewChecked = false;
+  result.stats.adaptiveCapture.state = "checking";
+  result.stats.captureStall = { code: "stalled-overlap", stalled: true, tone: "warning",
+    label: "Not enough overlap", hint: "Turn back toward the last captured area." };
+  result.stats.captureFeedback = result.stats.captureStall;
+  await startPanel();
+  expect(screen.getByText("No new view saved")).toBeInTheDocument();
+  expect(screen.getByRole("status")).toHaveTextContent("Not enough overlap");
+  expect(screen.getAllByText(/turn back toward the last captured area/i)).toHaveLength(2);
 });
 
 test.each(["during", "after"])("the captured result can be saved if XR ends %s reconstruction", async timing => {

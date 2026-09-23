@@ -47,16 +47,28 @@ test("scan progress still accepts complete coverage across every height", () => 
   expect(screen.getByText(/selected area has overlapping views/i)).toBeInTheDocument();
 });
 
-test("recent fast-motion rejections tell the user to slow down before finishing", () => {
+test("old motion rejections do not mask current capture progress", () => {
   render(<CaptureProgress stats={{ coverage: 30, fusionKeyframes: 8,
     captureDiagnostics: { attempts: 40, decisions: { "moving-too-fast": 16 },
       recent: Array.from({ length: 40 }, (_, index) => ({ reason: index < 16 ? "moving-too-fast" : "connected" })) },
+    captureFeedback: { code: "scanning" },
     adaptiveCapture: { connected: true, pendingCount: 0, coverage: {
       regions: [{ id: "middle", observed: 100, ratio: .8 }],
     } },
   }} />);
-  expect(screen.getByText("Capture saved")).toBeInTheDocument();
-  expect(screen.getByText(/many attempted views were rejected/i)).toBeInTheDocument();
+  expect(screen.getByText("Ready to review")).toBeInTheDocument();
+  expect(screen.queryByText(/many attempted views were rejected/i)).not.toBeInTheDocument();
+});
+
+test("a stalled scan displays the current action and clears the checking label", () => {
+  render(<CaptureProgress stats={{ fusionKeyframes: 4, currentViewChecked: false,
+    captureStall: { stalled: true, code: "stalled-overlap",
+      hint: "Turn back until part of the last captured area is visible, then continue slowly." },
+    adaptiveCapture: { state: "checking", connected: true, coverage: { ratio: .6 } },
+  }} />);
+  expect(screen.getByText("No new view saved")).toBeInTheDocument();
+  expect(screen.getByText(/turn back until part of the last captured area/i)).toBeInTheDocument();
+  expect(screen.queryByText("Checking new view")).not.toBeInTheDocument();
 });
 
 test("a narrow camera baseline prompts a sideways view", () => {

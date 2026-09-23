@@ -60,6 +60,17 @@ function poseMotion(previous, pose, timestamp) {
   };
 }
 
+function sustainedMotion(samples, key) {
+  // A single XR pose spike should not veto an otherwise stable depth view.
+  // Keep the peak separately for the stricter color/blur decision.
+  const speeds = samples.map(sample => sample[key]).sort((a, b) => a - b);
+  return speeds[Math.floor((speeds.length - 1) * 0.6)] || 0;
+}
+
+function hasRecentMotionSupport(motion) {
+  return motion?.sampleCount >= 3 && motion.windowMs >= 50;
+}
+
 function keyframePoseForRetention(frame) {
   const camera = frame?.camera;
   const matrix = frame?.transformMatrix;
@@ -632,8 +643,16 @@ export class RoomScanner {
       const obstructionRatio = framePoints.length
         ? obstructionPointCount / framePoints.length
         : 0;
-      this.stats.gateLinearSpeed = Math.max(motion.linearSpeed, motion.textureLinearSpeed || 0);
-      this.stats.gateAngularSpeed = Math.max(motion.angularSpeed, motion.textureAngularSpeed || 0);
+      // The sampled pose spans the entire gap between depth reads. A user may
+      // have moved and already paused during that gap, so use recent sustained
+      // XR motion for geometry when available. Overlap validation still checks
+      // every accepted candidate against the saved map. Color keeps the peak.
+      const liveMotion = this.cameraMotion?.timestamp === time &&
+        hasRecentMotionSupport(this.cameraMotion) ? this.cameraMotion : null;
+      this.stats.gateLinearSpeed = liveMotion?.depthLinearSpeed ??
+        Math.max(motion.linearSpeed, motion.textureLinearSpeed || 0);
+      this.stats.gateAngularSpeed = liveMotion?.depthAngularSpeed ??
+        Math.max(motion.angularSpeed, motion.textureAngularSpeed || 0);
       this.stats.maxLinearSpeed = this.captureProfile.maxLinearSpeed;
       this.stats.maxAngularSpeed = this.captureProfile.maxAngularSpeed;
       const quality = depthFrameQuality({
@@ -808,13 +827,21 @@ export class RoomScanner {
             this.stats.floorAutoDetected = true;
           }
         }
-        const interval = adaptiveCaptureProfile({ ...this.captureDetail,
+        const profile = adaptiveCaptureProfile({ ...this.captureDetail,
           ...this.nativeDepthSize, validRatio: this.stats.depthFrames ? this.stats.validDepthRatio : 1,
           depthType: this.stats.depthType, processingMs: this.captureProcessingMs,
           linearSpeed: this.cameraMotion?.linearSpeed || 0, angularSpeed: this.cameraMotion?.angularSpeed || 0,
-        }).interval;
-        this.stats.captureIntervalMs = interval;
-        if (!this.paused && view && time - (this.lastCapture || 0) >= interval) {
+        });
+        const elapsedSinceCapture = time - (this.lastCapture || 0);
+        const settledRetryInterval = Math.min(profile.interval,
+          Math.max(120, Math.ceil(this.captureProcessingMs * 2) || 120));
+        const settledAfterMotion = this.stats.frameQuality === "moving-too-fast" &&
+          hasRecentMotionSupport(this.cameraMotion) &&
+          this.cameraMotion?.depthLinearSpeed <= profile.maxLinearSpeed &&
+          this.cameraMotion?.depthAngularSpeed <= profile.maxAngularSpeed &&
+          elapsedSinceCapture >= settledRetryInterval;
+        this.stats.captureIntervalMs = settledAfterMotion ? settledRetryInterval : profile.interval;
+        if (!this.paused && view && (elapsedSinceCapture >= profile.interval || settledAfterMotion)) {
           this.lastCapture = time;
           this.captureDepthFrame(time, frame, view);
           if (frame.detectedPlanes) {
@@ -879,6 +906,7 @@ export class RoomScanner {
     if (this.lastViewDecisionAt == null || time - this.lastViewDecisionAt > 1200)
       this.stats.currentViewChecked = false;
     this.stats.captureFeedback = this.experience.update({ ...this.stats, paused: this.paused }, time);
+    this.stats.captureStall = this.experience.captureStall;
     this.stats.captureDiagnostics = this.experience.snapshot();
   }
   updateAdaptiveStats(time = this.lastFrameAt ?? performance.now()) {
@@ -971,13 +999,17 @@ export class RoomScanner {
     const motion = poseMotion(this.lastCameraPose, pose, timestamp);
     this.lastCameraPose = { pose, timestamp };
     this.cameraMotionWindow = (this.cameraMotionWindow || []).filter(
-      (sample) => sample.timestamp > timestamp - 100 && sample.timestamp < timestamp,
+      (sample) => sample.timestamp > timestamp - 120 && sample.timestamp < timestamp,
     );
     this.cameraMotionWindow.push({ ...motion, timestamp });
     this.cameraMotion = {
       timestamp,
       linearSpeed: Math.max(...this.cameraMotionWindow.map((sample) => sample.linearSpeed)),
       angularSpeed: Math.max(...this.cameraMotionWindow.map((sample) => sample.angularSpeed)),
+      depthLinearSpeed: sustainedMotion(this.cameraMotionWindow, "linearSpeed"),
+      depthAngularSpeed: sustainedMotion(this.cameraMotionWindow, "angularSpeed"),
+      sampleCount: this.cameraMotionWindow.length,
+      windowMs: timestamp - this.cameraMotionWindow[0].timestamp,
     };
     return this.cameraMotion;
   }

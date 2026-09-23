@@ -4,7 +4,6 @@ import {
   MIN_REGION_OBSERVATIONS,
 } from "../core/adaptiveCapture";
 import { MIN_SURFACE_CAMERA_BASELINE_METERS, MIN_SURFACE_FUSION_KEYFRAMES } from "../core/readiness";
-import { fastMotionShare } from "../core/captureExperience";
 
 const regionIds = ["lower", "middle", "upper"];
 const names = {
@@ -48,17 +47,20 @@ export function captureProgressSummary(stats = {}) {
   const weak = normalized.find(region => region.state === "weak");
   const building = normalized.find(region => region.state === "building");
   const observed = normalized.some(region => region.observed > 0);
-  const movingTooFast = fastMotionShare(stats, true) >= 0.25;
+  const stalled = stats.captureStall?.stalled === true;
+  const movingTooFast = stats.captureFeedback?.code === "motion";
   const shortBaseline = Number.isFinite(stats.cameraBaseline) && frames >= MIN_SURFACE_FUSION_KEYFRAMES &&
     stats.cameraBaseline < MIN_SURFACE_CAMERA_BASELINE_METERS;
   const hasCapture = frames >= 2 && adaptive.connected !== false;
   const reviewReady = frames >= MIN_SURFACE_FUSION_KEYFRAMES &&
     adaptive.connected !== false && observed && !weak && !building &&
-    !(adaptive.pendingCount || 0) && !movingTooFast && !shortBaseline;
+    !(adaptive.pendingCount || 0) && !stalled && !movingTooFast && !shortBaseline;
   const checking = adaptive.state === "checking" || stats.currentViewChecked === false;
   let next = "Keep one surface in view and take a small step sideways.";
-  if (movingTooFast) {
-    next = "Slow down and repeat the affected area with a small sideways move; many attempted views were rejected.";
+  if (stalled) {
+    next = stats.captureStall.hint;
+  } else if (movingTooFast) {
+    next = stats.captureFeedback.hint;
   } else if (shortBaseline) {
     next = "Take a small sideways step while keeping the same surface in view to add depth from another position.";
   } else if (frames >= 2 && weak) {
@@ -77,6 +79,7 @@ export function captureProgressSummary(stats = {}) {
     regions: normalized,
     reviewReady,
     frames,
+    stalled,
   };
 }
 
@@ -122,8 +125,8 @@ export function CaptureProgress({ stats }) {
   const stateLabel = summary.reviewReady
     ? "Ready to review"
     : summary.hasCapture
-      ? summary.checking ? "Checking new view" : "Capture saved"
-      : "Building first area";
+      ? summary.stalled ? "No new view saved" : summary.checking ? "Checking new view" : "Capture saved"
+      : summary.stalled ? "No view saved yet" : "Building first area";
   return (
     <section className="ss-capture-progress" aria-label="Scan progress">
       <div className="ss-capture-progress-head">

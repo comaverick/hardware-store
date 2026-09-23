@@ -1,6 +1,8 @@
 const WARNING_DELAY_MS = 1800;
 const PROMPT_COOLDOWN_MS = 4500;
 const COMPLETION_HOLD_MS = 4000;
+const SAVED_VIEW_STALL_MS = 3000;
+const CURRENT_ATTEMPT_MS = 1200;
 const MAX_RECENT_DECISIONS = 48;
 const states = ["starting", "tracking", "checking", "recovering", "tracking-lost", "paused"];
 const reasons = ["connected", "starting", "moving-too-fast", "sparse-depth", "near-field-obstruction",
@@ -15,6 +17,23 @@ const counts = (value, keys) => Object.fromEntries(keys.map(key => [key, number(
 const scanning = () => ({ code: "scanning", tone: "active", label: "Scanning",
   hint: "Move slowly and keep part of the last captured area in view." });
 
+function stalledViewFeedback(reason, recoveryDirection) {
+  const warning = { tone: "warning", immediate: true, stalled: true };
+  if (reason === "moving-too-fast") return { ...warning, code: "stalled-motion",
+    label: "Pause to save a view", hint: "Hold the phone steady briefly, then move sideways slowly." };
+  if (reason === "sparse-depth") return { ...warning, code: "stalled-depth",
+    label: "Depth is patchy", hint: "Step back slightly and aim at a well-lit, non-reflective surface." };
+  if (reason === "near-field-obstruction") return { ...warning, code: "stalled-obstruction",
+    label: "Move the phone back", hint: "Step back from nearby objects, then hold this area in view." };
+  if (["checking-overlap", "overlap-lost", "alignment-conflict"].includes(reason))
+    return { ...warning, code: "stalled-overlap", label: "Not enough overlap",
+      hint: recoveryDirection || "Turn back until part of the last captured area is visible, then continue slowly." };
+  if (reason === "confirming-recovery") return { ...warning, code: "stalled-recovery",
+    label: "Hold this overlap", hint: "Keep the last captured area in view for a moment." };
+  return { ...warning, code: "stalled-position", label: "Need another viewpoint",
+    hint: "Keep the same surface visible and take a small sideways step." };
+}
+
 // One source for the live instruction. The scanner applies timing below; the
 // pure fallback also serves restored/legacy status snapshots and UI fixtures.
 export function captureFeedbackCandidate(stats) {
@@ -28,10 +47,11 @@ export function captureFeedbackCandidate(stats) {
     hint: "Hold still and point toward an area you already scanned." };
   if (!stats.depthCurrent || stats.depthState === "error") return { code: "depth", tone: "warning",
     label: "Waiting for the camera", hint: "Hold still with a well-lit surface in view." };
-  if (stats.movingTooFast) return { code: "motion", tone: "warning", label: "Move a little more slowly",
-    hint: "Pause briefly, then continue with a slow sideways movement." };
   if (capture?.capacityReached) return { code: "capacity", tone: "warning", immediate: true,
     label: "This section is captured", hint: "Review and save this section before starting another." };
+  if (stats.captureStall) return stats.captureStall;
+  if (stats.movingTooFast) return { code: "motion", tone: "warning", label: "Move a little more slowly",
+    hint: "Pause briefly, then continue with a slow sideways movement." };
   if (capture?.state === "recovering") {
     if (stats.frameQuality === "confirming-recovery") return scanning();
     return { code: "reconnect", tone: "warning", label: "Reconnect this view",
@@ -90,6 +110,8 @@ export class CaptureExperience {
   }
   recordFrame({ timestamp, reason, accepted = false, committed = 0, matched = false, state, ...values }) {
     this.startedAt ??= timestamp;
+    this.firstAttemptAt ??= timestamp;
+    if (committed > 0) this.lastCommittedAt = timestamp;
     const key = reasons.includes(reason) ? reason : "unknown";
     const data = this.diagnostics;
     data.attempts++;
@@ -99,6 +121,23 @@ export class CaptureExperience {
     data.recent.push({ elapsedMs: Math.max(0, timestamp - this.startedAt), reason: key,
       accepted, committed, matched, state, ...counts(values, measurements) });
     if (data.recent.length > MAX_RECENT_DECISIONS) data.recent.shift();
+  }
+  stalledView(stats, now) {
+    const lastProgressAt = this.lastCommittedAt ?? this.firstAttemptAt;
+    if (stats.paused || stats.originChanged || !stats.tracking || !stats.depthCurrent ||
+        stats.depthState === "unavailable" || stats.adaptiveCapture?.capacityReached ||
+        lastProgressAt == null || now - lastProgressAt < SAVED_VIEW_STALL_MS) return null;
+    // A complete, confirmed area does not need another saved viewpoint.
+    if ((stats.fusionKeyframes || 0) >= 6 && (stats.currentConfirmedRatio || 0) >= 0.85) return null;
+    const recent = this.diagnostics.recent.filter(event =>
+      now - (this.startedAt + event.elapsedMs) <= CURRENT_ATTEMPT_MS);
+    if (!recent.length) return null;
+    const latest = recent.at(-1);
+    if (now - (this.startedAt + latest.elapsedMs) > CURRENT_ATTEMPT_MS) return null;
+    // Once enough views are saved, a stationary revisit is not a failure.
+    // Existing coverage guidance can still point out a weak surface.
+    if (latest.accepted && (stats.fusionKeyframes || 0) >= 6) return null;
+    return stalledViewFeedback(latest.reason, stats.recoveryDirection);
   }
   update(stats, timestamp) {
     this.startedAt ??= timestamp;
@@ -111,7 +150,8 @@ export class CaptureExperience {
     this.diagnostics.elapsedMs = now - this.startedAt;
     this.diagnostics.activeMs = this.diagnostics.elapsedMs - this.diagnostics.stateMs.paused;
 
-    const candidate = captureFeedbackCandidate(stats);
+    this.captureStall = this.stalledView(stats, now);
+    const candidate = captureFeedbackCandidate({ ...stats, captureStall: this.captureStall });
     if (candidate.code !== this.candidateCode) {
       this.candidateCode = candidate.code;
       this.candidateSince = now;

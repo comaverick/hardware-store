@@ -518,6 +518,42 @@ test("an out-and-back shake is rejected even when the sampled depth poses are id
   expect(scanner.stats.captureFeedback.code).toBe("confirmed");
 });
 
+test("a brief pose spike does not veto settled depth, but still protects color", () => {
+  const { scanner, frame, view } = captureHarness();
+  const pose = scanner.keyframePose(view);
+  scanner.recordCameraMotion(pose, 1100);
+  scanner.recordCameraMotion({ ...pose, position: { ...pose.position, x: pose.position.x + 0.03 } }, 1120);
+  scanner.recordCameraMotion(pose, 1140);
+  scanner.recordCameraMotion(pose, 1160);
+  scanner.recordCameraMotion(pose, 1180);
+  scanner.recordCameraMotion(pose, 1200);
+  expect(scanner.cameraMotion.linearSpeed).toBeGreaterThan(1);
+  expect(scanner.cameraMotion.depthLinearSpeed).toBe(0);
+  expect(scanner.isColorFrameReliable({ textureLinearSpeed: scanner.cameraMotion.linearSpeed })).toBe(false);
+  scanner.captureDepthFrame(1200, frame, view);
+  expect(scanner.stats.frameQuality).toBe("connected");
+  expect(scanner.stats.captureDiagnostics.recent.at(-1)).toMatchObject({ reason: "connected", accepted: true });
+  expect(scanner.keyframes).toHaveLength(2);
+});
+
+test("a motion-rejected view is retried soon after the phone settles", () => {
+  const { scanner, frame, view } = captureHarness();
+  scanner.captureProcessingMs = 0;
+  const pose = scanner.keyframePose(view);
+  scanner.recordCameraMotion(pose, 1100);
+  scanner.recordCameraMotion({ ...pose, position: { ...pose.position, x: pose.position.x + 0.15 } }, 1120);
+  scanner.frame(1140, frame);
+  expect(scanner.stats.frameQuality).toBe("moving-too-fast");
+  const reads = frame.getDepthInformation.mock.calls.length;
+  scanner.recordCameraMotion(pose, 1230);
+  scanner.recordCameraMotion(pose, 1260);
+  scanner.recordCameraMotion(pose, 1280);
+  scanner.frame(1300, frame);
+  expect(frame.getDepthInformation).toHaveBeenCalledTimes(reads + 1);
+  expect(scanner.stats.frameQuality).toBe("connected");
+  expect(scanner.stats.captureIntervalMs).toBeLessThan(350);
+});
+
 test("three brief motion skips preserve the saved map and resume without recovery prompts", () => {
   const { scanner, frame, view } = captureHarness();
   const pose = scanner.keyframePose(view);
