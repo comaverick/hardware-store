@@ -91,27 +91,6 @@ test("explicit partial save retains the failed audit and original raw capture", 
   expect(scanner.stop).toHaveBeenCalledTimes(1);
 });
 
-test("separate areas reach reconstruction and stay separate in the saved raw capture", async () => {
-  result.provisionalSegments = [{ id: 3, keyframes: [{ timestamp: 3 }, { timestamp: 4 }] }];
-  result.stats.adaptiveCapture.provisionalFrameCount = 2;
-  result.stats.adaptiveCapture.provisionalSegmentCount = 1;
-  createFusionWorker.mockImplementationOnce(() => {
-    const worker = { terminate: jest.fn(), postMessage: jest.fn(() => Promise.resolve().then(() =>
-      worker.onmessage({ data: { type: "complete", result: { mesh: { triangleCount: 100 },
-        diagnostics: {}, sections: [{ id: 3, mesh: { triangleCount: 20 }, diagnostics: {} }] } } }))) };
-    return worker;
-  });
-  const onSurface = await startPanel();
-  fireEvent.click(screen.getByRole("button", { name: "Finish & review" }));
-  fireEvent.click(await screen.findByRole("button", { name: "Save partial scan" }));
-  await waitFor(() => expect(onSurface).toHaveBeenCalledTimes(1));
-  const saved = onSurface.mock.calls[0][0];
-  expect(saved.rawCapture.provisionalSegments).toBe(result.provisionalSegments);
-  expect(saved.sections).toMatchObject([{ id: 3, label: "Area 2", mesh: { triangleCount: 20 } }]);
-  const payload = createFusionWorker.mock.results.at(-1).value.postMessage.mock.calls[0][0];
-  expect(payload.sections).toBe(result.provisionalSegments);
-});
-
 test("final reconstruction rechecks disconnections even when live coverage passed", async () => {
   diagnostics = { alignment: { disconnectedFrameIds: [4] } };
   const onSurface = await startPanel();

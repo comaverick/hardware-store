@@ -198,10 +198,8 @@ function rawStats(stats) {
   });
   const adaptive = stats?.adaptiveCapture;
   if (adaptive && typeof adaptive === "object") {
-    const numeric = ["version", "frameCount", "pendingCount", "provisionalFrameCount", "provisionalSegmentCount",
-      "recoveries", "promoted", "expired", "removed", "capacityStops", "provisionalStarted",
-      "provisionalSaved", "provisionalMerged", "provisionalCapacityStops", "pendingAgeDrops",
-      "pendingCapacityDrops", "pendingRedundantDrops", "pendingConflictDrops", "pendingResetDrops"];
+    const numeric = ["version", "frameCount", "pendingCount", "recoveries", "promoted", "expired", "removed", "capacityStops",
+      "pendingAgeDrops", "pendingCapacityDrops", "pendingRedundantDrops", "pendingConflictDrops", "pendingResetDrops"];
     const regions = (Array.isArray(adaptive.coverage?.regions) ? adaptive.coverage.regions : []).slice(0, 3)
       .filter(region => ["lower", "middle", "upper"].includes(region?.id)).map(region => ({
         id: region.id, observed: Math.max(0, finite(region.observed)), confirmed: Math.max(0, finite(region.confirmed)),
@@ -209,7 +207,7 @@ function rawStats(stats) {
       }));
     result.adaptiveCapture = {
       ...Object.fromEntries(numeric.map(name => [name, Math.max(0, finite(adaptive[name]))])),
-      state: ["starting", "tracking", "checking", "recovering", "capturing-new-area"].includes(adaptive.state) ? adaptive.state : "starting",
+      state: ["starting", "tracking", "checking", "recovering"].includes(adaptive.state) ? adaptive.state : "starting",
       reason: String(adaptive.reason || "").slice(0, 80), connected: adaptive.connected === true,
       capacityReached: adaptive.capacityReached === true,
       coverage: { observed: Math.max(0, finite(adaptive.coverage?.observed)),
@@ -225,11 +223,7 @@ function encodeRawCapture(capture) {
   const keyframes = Array.isArray(capture?.keyframes) ? capture.keyframes : [];
   const textureKeyframes = Array.isArray(capture?.textureKeyframes)
     ? capture.textureKeyframes : [];
-  const provisionalSegments = Array.isArray(capture?.provisionalSegments) ? capture.provisionalSegments : [];
-  if (!keyframes.length || provisionalSegments.length > 2 ||
-      provisionalSegments.some(segment => !Array.isArray(segment.keyframes) || segment.keyframes.length < 2) ||
-      keyframes.length + textureKeyframes.length + provisionalSegments.reduce((count, segment) =>
-        count + segment.keyframes.length, 0) > MAX_RAW_KEYFRAMES)
+  if (!keyframes.length || keyframes.length + textureKeyframes.length > MAX_RAW_KEYFRAMES)
     throw new Error("This raw scan does not contain a valid bounded RGB-D capture.");
   return {
     version: RAW_CAPTURE_VERSION,
@@ -240,20 +234,13 @@ function encodeRawCapture(capture) {
     stats: rawStats(capture.stats),
     keyframes: keyframes.map(encodeRawFrame),
     textureKeyframes: textureKeyframes.map(encodeRawFrame),
-    provisionalSegments: provisionalSegments.map(segment => ({
-      id: Math.max(0, finite(segment.id)), keyframes: segment.keyframes.map(encodeRawFrame),
-    })),
   };
 }
 
 function decodeRawCapture(value) {
-  const provisionalSegments = value?.provisionalSegments || [];
   if (!value || value.version !== RAW_CAPTURE_VERSION ||
       !Array.isArray(value.keyframes) || !value.keyframes.length ||
-      !Array.isArray(provisionalSegments) || provisionalSegments.length > 2 ||
-      provisionalSegments.some(segment => !Array.isArray(segment?.keyframes) || segment.keyframes.length < 2) ||
-      value.keyframes.length + (value.textureKeyframes?.length || 0) +
-        provisionalSegments.reduce((count, segment) => count + segment.keyframes.length, 0) > MAX_RAW_KEYFRAMES)
+      value.keyframes.length + (value.textureKeyframes?.length || 0) > MAX_RAW_KEYFRAMES)
     throw new Error("The scan file has an invalid raw RGB-D capture.");
   return {
     version: RAW_CAPTURE_VERSION,
@@ -265,10 +252,6 @@ function decodeRawCapture(value) {
     keyframes: value.keyframes.map((frame, index) => decodeRawFrame(frame, `keyframe ${index}`)),
     textureKeyframes: (value.textureKeyframes || []).map((frame, index) =>
       decodeRawFrame(frame, `texture keyframe ${index}`)),
-    provisionalSegments: provisionalSegments.map((segment, index) => ({
-      id: Math.max(0, finite(segment.id)), keyframes: segment.keyframes.map((frame, frameIndex) =>
-        decodeRawFrame(frame, `separate area ${index + 1} keyframe ${frameIndex}`)),
-    })),
   };
 }
 

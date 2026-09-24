@@ -117,19 +117,15 @@ function ScanControls({ cloud, mode, input, view, reset }) {
   );
 }
 
-export default function PartialScanScene({ scan, compact = false, onAreaChange }) {
+export default function PartialScanScene({ scan, compact = false }) {
   const [mode, setMode] = useState("orbit");
   const [low, setLow] = useState(compact);
   const [surfaceView, setSurfaceView] = useState("photo");
-  const [areaIndex, setAreaIndex] = useState(0);
   const [reset, setReset] = useState(0);
   const [knob, setKnob] = useState({ x: 0, y: 0 });
   const input = useRef({ x: 0, y: 0, keys: {} });
-  const areas = [{ label: "Area 1", mesh: scan.mesh, cloud: scan.cloud },
-    ...(scan.sections || [])].filter(area => area.mesh || area.cloud);
-  const selectedArea = areas[Math.min(areaIndex, areas.length - 1)] || scan;
-  const mesh = selectedArea.mesh;
-  const cloud = selectedArea.cloud;
+  const mesh = scan.mesh;
+  const cloud = scan.cloud;
   const activeSurfaceView = surfaceView === "depth" && !cloud ? "photo" : surfaceView;
   const visual = mesh || cloud;
   const view = useMemo(() => {
@@ -206,20 +202,6 @@ export default function PartialScanScene({ scan, compact = false, onAreaChange }
           reset={reset}
         />
       </Canvas>
-      {!!scan.sections?.length && <>
-        {areas.length > 1 && <div className="ss-area-switcher" role="group" aria-label="Captured areas">
-          {areas.map((area, index) => <button key={area.id || area.label} type="button"
-            className={selectedArea === area ? "is-active" : ""}
-            aria-pressed={selectedArea === area} onClick={() => { setAreaIndex(index); setReset(value => value + 1);
-              onAreaChange?.(area); }}>
-            {area.label}</button>)}
-        </div>}
-        <span className="ss-area-note">{areas.length > 1
-          ? "Areas are shown separately until their depth connection is verified."
-          : areas[0]?.label === "Area 1"
-            ? "An additional area could not be previewed; the raw export preserves it."
-            : "Area 1 could not be previewed; this separate area remains available."}</span>
-      </>}
       <div className="ss-partial-viewbar">
         {!compact && <div role="group" aria-label="Captured room view">
           <button

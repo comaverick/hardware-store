@@ -38,22 +38,6 @@ function observationPoints(observations) {
   });
 }
 
-function keyframePoints(frames = []) {
-  return frames.flatMap(frame => {
-    const points = [];
-    for (let index = 0; index < (frame.depths?.length || 0); index++) {
-      if (!(frame.depths[index] > 0)) continue;
-      const offset = index * 3;
-      const position = frame.positions?.slice(offset, offset + 3);
-      if (!position || !Array.from(position).every(Number.isFinite)) continue;
-      const point = { x: position[0], y: position[1], z: position[2] };
-      if (frame.colorMask?.[index]) point.color = Array.from(frame.colors.slice(offset, offset + 3));
-      points.push(point);
-    }
-    return points;
-  });
-}
-
 const captureQualitySummary = (stats, fusion = null) => ({
   adaptiveCapture: stats.adaptiveCapture || null,
   captureDiagnostics: stats.captureDiagnostics || null,
@@ -197,8 +181,7 @@ export default function ScannerPanel({
     if (!raw.keyframes?.length) return { mesh: null, diagnostics: null };
     const transfer = preserveInput
       ? []
-      : [...new Set([...raw.keyframes, ...(raw.textureKeyframes || []),
-        ...(raw.provisionalSegments || []).flatMap(segment => segment.keyframes)].flatMap((frame) =>
+      : [...new Set([...raw.keyframes, ...(raw.textureKeyframes || [])].flatMap((frame) =>
           [
             frame.positions,
             frame.depths,
@@ -248,7 +231,7 @@ export default function ScannerPanel({
         };
         try {
           activeWorker.postMessage(
-            { keyframes: raw.keyframes, sections: raw.provisionalSegments || [], options },
+            { keyframes: raw.keyframes, options },
             transferable,
           );
         } catch (error) {
@@ -322,7 +305,6 @@ export default function ScannerPanel({
       debugCapture.current = snapshotDepthCapture(raw);
       const rawCapture = {
         keyframes: raw.keyframes,
-        provisionalSegments: raw.provisionalSegments || [],
         textureKeyframes: raw.textureKeyframes || [],
         floorY: raw.floorY,
         observer: raw.observer,
@@ -333,17 +315,7 @@ export default function ScannerPanel({
       raw.stats.fusion = fused.diagnostics;
       const acceptedPoints =
         observationPoints(fused.observations) || raw.points;
-      const sections = (raw.provisionalSegments || []).map((segment, index) => {
-        const reconstructed = fused.sections?.find(section => section.id === segment.id);
-        const sectionPoints = observationPoints(reconstructed?.observations) || keyframePoints(segment.keyframes);
-        return { id: segment.id, label: `Area ${index + 2}`, mesh: reconstructed?.mesh || null,
-          cloud: sectionPoints.length ? buildScanCloud(sectionPoints, {
-            floorY: raw.floorY, observer: raw.observer, voxelSize: raw.stats.cloudCellSize,
-            floorOutlierTolerance: FLOOR_OUTLIER_TOLERANCE_METERS,
-          }) : null,
-          pointCount: sectionPoints.length, diagnostics: reconstructed?.diagnostics || null };
-      });
-      if (!fused.mesh && !acceptedPoints.length && !sections.some(section => section.mesh || section.cloud)) {
+      if (!fused.mesh) {
         setPartial({
           reason:
             fused.diagnostics?.reason ||
@@ -356,12 +328,12 @@ export default function ScannerPanel({
         });
         return;
       }
-      const scanCloud = acceptedPoints.length ? buildScanCloud(acceptedPoints, {
+      const scanCloud = buildScanCloud(acceptedPoints, {
         floorY: raw.floorY,
         observer: raw.observer,
         voxelSize: raw.stats.cloudCellSize,
         floorOutlierTolerance: FLOOR_OUTLIER_TOLERANCE_METERS,
-      }) : null;
+      });
       const surfaceResult = {
         version: 2,
         kind: "validated-measured-surface",
@@ -372,8 +344,7 @@ export default function ScannerPanel({
         pointCount: acceptedPoints.length,
         reason: "ScanSpace saved the surfaces you captured and checked their overlap.",
         cloud: scanCloud,
-        mesh: fused.mesh || null,
-        sections,
+        mesh: fused.mesh,
         fusionMode: "multi-view",
         captureQuality: captureQualitySummary(raw.stats, fused.diagnostics),
         debugCapture: debugCapture.current,

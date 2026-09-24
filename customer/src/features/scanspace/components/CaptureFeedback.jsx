@@ -43,9 +43,7 @@ export function captureProgressSummary(stats = {}) {
       ? coverage.ratio * 100
       : stats.connectedSurfaceCoverage,
   );
-  const connectedFrames = Math.max(0, Number(stats.fusionKeyframes) || 0);
-  const provisionalFrames = Math.max(0, Number(adaptive.provisionalFrameCount) || 0);
-  const frames = connectedFrames + provisionalFrames;
+  const frames = Math.max(0, Number(stats.fusionKeyframes) || 0);
   const weak = normalized.find(region => region.state === "weak");
   const building = normalized.find(region => region.state === "building");
   const observed = normalized.some(region => region.observed > 0);
@@ -53,16 +51,14 @@ export function captureProgressSummary(stats = {}) {
   const movingTooFast = stats.captureFeedback?.code === "motion";
   const shortBaseline = Number.isFinite(stats.cameraBaseline) && frames >= MIN_SURFACE_FUSION_KEYFRAMES &&
     stats.cameraBaseline < MIN_SURFACE_CAMERA_BASELINE_METERS;
-  const hasCapture = connectedFrames >= 2 && adaptive.connected !== false;
-  const reviewReady = connectedFrames >= MIN_SURFACE_FUSION_KEYFRAMES &&
+  const hasCapture = frames >= 2 && adaptive.connected !== false;
+  const reviewReady = frames >= MIN_SURFACE_FUSION_KEYFRAMES &&
     adaptive.connected !== false && observed && !weak && !building &&
-    !(adaptive.pendingCount || 0) && !provisionalFrames && !stalled && !movingTooFast && !shortBaseline;
+    !(adaptive.pendingCount || 0) && !stalled && !movingTooFast && !shortBaseline;
   const checking = adaptive.state === "checking" || stats.currentViewChecked === false;
   let next = "Keep one surface in view and take a small step sideways.";
   if (stalled) {
     next = stats.captureStall.hint;
-  } else if (provisionalFrames) {
-    next = "A new area is being saved separately. Continue with overlapping views; ScanSpace will join it only after checking the connection.";
   } else if (movingTooFast) {
     next = stats.captureFeedback.hint;
   } else if (shortBaseline) {
@@ -83,8 +79,6 @@ export function captureProgressSummary(stats = {}) {
     regions: normalized,
     reviewReady,
     frames,
-    connectedFrames,
-    provisionalFrames,
     stalled,
   };
 }
@@ -130,11 +124,9 @@ export function CaptureProgress({ stats }) {
   const summary = captureProgressSummary(stats);
   const stateLabel = summary.reviewReady
     ? "Ready to review"
-    : summary.stalled ? summary.hasCapture ? "No new view saved" : "No view saved yet"
-    : summary.provisionalFrames ? "Capturing separate area"
     : summary.hasCapture
-      ? summary.checking ? "Checking new view" : "Capture saved"
-      : "Building first area";
+      ? summary.stalled ? "No new view saved" : summary.checking ? "Checking new view" : "Capture saved"
+      : summary.stalled ? "No view saved yet" : "Building first area";
   return (
     <section className="ss-capture-progress" aria-label="Scan progress">
       <div className="ss-capture-progress-head">
@@ -143,9 +135,7 @@ export function CaptureProgress({ stats }) {
           {stateLabel}
         </span>
       </div>
-      <p className="ss-capture-overlap">{summary.provisionalFrames
-        ? <>{summary.connectedFrames} connected · {summary.provisionalFrames} separate · Overlap in Area 1 <strong>{summary.overlap}%</strong>.</>
-        : <>Observed-surface overlap <strong>{summary.overlap}%</strong> · Unscanned areas may stay open.</>}</p>
+      <p className="ss-capture-overlap">Observed-surface overlap <strong>{summary.overlap}%</strong> · Unscanned areas may stay open.</p>
       <p className="ss-capture-next" id="ss-capture-next"><strong>Next:</strong> {summary.next}</p>
       <CaptureCoverage coverage={stats.adaptiveCapture?.coverage} />
     </section>

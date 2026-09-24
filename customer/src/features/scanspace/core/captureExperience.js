@@ -4,8 +4,8 @@ const COMPLETION_HOLD_MS = 4000;
 const SAVED_VIEW_STALL_MS = 3000;
 const CURRENT_ATTEMPT_MS = 1200;
 const MAX_RECENT_DECISIONS = 48;
-const states = ["starting", "tracking", "checking", "recovering", "capturing-new-area", "tracking-lost", "paused"];
-const reasons = ["connected", "provisional-connected", "starting", "moving-too-fast", "sparse-depth", "near-field-obstruction",
+const states = ["starting", "tracking", "checking", "recovering", "tracking-lost", "paused"];
+const reasons = ["connected", "starting", "moving-too-fast", "sparse-depth", "near-field-obstruction",
   "depth-error", "depth-missing", "invalid-depth", "checking-overlap", "overlap-lost",
   "alignment-conflict", "confirming-recovery", "capacity", "unknown"];
 const prompts = ["motion", "depth", "tracking", "reconnect", "reset", "unsupported", "capacity"];
@@ -59,8 +59,6 @@ export function captureFeedbackCandidate(stats) {
   }
   if (["sparse-depth", "near-field-obstruction"].includes(stats.frameQuality)) return {
     code: "depth", tone: "warning", label: "This surface is hard to capture", hint: "Step back slightly and try a small side angle." };
-  if (capture?.state === "capturing-new-area") return { code: "new-area", tone: "active",
-    label: "Capturing a new area", hint: "Keep part of this area in view and move slowly. We will reconnect it if enough shared depth appears." };
   if (capture?.state === "starting" || (stats.fusionKeyframes || 0) < 2) return {
     code: "starting", tone: "pending", label: "Getting started", hint: "Move a little sideways with the same surface in view." };
   if (capture?.state === "checking" || stats.currentViewChecked === false) return scanning();
@@ -130,8 +128,7 @@ export class CaptureExperience {
         stats.depthState === "unavailable" || stats.adaptiveCapture?.capacityReached ||
         lastProgressAt == null || now - lastProgressAt < SAVED_VIEW_STALL_MS) return null;
     // A complete, confirmed area does not need another saved viewpoint.
-    if (!stats.adaptiveCapture?.provisionalFrameCount &&
-        (stats.fusionKeyframes || 0) >= 6 && (stats.currentConfirmedRatio || 0) >= 0.85) return null;
+    if ((stats.fusionKeyframes || 0) >= 6 && (stats.currentConfirmedRatio || 0) >= 0.85) return null;
     const recent = this.diagnostics.recent.filter(event =>
       now - (this.startedAt + event.elapsedMs) <= CURRENT_ATTEMPT_MS);
     if (!recent.length) return null;
@@ -139,7 +136,7 @@ export class CaptureExperience {
     if (now - (this.startedAt + latest.elapsedMs) > CURRENT_ATTEMPT_MS) return null;
     // Once enough views are saved, a stationary revisit is not a failure.
     // Existing coverage guidance can still point out a weak surface.
-    if (latest.accepted && !stats.adaptiveCapture?.provisionalFrameCount && (stats.fusionKeyframes || 0) >= 6) return null;
+    if (latest.accepted && (stats.fusionKeyframes || 0) >= 6) return null;
     return stalledViewFeedback(latest.reason, stats.recoveryDirection);
   }
   update(stats, timestamp) {
