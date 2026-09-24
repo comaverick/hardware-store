@@ -51,7 +51,7 @@ async function startPanel() {
   const onSurface = jest.fn();
   render(<ScannerPanel capabilities={{ ar: true, secure: true }} onSurface={onSurface} onCancel={jest.fn()} />);
   fireEvent.click(screen.getByRole("button", { name: "Start camera scan" }));
-  await screen.findByRole("button", { name: "Finish & review" });
+  await screen.findByRole("button", { name: /Finish & review|Review saved scan/ });
   return onSurface;
 }
 
@@ -142,6 +142,19 @@ test("a stalled scan shows the same actionable reason in progress and live statu
   expect(screen.getByText("No new view saved")).toBeInTheDocument();
   expect(screen.getByRole("status")).toHaveTextContent("Not enough overlap");
   expect(screen.getAllByText(/turn back toward the last captured area/i)).toHaveLength(2);
+});
+
+test("a stopped depth feed keeps review available and changes the recovery action", async () => {
+  result.stats.depthCurrent = false;
+  result.stats.depthRecoveryState = "stalled";
+  result.stats.depthFailureKind = "depth-missing";
+  result.stats.captureFeedback = { code: "depth-stalled", tone: "warning",
+    label: "Depth sensor stopped responding", hint: "Your saved views are safe. Review them now." };
+  await startPanel();
+  expect(screen.getByRole("status")).toHaveTextContent("Depth sensor stopped responding");
+  expect(screen.getByRole("button", { name: "Review saved scan" })).toBeEnabled();
+  fireEvent.click(screen.getByRole("button", { name: "Review saved scan" }));
+  expect(await screen.findByRole("status", { name: "Capture review" })).toBeInTheDocument();
 });
 
 test.each(["during", "after"])("the captured result can be saved if XR ends %s reconstruction", async timing => {

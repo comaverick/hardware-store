@@ -81,6 +81,31 @@ test("a narrow camera baseline prompts a sideways view", () => {
   expect(screen.getByText(/sideways step/i)).toBeInTheDocument();
 });
 
+test("a depth outage replaces overlap guidance and explains the retained-view count", () => {
+  render(<CaptureProgress stats={{ fusionKeyframes: 60, fusionKeyframeLimit: 60,
+    depthRecoveryState: "stalled", currentViewChecked: false,
+    captureDiagnostics: { committedFrames: 72 },
+    adaptiveCapture: { state: "checking", connected: true, coverage: {
+      regions: [{ id: "middle", observed: 100, ratio: .3 }],
+    } },
+  }} />);
+  expect(screen.getByText("Retained depth views")).toBeInTheDocument();
+  expect(screen.getByText("Depth stopped")).toBeInTheDocument();
+  expect(screen.getByText(/72 verified in this scan · 60 kept/i)).toBeInTheDocument();
+  expect(screen.getByText(/Review your saved scan now/i)).toBeInTheDocument();
+  expect(screen.queryByText(/another overlapping pass/i)).not.toBeInTheDocument();
+});
+
+test("a true view-capacity stop is distinguished from a retained count of 60", () => {
+  render(<CaptureProgress stats={{ fusionKeyframes: 60, fusionKeyframeLimit: 60,
+    adaptiveCapture: { connected: true, capacityReached: true, coverage: {
+      regions: [{ id: "middle", observed: 100, ratio: .3 }],
+    } },
+  }} />);
+  expect(screen.getByText("Section captured")).toBeInTheDocument();
+  expect(screen.getByText(/reached its safe view capacity/i)).toBeInTheDocument();
+});
+
 test("failed review offers both another pass and an explicit partial save", () => {
   const continueScan = jest.fn(), save = jest.fn();
   render(<CaptureAuditNotice audit={{ issues: ["Upper surfaces need another overlapping pass."] }} onContinue={continueScan} onSave={save} />);

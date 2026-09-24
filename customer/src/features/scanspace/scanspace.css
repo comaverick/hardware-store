@@ -1777,6 +1777,11 @@
   color: #bacac2;
   font-size: 9px;
 }
+.ss-capture-retention {
+  margin: 4px 0 0;
+  color: #bacac2;
+  font-size: 9px;
+}
 .ss-capture-overlap strong { color: #e9f2ed; }
 .ss-capture-next {
   margin: 7px 0 0;

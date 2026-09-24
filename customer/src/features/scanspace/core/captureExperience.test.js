@@ -50,6 +50,18 @@ test("tracking reset overrides motion guidance immediately and stale depth canno
   expect(experience.update(noDepth, 2000).code).toBe("depth");
 });
 
+test("persistent depth failures have actionable status that clears on recovery", () => {
+  const experience = new CaptureExperience();
+  const interrupted = { ...good(), depthCurrent: false, depthState: "stalled",
+    depthRecoveryState: "retrying", depthFailureKind: "depth-read-error" };
+  expect(experience.update(interrupted, 2000)).toMatchObject({ code: "depth-retrying",
+    label: "Depth read failed; retrying" });
+  expect(experience.update({ ...interrupted, depthRecoveryState: "stalled" }, 11000))
+    .toMatchObject({ code: "depth-stalled", label: "Depth reads keep failing",
+      hint: expect.stringMatching(/review them now/i) });
+  expect(experience.update(good(), 11200).code).toBe("scanning");
+});
+
 test("a stalled scan names the current rejection and clears as soon as a view is saved", () => {
   const experience = new CaptureExperience();
   const stats = { ...good(), fusionKeyframes: 2, currentConfirmedRatio: 0.3 };

@@ -44,10 +44,15 @@ export function captureProgressSummary(stats = {}) {
       : stats.connectedSurfaceCoverage,
   );
   const frames = Math.max(0, Number(stats.fusionKeyframes) || 0);
+  const frameLimit = Math.max(0, Number(stats.fusionKeyframeLimit) || 0);
+  const verifiedTotal = Math.max(frames, Number(stats.captureDiagnostics?.committedFrames) || 0);
   const weak = normalized.find(region => region.state === "weak");
   const building = normalized.find(region => region.state === "building");
   const observed = normalized.some(region => region.observed > 0);
   const stalled = stats.captureStall?.stalled === true;
+  const depthRetrying = stats.depthRecoveryState === "retrying";
+  const depthStalled = stats.depthRecoveryState === "stalled";
+  const capacityReached = adaptive.capacityReached === true;
   const movingTooFast = stats.captureFeedback?.code === "motion";
   const shortBaseline = Number.isFinite(stats.cameraBaseline) && frames >= MIN_SURFACE_FUSION_KEYFRAMES &&
     stats.cameraBaseline < MIN_SURFACE_CAMERA_BASELINE_METERS;
@@ -57,7 +62,17 @@ export function captureProgressSummary(stats = {}) {
     !(adaptive.pendingCount || 0) && !stalled && !movingTooFast && !shortBaseline;
   const checking = adaptive.state === "checking" || stats.currentViewChecked === false;
   let next = "Keep one surface in view and take a small step sideways.";
-  if (stalled) {
+  if (depthStalled) {
+    next = capacityReached
+      ? "No new depth is arriving, and this section reached its safe view limit. Review the saved scan now."
+      : hasCapture
+        ? "No new depth is arriving. Review your saved scan now, or leave the camera open while it retries."
+        : "No usable scan is saved yet. Leave the camera open while it retries, or cancel and start again.";
+  } else if (capacityReached) {
+    next = "This section reached its safe view capacity. Finish & review the saved scan.";
+  } else if (depthRetrying) {
+    next = "Depth input is interrupted. ScanSpace is retrying automatically; your saved views remain safe.";
+  } else if (stalled) {
     next = stats.captureStall.hint;
   } else if (movingTooFast) {
     next = stats.captureFeedback.hint;
@@ -79,6 +94,11 @@ export function captureProgressSummary(stats = {}) {
     regions: normalized,
     reviewReady,
     frames,
+    frameLimit,
+    verifiedTotal,
+    depthRetrying,
+    depthStalled,
+    capacityReached,
     stalled,
   };
 }
@@ -122,19 +142,23 @@ export function CaptureCoverage({ coverage }) {
 
 export function CaptureProgress({ stats }) {
   const summary = captureProgressSummary(stats);
-  const stateLabel = summary.reviewReady
-    ? "Ready to review"
-    : summary.hasCapture
-      ? summary.stalled ? "No new view saved" : summary.checking ? "Checking new view" : "Capture saved"
-      : summary.stalled ? "No view saved yet" : "Building first area";
+  let stateLabel = summary.stalled ? "No view saved yet" : "Building first area";
+  if (summary.hasCapture)
+    stateLabel = summary.stalled ? "No new view saved" : summary.checking ? "Checking new view" : "Capture saved";
+  if (summary.reviewReady) stateLabel = "Ready to review";
+  if (summary.capacityReached) stateLabel = "Section captured";
+  if (summary.depthRetrying) stateLabel = "Retrying depth";
+  if (summary.depthStalled) stateLabel = "Depth stopped";
   return (
     <section className="ss-capture-progress" aria-label="Scan progress">
       <div className="ss-capture-progress-head">
-        <p><span>Saved depth views</span><strong>{summary.frames}</strong></p>
-        <span className={`ss-capture-state ${summary.reviewReady ? "is-ready" : ""}`}>
+        <p><span>Retained depth views</span><strong>{summary.frames}</strong></p>
+        <span className={`ss-capture-state ${summary.reviewReady && !summary.depthStalled && !summary.depthRetrying ? "is-ready" : ""}`}>
           {stateLabel}
         </span>
       </div>
+      {!!summary.frameLimit && summary.frames >= summary.frameLimit &&
+        <p className="ss-capture-retention">{summary.verifiedTotal} verified in this scan · {summary.frames} kept for reconstruction.</p>}
       <p className="ss-capture-overlap">Confirmed saved coverage <strong>{summary.overlap}%</strong> · Unscanned areas may stay open.</p>
       <p className="ss-capture-next" id="ss-capture-next"><strong>Next:</strong> {summary.next}</p>
       <CaptureCoverage coverage={stats.adaptiveCapture?.coverage} />

@@ -43,6 +43,10 @@ export const MAX_TEXTURE_KEYFRAMES = 15;
 export const DEPTH_TYPE_PREFERENCE = Object.freeze(["raw", "smooth"]);
 const PREVIEW_REBUILD_AFTER_REMOVALS = 8;
 const COVERAGE_REFRESH_MS = 1500;
+const DEPTH_RETRYING_MS = 2000;
+const DEPTH_STALLED_MS = 10000;
+const DEPTH_RETRY_INTERVAL_MS = 250;
+const XR_FRAME_WATCHDOG_MS = 2000;
 
 function poseMotion(previous, pose, timestamp) {
   if (!previous || timestamp <= previous.timestamp)
@@ -330,6 +334,10 @@ export class RoomScanner {
       depthState: "waiting",
       depthMisses: 0,
       depthReadErrors: 0,
+      depthRecoveryState: "waiting",
+      depthFailureKind: "",
+      depthFailureMs: 0,
+      depthRecoveries: 0,
       originChanged: false,
       colorActive: false,
       tracking: false,
@@ -343,6 +351,7 @@ export class RoomScanner {
       directionCoverage: Array(24).fill(false),
       currentDirection: 0,
       fusionKeyframes: 0,
+      fusionKeyframeLimit: MAX_FUSION_KEYFRAMES,
       fusionKeyframeCompactions: 0,
       textureKeyframes: 0,
       independentTextureCaptures: 0,
@@ -384,8 +393,8 @@ export class RoomScanner {
     this.previewNeedsRebuild = false;
     this.previewDiscardedCount = 0;
   }
-  publish() {
-    this.updateExperience();
+  publish(time = this.lastFrameAt ?? performance.now()) {
+    this.updateExperience(time);
     this.onUpdate({
       ...this.stats,
       floorY: this.floorY,
@@ -513,6 +522,8 @@ export class RoomScanner {
           this.renderer.getContext(),
         );
       this.renderer.setAnimationLoop((time, frame) => this.frame(time, frame));
+      this.lastFrameAt = performance.now();
+      this.depthWatchdog = window.setInterval(() => this.depthWatchdogTick(performance.now()), 1000);
       this.publish();
     } catch (error) {
       await this.stop();
@@ -525,7 +536,40 @@ export class RoomScanner {
     if (this.stats.errors[this.stats.errors.length - 1] !== message)
       this.stats.errors = [...this.stats.errors.slice(-4), message];
   }
+  updateDepthRecovery(time) {
+    if (this.depthFailureSince == null) return;
+    const elapsed = Math.max(0, time - this.depthFailureSince);
+    this.stats.depthFailureMs = Math.round(elapsed);
+    this.stats.depthRecoveryState = elapsed >= DEPTH_STALLED_MS ? "stalled" :
+      elapsed >= DEPTH_RETRYING_MS ? "retrying" : "waiting";
+  }
+  noteDepthFailure(kind, time, since = time) {
+    this.depthFailureSince ??= since;
+    this.stats.depthFailureKind = kind;
+    this.updateDepthRecovery(time);
+  }
+  noteDepthSuccess() {
+    if (this.depthFailureSince != null) this.stats.depthRecoveries++;
+    this.depthFailureSince = null;
+    this.stats.depthFailureKind = "";
+    this.stats.depthFailureMs = 0;
+    this.stats.depthRecoveryState = "active";
+  }
+  depthWatchdogTick(time) {
+    if (this.closed || !this.session || this.paused || this.originChanged || this.lastFrameAt == null) return;
+    // The camera passthrough can remain visible even if XR animation callbacks
+    // stop. A separate wall-clock check prevents the last UI message from
+    // sitting on screen forever in that case.
+    if (time - this.lastFrameAt <= XR_FRAME_WATCHDOG_MS) return;
+    this.stats.depthCurrent = false;
+    this.stats.depthState = "stalled";
+    this.stats.currentViewChecked = false;
+    this.stats.currentConfirmedRatio = 0;
+    this.noteDepthFailure("xr-frame-stalled", time, this.lastFrameAt);
+    this.publish(time);
+  }
   markDepthMiss(time) {
+    this.noteDepthFailure("depth-missing", time);
     this.stats.depthMisses++;
     this.stats.totalDepthMisses = (this.stats.totalDepthMisses || 0) + 1;
     if (!this.stats.depthActive) {
@@ -549,6 +593,7 @@ export class RoomScanner {
       )
         depth = frame.getDepthInformation(view);
     } catch (error) {
+      this.noteDepthFailure("depth-read-error", time);
       this.stats.rejectedDepthFrames++;
       this.stats.depthReadErrors++;
       this.stats.depthState = "error";
@@ -596,6 +641,9 @@ export class RoomScanner {
       });
       let colorAt = null;
       if (
+        // Let the first returning depth frame prove the sensor is healthy
+        // before spending time on synchronous camera-texture readback.
+        this.depthFailureSince == null &&
         this.binding &&
         view.camera &&
         time >= (this.colorRetryAt || 0) && time - (this.lastColorReadAt ?? -Infinity) >= 350
@@ -697,6 +745,9 @@ export class RoomScanner {
         });
         if (!candidate) {
           this.stats.rejectedDepthFrames++;
+          this.stats.depthCurrent = false;
+          this.stats.depthState = "error";
+          this.noteDepthFailure("invalid-depth", time);
           this.capture.failure("invalid-depth", time);
           this.recordCaptureOutcome(time, { reason: "invalid-depth" }, started);
           return;
@@ -769,6 +820,7 @@ export class RoomScanner {
         this.stats.currentConfirmedRatio = 0;
         this.capture.failure(quality.reason, time);
       }
+      this.noteDepthSuccess();
       this.recordCaptureOutcome(time, outcome, started);
       this.stats.cloudCellSize = this.cloud.size;
       this.stats.cloudCompactions = this.cloud.compactions;
@@ -791,6 +843,7 @@ export class RoomScanner {
     } catch (error) {
       // A single malformed depth texture must not turn the whole XR session
       // into a permanent paused state. The next frame can often recover.
+      this.noteDepthFailure("depth-processing-error", time);
       this.stats.rejectedDepthFrames++;
       this.stats.depthReadErrors++;
       this.stats.depthState = "error";
@@ -849,6 +902,12 @@ export class RoomScanner {
           linearSpeed: this.cameraMotion?.linearSpeed || 0, angularSpeed: this.cameraMotion?.angularSpeed || 0,
         });
         const elapsedSinceCapture = time - (this.lastCapture || 0);
+        // During a depth outage only cheap sensor reads are attempted. Normal
+        // processing and quality gates resume on the first valid depth frame.
+        const cheapDepthRetry = ["depth-missing", "depth-read-error", "xr-frame-stalled"]
+          .includes(this.stats.depthFailureKind);
+        const retryInterval = this.depthFailureSince != null && cheapDepthRetry
+          ? Math.min(profile.interval, DEPTH_RETRY_INTERVAL_MS) : profile.interval;
         const settledRetryInterval = Math.min(profile.interval,
           Math.max(120, Math.ceil(this.captureProcessingMs * 2) || 120));
         const settledAfterMotion = this.stats.frameQuality === "moving-too-fast" &&
@@ -856,8 +915,8 @@ export class RoomScanner {
           this.cameraMotion?.depthLinearSpeed <= profile.maxLinearSpeed &&
           this.cameraMotion?.depthAngularSpeed <= profile.maxAngularSpeed &&
           elapsedSinceCapture >= settledRetryInterval;
-        this.stats.captureIntervalMs = settledAfterMotion ? settledRetryInterval : profile.interval;
-        if (!this.paused && view && (elapsedSinceCapture >= profile.interval || settledAfterMotion)) {
+        this.stats.captureIntervalMs = settledAfterMotion ? settledRetryInterval : retryInterval;
+        if (!this.paused && view && (elapsedSinceCapture >= retryInterval || settledAfterMotion)) {
           this.lastCapture = time;
           this.captureDepthFrame(time, frame, view);
           if (frame.detectedPlanes) {
@@ -883,7 +942,10 @@ export class RoomScanner {
         this.stats.depthCurrent =
           !!this.lastDepthAt && time - this.lastDepthAt < 2000;
         this.lastPublish = time;
-        this.updatePreview();
+        // Rebuilding the saved-point preview cannot restore missing live depth.
+        // Leave the last verified overlay in place while retrying the sensor.
+        if (this.depthFailureSince == null || time - this.depthFailureSince < DEPTH_RETRYING_MS)
+          this.updatePreview();
         this.publish();
       }
       if (pose && this.stats.tracking) this.updateRecoveryTarget(pose.views[0]);
@@ -1536,6 +1598,7 @@ export class RoomScanner {
   cleanup() {
     if (this.closed) return;
     this.closed = true;
+    if (this.depthWatchdog != null) window.clearInterval(this.depthWatchdog);
     this.hitSource?.cancel();
     this.renderer?.setAnimationLoop(null);
     this.colorReader?.dispose();

@@ -461,7 +461,7 @@ export default function ScannerPanel({
                     disabled={busy || stats.originChanged || !hasReconstructableCapture}
                     onClick={finishScan}
                   >
-                    Finish &amp; review
+                    {stats.depthRecoveryState === "stalled" ? "Review saved scan" : "Finish & review"}
                   </button>
                 </div>
               ) : (
@@ -537,6 +537,10 @@ export default function ScannerPanel({
               maxAngularSpeed: stats.maxAngularSpeed || 0,
               decisionsByReason: JSON.stringify(stats.captureDiagnostics?.decisions || {}),
               depthState: stats.depthState || "waiting",
+              depthRecoveryState: stats.depthRecoveryState || "waiting",
+              depthFailureKind: stats.depthFailureKind || "None",
+              depthFailureMs: stats.depthFailureMs || 0,
+              depthRecoveries: stats.depthRecoveries || 0,
               depthMisses: stats.depthMisses || 0,
               totalDepthMisses: stats.totalDepthMisses || 0,
               depthReadErrors: stats.depthReadErrors || 0,

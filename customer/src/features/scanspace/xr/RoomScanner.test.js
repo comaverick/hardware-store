@@ -606,6 +606,55 @@ test("missing depth is counted cumulatively even after sensor acquisition resume
   expect(scanner.stats.captureDiagnostics.attempts).toBe(5);
 });
 
+test("a persistent depth outage escalates, retries cheaply, and clears when valid depth returns", () => {
+  const { scanner, frame } = captureHarness();
+  const saved = scanner.keyframes.slice();
+  frame.getDepthInformation.mockReturnValue(null);
+  scanner.frame(1400, frame);
+  expect(scanner.stats.depthRecoveryState).toBe("waiting");
+  scanner.frame(3500, frame);
+  expect(scanner.stats.depthRecoveryState).toBe("retrying");
+  expect(scanner.stats.captureFeedback.code).toBe("depth-retrying");
+  expect(scanner.stats.captureIntervalMs).toBeLessThanOrEqual(250);
+  scanner.frame(11500, frame);
+  expect(scanner.stats.depthRecoveryState).toBe("stalled");
+  expect(scanner.stats.captureFeedback).toMatchObject({ code: "depth-stalled",
+    label: "Depth sensor stopped responding" });
+  expect(scanner.keyframes).toEqual(saved);
+  frame.getDepthInformation.mockImplementation(() => ({ width: 320, height: 240,
+    getDepthInMeters: () => 2 }));
+  scanner.frame(11800, frame);
+  expect(scanner.stats.depthRecoveryState).toBe("active");
+  expect(scanner.stats.depthFailureMs).toBe(0);
+  expect(scanner.stats.depthRecoveries).toBe(1);
+  expect(scanner.stats.captureFeedback.code).not.toBe("depth-stalled");
+});
+
+test("the watchdog reports stopped XR callbacks instead of leaving the last prompt frozen", () => {
+  const { scanner, frame } = captureHarness();
+  scanner.lastFrameAt = 1200;
+  scanner.depthWatchdogTick(3500);
+  expect(scanner.stats.depthRecoveryState).toBe("retrying");
+  expect(scanner.stats.depthFailureKind).toBe("xr-frame-stalled");
+  scanner.depthWatchdogTick(11500);
+  expect(scanner.stats.captureFeedback).toMatchObject({ code: "depth-stalled",
+    label: "Camera scan stopped responding" });
+  scanner.frame(11800, frame);
+  expect(scanner.stats.depthRecoveryState).toBe("active");
+  expect(scanner.stats.adaptiveCapture.connected).toBe(true);
+});
+
+test("repeated depth read errors are distinguished from missing sensor frames", () => {
+  const { scanner, view } = captureHarness();
+  const failing = { getDepthInformation: () => { throw new Error("depth read failed"); } };
+  for (const time of [1400, 3500, 11500]) scanner.captureDepthFrame(time, failing, view);
+  expect(scanner.stats.depthFailureKind).toBe("depth-read-error");
+  expect(scanner.stats.depthRecoveryState).toBe("stalled");
+  expect(scanner.stats.captureFeedback.label).toBe("Depth reads keep failing");
+  expect(scanner.stats.depthReadErrors).toBe(3);
+  expect(scanner.keyframes).toHaveLength(2);
+});
+
 test.each([
   ["narrow", { compared: 24, agreeing: 22, tiles: 4, support: 0.09,
     agreement: 0.92, median: 0.01, upper: 0.02, freeSpaceRatio: 0 }],

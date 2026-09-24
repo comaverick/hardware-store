@@ -8,7 +8,7 @@ const states = ["starting", "tracking", "checking", "recovering", "tracking-lost
 const reasons = ["connected", "starting", "moving-too-fast", "sparse-depth", "near-field-obstruction",
   "depth-error", "depth-missing", "invalid-depth", "checking-overlap", "overlap-lost",
   "alignment-conflict", "confirming-recovery", "confirming-bridge", "capacity", "unknown"];
-const prompts = ["motion", "depth", "tracking", "reconnect", "reset", "unsupported", "capacity"];
+const prompts = ["motion", "depth", "depth-retrying", "depth-stalled", "tracking", "reconnect", "reset", "unsupported", "capacity"];
 const measurements = ["gateLinearSpeed", "gateAngularSpeed", "maxLinearSpeed", "maxAngularSpeed",
   "sampledLinearSpeed", "sampledAngularSpeed", "validDepthRatio", "overlap", "medianResidual",
   "upperResidual", "captureIntervalMs", "processingMs"];
@@ -16,6 +16,14 @@ const number = value => Number.isFinite(value) ? Math.max(0, Math.min(1e12, valu
 const counts = (value, keys) => Object.fromEntries(keys.map(key => [key, number(value?.[key])]));
 const scanning = () => ({ code: "scanning", tone: "active", label: "Scanning",
   hint: "Move slowly and keep part of the last captured area in view." });
+
+function depthFailureLabel(kind, stalled) {
+  if (kind === "xr-frame-stalled") return stalled ? "Camera scan stopped responding" : "Camera scan interrupted";
+  if (kind === "depth-read-error") return stalled ? "Depth reads keep failing" : "Depth read failed; retrying";
+  if (["depth-processing-error", "invalid-depth"].includes(kind))
+    return stalled ? "Depth data keeps failing" : "Depth data failed; retrying";
+  return stalled ? "Depth sensor stopped responding" : "Depth signal interrupted";
+}
 
 function stalledViewFeedback(latest, recoveryDirection) {
   const reason = latest.reason;
@@ -53,6 +61,16 @@ export function captureFeedbackCandidate(stats) {
     label: "Depth is unavailable", hint: "This device cannot capture depth in this browser." };
   if (!stats.tracking) return { code: "tracking", tone: "warning", label: "Finding your position",
     hint: "Hold still and point toward an area you already scanned." };
+  if (stats.depthRecoveryState === "stalled") return { code: "depth-stalled", tone: "warning", immediate: true,
+    label: depthFailureLabel(stats.depthFailureKind, true),
+    hint: capture?.capacityReached
+      ? "This section is also at its safe view limit. Review the saved scan now."
+      : (stats.fusionKeyframes || 0) >= 2
+        ? "Your saved views are safe. Review them now, or leave this open while ScanSpace keeps trying."
+        : "No usable scan is saved yet. Leave this open while ScanSpace retries, or start a new scan." };
+  if (stats.depthRecoveryState === "retrying") return { code: "depth-retrying", tone: "warning", immediate: true,
+    label: depthFailureLabel(stats.depthFailureKind, false),
+    hint: "ScanSpace is retrying automatically. Verified views remain saved." };
   if (!stats.depthCurrent || stats.depthState === "error") return { code: "depth", tone: "warning",
     label: "Waiting for the camera", hint: "Hold still with a well-lit surface in view." };
   if (capture?.capacityReached) return { code: "capacity", tone: "warning", immediate: true,
