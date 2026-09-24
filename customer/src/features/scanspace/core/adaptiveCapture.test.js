@@ -75,6 +75,20 @@ test("a thin measured strip is a possible bridge, but a shifted layer is not", (
   expect(captureBridgeOverlap(captureOverlap(original, wallFrame(0.08, 400, { sparse: true })))).toBe(false);
 });
 
+test("broad near-threshold overlap needs strong support and still rejects conflicting depth", () => {
+  const measured = { compared: 150, agreeing: 60, tiles: 9, support: 0.24,
+    agreement: 0.46, median: 0.058, upper: 0.098, freeSpaceRatio: 0.04 };
+  expect(captureBridgeOverlap({ conflict: false, forward: measured, backward: measured })).toBe(true);
+  expect(captureBridgeOverlap({ conflict: false, forward: measured,
+    backward: { ...measured, median: 0.07 } })).toBe(false);
+  expect(captureBridgeOverlap({ conflict: false, forward: measured,
+    backward: { ...measured, freeSpaceRatio: 0.2 } })).toBe(false);
+  expect(captureBridgeOverlap({ conflict: false, forward: measured,
+    backward: { ...measured, support: 0.19 } })).toBe(false);
+  expect(captureBridgeOverlap({ conflict: true, forward: measured, backward: measured })).toBe(false);
+  expect(captureBridgeOverlap(captureOverlap(wallFrame(0, 100), wallFrame(0.08, 400, { wallZ: -2.22 })))).toBe(false);
+});
+
 test("a sampling-phase miss during a turn gets a bounded bidirectional recheck", () => {
   const original = wallFrame(0, 100);
   const normal = captureOverlap(original, wallFrame(0.08, 400, { yaw: 1.08 }));
@@ -302,6 +316,18 @@ test("adaptive timing follows motion, depth quality, detail and actual processin
   expect(detail.spacing).toBeLessThan(moving.spacing);
   expect(busy.interval).toBeGreaterThanOrEqual(330);
   expect(busy.sampleLongSide).toBe(64);
+  const previewBusy = adaptiveCaptureProfile({ processingMs: 700, geometryProcessingMs: 20 });
+  expect(previewBusy.interval).toBe(600);
+  expect(previewBusy.sampleLongSide).toBe(96);
+});
+
+test("live coverage can use a recent snapshot while saved views still update immediately", () => {
+  const capture = started();
+  const previous = capture.snapshot().coverage;
+  capture.consider(wallFrame(0.16, 700));
+  expect(capture.frames).toHaveLength(3);
+  expect(capture.snapshot({ refreshCoverage: false }).coverage).toBe(previous);
+  expect(capture.snapshot().coverage).not.toBe(previous);
 });
 
 test("a stationary depth replacement must preserve all existing connections", () => {

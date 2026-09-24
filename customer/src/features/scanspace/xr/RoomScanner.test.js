@@ -606,13 +606,16 @@ test("missing depth is counted cumulatively even after sensor acquisition resume
   expect(scanner.stats.captureDiagnostics.attempts).toBe(5);
 });
 
-test("a corroborated narrow bridge adds views to the same saved scan", () => {
+test.each([
+  ["narrow", { compared: 24, agreeing: 22, tiles: 4, support: 0.09,
+    agreement: 0.92, median: 0.01, upper: 0.02, freeSpaceRatio: 0 }],
+  ["near-threshold", { compared: 150, agreeing: 60, tiles: 9, support: 0.24,
+    agreement: 0.46, median: 0.058, upper: 0.098, freeSpaceRatio: 0.04 }],
+])("a corroborated %s bridge adds views to the same saved scan", (_kind, measured) => {
   const { scanner, frame, move } = captureHarness();
-  const measured = { compared: 24, agreeing: 22, tiles: 4, support: 0.09,
-    agreement: 0.92, median: 0.01, upper: 0.02, freeSpaceRatio: 0 };
   scanner.capture.compare = (left, right) => ({
     accepted: left.timestamp > 1000 && right.timestamp > 1000,
-    conflict: false, overlap: 0.09, forward: measured, backward: measured,
+    conflict: false, overlap: measured.support, forward: measured, backward: measured,
   });
   move(0.16);
   scanner.frame(1400, frame);
@@ -624,6 +627,32 @@ test("a corroborated narrow bridge adds views to the same saved scan", () => {
   expect(scanner.stats.adaptiveCapture.connected).toBe(true);
   expect(scanner.stats.fusionKeyframes).toBe(4);
   expect(scanner.stats.captureDiagnostics.decisions["confirming-bridge"]).toBe(1);
+});
+
+test("preview maintenance batches redundant frame removals but final result is exact", () => {
+  const { scanner } = captureHarness();
+  const saved = scanner.keyframes[0];
+  const add = jest.spyOn(scanner, "addSavedPreview").mockImplementation(() => {});
+  const rebuild = jest.spyOn(scanner, "rebuildPreviewCloud").mockImplementation(() => {
+    scanner.previewNeedsRebuild = false;
+    scanner.previewDiscardedCount = 0;
+  });
+  for (let index = 0; index < 7; index++)
+    scanner.recordSavedPreview([{ captureId: 100 + index }], [saved]);
+  expect(add).toHaveBeenCalledTimes(7);
+  expect(rebuild).not.toHaveBeenCalled();
+  expect(scanner.previewNeedsRebuild).toBe(true);
+  scanner.recordSavedPreview([{ captureId: 107 }], [saved]);
+  expect(rebuild).toHaveBeenCalledTimes(1);
+  add.mockRestore();
+  rebuild.mockRestore();
+  scanner.previewNeedsRebuild = true;
+  const exactRebuild = jest.spyOn(scanner, "rebuildPreviewCloud");
+  const result = scanner.result();
+  expect(exactRebuild).toHaveBeenCalledTimes(1);
+  expect(scanner.previewNeedsRebuild).toBe(false);
+  expect(result.keyframes).toHaveLength(2);
+  expect(result.points.length).toBeGreaterThan(0);
 });
 
 test("the amber target is reserved for sustained reconnection, not routine coverage or confirmation", () => {

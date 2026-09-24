@@ -17,10 +17,11 @@ const counts = (value, keys) => Object.fromEntries(keys.map(key => [key, number(
 const scanning = () => ({ code: "scanning", tone: "active", label: "Scanning",
   hint: "Move slowly and keep part of the last captured area in view." });
 
-function stalledViewFeedback(reason, recoveryDirection) {
+function stalledViewFeedback(latest, recoveryDirection) {
+  const reason = latest.reason;
   const warning = { tone: "warning", immediate: true, stalled: true };
   if (reason === "moving-too-fast") return { ...warning, code: "stalled-motion",
-    label: "Pause to save a view", hint: "Hold the phone steady briefly, then move sideways slowly." };
+    label: "Slow down to save a view", hint: "Sweep more slowly; ScanSpace will save a view automatically when it is steady." };
   if (reason === "sparse-depth") return { ...warning, code: "stalled-depth",
     label: "Depth is patchy", hint: "Step back slightly and aim at a well-lit, non-reflective surface." };
   if (reason === "near-field-obstruction") return { ...warning, code: "stalled-obstruction",
@@ -28,12 +29,15 @@ function stalledViewFeedback(reason, recoveryDirection) {
   if (reason === "confirming-bridge") return { ...warning, code: "stalled-bridge",
     label: "Checking this connection", hint: "Keep the same shared edge in view and move a little sideways." };
   if (reason === "alignment-conflict") return { ...warning, code: "stalled-alignment",
-    label: "Depth views disagree", hint: "Hold on the saved area while ScanSpace checks alignment." };
+    label: "Depth views disagree", hint: "Keep some saved area visible and move slowly while alignment is checked." };
+  if (reason === "overlap-lost" && latest.overlap >= 0.18)
+    return { ...warning, code: "stalled-alignment", label: "Aligning this view",
+      hint: "Shared depth is visible. Keep moving slowly along it; ScanSpace will keep trying." };
   if (["checking-overlap", "overlap-lost"].includes(reason))
-    return { ...warning, code: "stalled-overlap", label: "Not enough overlap",
-      hint: recoveryDirection || "Turn back until part of the last captured area is visible, then continue slowly." };
+    return { ...warning, code: "stalled-overlap", label: "Connecting this view",
+      hint: recoveryDirection || "Keep part of the last saved area visible and move slowly; capture continues automatically." };
   if (reason === "confirming-recovery") return { ...warning, code: "stalled-recovery",
-    label: "Hold this overlap", hint: "Keep the last captured area in view for a moment." };
+    label: "Confirming this connection", hint: "Keep some saved area in view and move slowly; capture continues automatically." };
   return { ...warning, code: "stalled-position", label: "Need another viewpoint",
     hint: "Keep the same surface visible and take a small sideways step." };
 }
@@ -55,11 +59,11 @@ export function captureFeedbackCandidate(stats) {
     label: "This section is captured", hint: "Review and save this section before starting another." };
   if (stats.captureStall) return stats.captureStall;
   if (stats.movingTooFast) return { code: "motion", tone: "warning", label: "Move a little more slowly",
-    hint: "Pause briefly, then continue with a slow sideways movement." };
+    hint: "Slow your sweep; capture resumes automatically when the view is steady." };
   if (capture?.state === "recovering") {
     if (["confirming-recovery", "confirming-bridge"].includes(stats.frameQuality)) return scanning();
-    return { code: "reconnect", tone: "warning", label: "Reconnect this view",
-      hint: stats.recoveryDirection || "Hold still and point back toward the last area you scanned." };
+    return { code: "reconnect", tone: "warning", label: "Reconnecting scan",
+      hint: "Keep some of the saved area visible while moving slowly; capture keeps trying." };
   }
   if (["sparse-depth", "near-field-obstruction"].includes(stats.frameQuality)) return {
     code: "depth", tone: "warning", label: "This surface is hard to capture", hint: "Step back slightly and try a small side angle." };
@@ -141,7 +145,7 @@ export class CaptureExperience {
     // Once enough views are saved, a stationary revisit is not a failure.
     // Existing coverage guidance can still point out a weak surface.
     if (latest.accepted && (stats.fusionKeyframes || 0) >= 6) return null;
-    return stalledViewFeedback(latest.reason, stats.recoveryDirection);
+    return stalledViewFeedback(latest, stats.recoveryDirection);
   }
   update(stats, timestamp) {
     this.startedAt ??= timestamp;

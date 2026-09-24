@@ -27,7 +27,8 @@ test("reconnection guidance waits through a hiccup and disappears when overlap i
     recoveryDirection: "Turn gently left toward your last scanned area." };
   expect(experience.update(stats, 0).code).toBe("scanning");
   expect(experience.update(stats, 1700).code).toBe("scanning");
-  expect(experience.update(stats, 1900)).toMatchObject({ code: "reconnect", hint: stats.recoveryDirection });
+  expect(experience.update(stats, 1900)).toMatchObject({ code: "reconnect",
+    hint: expect.stringMatching(/capture keeps trying/i) });
   expect(experience.update({ ...stats, frameQuality: "confirming-recovery" }, 2000).code).toBe("scanning");
   expect(captureFeedback({ ...good(), currentViewChecked: false }).label).toBe("Scanning");
 });
@@ -57,11 +58,22 @@ test("a stalled scan names the current rejection and clears as soon as a view is
   experience.update(stats, 100);
   experience.recordFrame({ timestamp: 3200, reason: "checking-overlap", state: "checking" });
   expect(experience.update(stats, 3200)).toMatchObject({ code: "stalled-overlap", stalled: true,
-    label: "Not enough overlap" });
-  expect(experience.captureStall.hint).toMatch(/last captured area/i);
+    label: "Connecting this view" });
+  expect(experience.captureStall.hint).toMatch(/last saved area/i);
   experience.recordFrame({ timestamp: 3300, reason: "connected", accepted: true, committed: 1, state: "tracking" });
   expect(experience.update({ ...stats, fusionKeyframes: 3 }, 3300).code).toBe("scanning");
   expect(experience.captureStall).toBeNull();
+});
+
+test("measured shared depth reports alignment instead of blaming overlap", () => {
+  const experience = new CaptureExperience();
+  const stats = { ...good(), fusionKeyframes: 2, currentConfirmedRatio: 0.3 };
+  experience.update(stats, 0);
+  experience.recordFrame({ timestamp: 100, reason: "connected", accepted: true, committed: 2, state: "tracking" });
+  experience.recordFrame({ timestamp: 3200, reason: "overlap-lost", state: "recovering",
+    overlap: 0.27, medianResidual: 0.058, upperResidual: 0.095 });
+  expect(experience.update(stats, 3200)).toMatchObject({ code: "stalled-alignment",
+    label: "Aligning this view", hint: expect.stringMatching(/keep trying/i) });
 });
 
 test("bridge confirmation and conflicting depth have distinct guidance", () => {

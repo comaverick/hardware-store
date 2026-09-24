@@ -92,7 +92,8 @@ export function captureDetail(frame) {
 }
 
 export function adaptiveCaptureProfile({ depthType = "", width = 0, height = 0, validRatio = 1,
-  noise = 0, edgeRatio = 0, processingMs = 0, linearSpeed = 0, angularSpeed = 0 } = {}) {
+  noise = 0, edgeRatio = 0, processingMs = 0, geometryProcessingMs = processingMs,
+  linearSpeed = 0, angularSpeed = 0 } = {}) {
   const limited = depthType !== "raw" || (width * height > 0 && width * height < 20000);
   const weak = validRatio < 0.45 || noise > 0.012;
   const detail = edgeRatio > 0.09;
@@ -106,8 +107,9 @@ export function adaptiveCaptureProfile({ depthType = "", width = 0, height = 0, 
     interval: Math.round(clamp(motionInterval, minimumInterval, Math.max(350, minimumInterval))),
     maxLinearSpeed: weak ? 0.25 : limited ? 0.35 : 0.45,
     maxAngularSpeed: weak ? 0.38 : limited ? 0.5 : 0.6,
-    // Readback and matching costs affect resolution as well as cadence.
-    sampleLongSide: processingMs > 90 ? 64 : detail && processingMs < 45 ? 128 : 96,
+    // Preview and coverage maintenance can delay the next attempt, but must
+    // not make the measured depth grid coarser. Only geometry work controls it.
+    sampleLongSide: geometryProcessingMs > 90 ? 64 : detail && geometryProcessingMs < 45 ? 128 : 96,
   };
 }
 
@@ -151,8 +153,12 @@ export function captureOverlap(left, right) {
   const first = prepareCaptureFrame(left), second = prepareCaptureFrame(right);
   let forward = directionalAgreement(first, second);
   let backward = directionalAgreement(second, first);
-  const strongOneWay = value => value.agreeing >= 20 && value.tiles >= 4 &&
-    value.support >= 0.07 && value.agreement >= 0.8 && value.median <= 0.04;
+  const strongOneWay = value =>
+    (value.agreeing >= 20 && value.tiles >= 4 && value.support >= 0.07 &&
+      value.agreement >= 0.8 && value.median <= 0.04) ||
+    (value.agreeing >= 42 && value.tiles >= 8 && value.support >= 0.22 &&
+      value.agreement >= 0.42 && value.median <= 0.065 && value.upper <= 0.105 &&
+      value.freeSpaceRatio <= 0.15);
   // A fixed coarse sampling phase can miss a thin overlap at the edge of a
   // turn, even though the opposite projection measured it. Recheck only that
   // sparse direction; a direction with actual disagreeing depth is never
@@ -175,15 +181,22 @@ export function captureOverlap(left, right) {
   };
 }
 
-// A narrow shared strip (for example, where a wall meets the ceiling) can be
-// enough to reconnect two *locally agreeing* views. It is not enough by itself
-// to save a frame: consider() requires a second, displaced view of that strip.
+// A narrow precise strip or a broader near-threshold match can reconnect two
+// locally agreeing views. Neither can save a frame by itself: consider()
+// requires a second, displaced view before adding either to the trusted graph.
 export function captureBridgeOverlap(result) {
   if (!result || result.conflict) return false;
-  const passes = value => value && value.compared >= 20 && value.agreeing >= 18 &&
+  const precise = value => value && value.compared >= 20 && value.agreeing >= 18 &&
     value.tiles >= 4 && value.support >= 0.07 && value.agreement >= 0.8 &&
     value.median <= 0.04 && value.upper <= 0.06 && value.freeSpaceRatio <= 0.15;
-  return !!(passes(result.forward) && passes(result.backward));
+  // Slightly noisy depth is common at shelves and wall edges. This route
+  // permits only a wider, spatially distributed shared area with stronger
+  // absolute support, no free-space contradiction, and temporal corroboration.
+  const broad = value => value && value.compared >= 60 && value.agreeing >= 42 &&
+    value.tiles >= 8 && value.support >= 0.22 && value.agreement >= 0.42 &&
+    value.median <= 0.065 && value.upper <= 0.105 && value.freeSpaceRatio <= 0.15;
+  return !!((precise(result.forward) && precise(result.backward)) ||
+    (broad(result.forward) && broad(result.backward)));
 }
 
 function graphConnected(frames, links, omit = null) {
@@ -244,6 +257,7 @@ export class AdaptiveCapture {
     this.recoveryMatches = 0;
     this.pendingSupport = new WeakMap();
     this.pendingBridgeEdges = new WeakMap();
+    this.coverageDirty = true;
     this.events = { recoveries: 0, promoted: 0, expired: 0, removed: 0, capacityStops: 0,
       pendingAgeDrops: 0, pendingCapacityDrops: 0, pendingRedundantDrops: 0,
       pendingConflictDrops: 0, pendingResetDrops: 0 };
@@ -400,7 +414,7 @@ export class AdaptiveCapture {
       this.events.removed++;
     }
     this.capacityReached = false;
-    this.coverage = null;
+    this.coverageDirty = true;
     return true;
   }
   consider(frame, profile = adaptiveCaptureProfile()) {
@@ -507,11 +521,14 @@ export class AdaptiveCapture {
     if ([...neighbors].some(id => !this.compare(candidate, this.frames.find(frame => frame.captureId === id)).accepted)) return false;
     candidate.captureId = previous.captureId;
     this.frames[this.frames.indexOf(previous)] = candidate;
-    this.coverage = null;
+    this.coverageDirty = true;
     return true;
   }
-  snapshot() {
-    this.coverage ||= connectedCoverage(this.frames);
+  snapshot({ refreshCoverage = true } = {}) {
+    if (!this.coverage || (refreshCoverage && this.coverageDirty)) {
+      this.coverage = connectedCoverage(this.frames);
+      this.coverageDirty = false;
+    }
     this.frames.forEach(frame => { frame.captureLinks = [...(this.links.get(frame.captureId) || [])]; });
     return { version: ADAPTIVE_CAPTURE_VERSION, state: this.state, reason: this.reason,
       connected: this.frames.length >= 2 && graphConnected(this.frames, this.links),

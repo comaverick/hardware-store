@@ -3,7 +3,6 @@ import { VoxelCloud, unprojectDepth, viewSampleGrid } from "../core/depth";
 import {
   createRgbdKeyframe,
   filterDepth,
-  depthPosition,
   imageFocus,
   imageSharpness,
 } from "../core/fusion";
@@ -42,6 +41,8 @@ export const MAX_FUSION_KEYFRAMES = 60;
 export const KEYFRAME_RETENTION_TRIGGER = 64;
 export const MAX_TEXTURE_KEYFRAMES = 15;
 export const DEPTH_TYPE_PREFERENCE = Object.freeze(["raw", "smooth"]);
+const PREVIEW_REBUILD_AFTER_REMOVALS = 8;
+const COVERAGE_REFRESH_MS = 1500;
 
 function poseMotion(previous, pose, timestamp) {
   if (!previous || timestamp <= previous.timestamp)
@@ -322,6 +323,8 @@ export class RoomScanner {
       stablePointCount: 0,
       cloudCellSize: this.cloud.size,
       cloudCompactions: 0,
+      previewRebuilds: 0,
+      geometryProcessingMs: 0,
       floorAutoDetected: false,
       depthActive: false,
       depthState: "waiting",
@@ -377,6 +380,9 @@ export class RoomScanner {
     this.experience = new CaptureExperience();
     this.captureProfile = adaptiveCaptureProfile();
     this.captureProcessingMs = 0;
+    this.geometryProcessingMs = 0;
+    this.previewNeedsRebuild = false;
+    this.previewDiscardedCount = 0;
   }
   publish() {
     this.updateExperience();
@@ -532,6 +538,8 @@ export class RoomScanner {
   }
   captureDepthFrame(time, frame, view) {
     const started = performance.now();
+    let geometryStarted = null;
+    let geometryElapsed = null;
     let depth = null;
     try {
       const depthUsage = this.session?.depthUsage || this.stats.depthUsage;
@@ -583,7 +591,8 @@ export class RoomScanner {
       this.captureProfile = adaptiveCaptureProfile({
         depthType: this.stats.depthType, width: depth.width, height: depth.height,
         validRatio: this.stats.depthFrames > 1 ? this.stats.validDepthRatio : 1, ...this.captureDetail,
-        processingMs: this.captureProcessingMs, ...this.cameraMotion,
+        processingMs: this.captureProcessingMs, geometryProcessingMs: this.geometryProcessingMs,
+        ...this.cameraMotion,
       });
       let colorAt = null;
       if (
@@ -622,6 +631,7 @@ export class RoomScanner {
       // Preserve a bounded grid for mid-range phones while matching the XR
       // view aspect. Native depth storage may be rotated or cropped.
       const { columns, rows } = viewSampleGrid(view, !!colorAt, this.captureProfile.sampleLongSide);
+      geometryStarted = performance.now();
       const framePoints = unprojectDepth(
         depth,
         view,
@@ -696,6 +706,7 @@ export class RoomScanner {
         this.captureDetail = captureDetail(candidate);
         const previousFrames = this.keyframes.slice();
         const decision = this.capture.consider(candidate, this.captureProfile);
+        geometryElapsed = performance.now() - geometryStarted;
         outcome = { ...decision, committed: decision.committed.length,
           matched: decision.reason !== "starting" && !!this.capture.lastMatch };
         this.keyframes = this.capture.frames;
@@ -713,8 +724,7 @@ export class RoomScanner {
           this.stats.acceptedDepthFrames++;
           this.keyframes = this.capture.frames;
           if (decision.committed.length) {
-            if (previousFrames.some(saved => !this.keyframes.includes(saved))) this.rebuildPreviewCloud();
-            else decision.committed.forEach(saved => this.addSavedPreview(saved, saved.captureId));
+            this.recordSavedPreview(previousFrames, decision.committed);
             this.recordCommittedViews(decision.committed);
             this.lastMeshPose = keyframePose;
           }
@@ -754,6 +764,7 @@ export class RoomScanner {
             confirmedViewRatio(candidate, this.capture.references(candidate));
         }
       } else {
+        geometryElapsed = performance.now() - geometryStarted;
         this.stats.rejectedDepthFrames++;
         this.stats.currentConfirmedRatio = 0;
         this.capture.failure(quality.reason, time);
@@ -793,7 +804,11 @@ export class RoomScanner {
     } finally {
       const elapsed = performance.now() - started;
       this.captureProcessingMs = this.captureProcessingMs ? this.captureProcessingMs * 0.8 + elapsed * 0.2 : elapsed;
+      if (Number.isFinite(geometryElapsed))
+        this.geometryProcessingMs = this.geometryProcessingMs
+          ? this.geometryProcessingMs * 0.8 + geometryElapsed * 0.2 : geometryElapsed;
       this.stats.captureProcessingMs = Math.round(this.captureProcessingMs);
+      this.stats.geometryProcessingMs = Math.round(this.geometryProcessingMs);
     }
   }
   frame(time, frame) {
@@ -830,6 +845,7 @@ export class RoomScanner {
         const profile = adaptiveCaptureProfile({ ...this.captureDetail,
           ...this.nativeDepthSize, validRatio: this.stats.depthFrames ? this.stats.validDepthRatio : 1,
           depthType: this.stats.depthType, processingMs: this.captureProcessingMs,
+          geometryProcessingMs: this.geometryProcessingMs,
           linearSpeed: this.cameraMotion?.linearSpeed || 0, angularSpeed: this.cameraMotion?.angularSpeed || 0,
         });
         const elapsedSinceCapture = time - (this.lastCapture || 0);
@@ -909,8 +925,11 @@ export class RoomScanner {
     this.stats.captureStall = this.experience.captureStall;
     this.stats.captureDiagnostics = this.experience.snapshot();
   }
-  updateAdaptiveStats(time = this.lastFrameAt ?? performance.now()) {
-    this.stats.adaptiveCapture = this.capture.snapshot();
+  updateAdaptiveStats(time = this.lastFrameAt ?? performance.now(), { forceCoverage = false } = {}) {
+    const refreshCoverage = forceCoverage || this.lastCoverageRefreshAt == null ||
+      this.capture.frames.length <= 2 || time - this.lastCoverageRefreshAt >= COVERAGE_REFRESH_MS;
+    this.stats.adaptiveCapture = this.capture.snapshot({ refreshCoverage });
+    if (refreshCoverage) this.lastCoverageRefreshAt = time;
     this.stats.captureProfile = this.captureProfile.name;
     this.stats.fusionKeyframes = this.keyframes.length;
     this.stats.fusionKeyframeCompactions = this.capture.events.removed;
@@ -948,9 +967,9 @@ export class RoomScanner {
     if (!target) return;
     this.recoveryMarker.position.fromArray(target);
     const local = new THREE.Vector3().fromArray(target).applyMatrix4(new THREE.Matrix4().fromArray(view.transform.matrix).invert());
-    this.stats.recoveryDirection = local.z > 0 ? "Hold still and turn back toward the last area you scanned." :
-      Math.abs(local.x) > Math.abs(local.z) * 0.3 ? (local.x > 0 ? "Hold still and turn slowly right toward your last scanned area." : "Hold still and turn slowly left toward your last scanned area.") :
-      Math.abs(local.y) > Math.abs(local.z) * 0.3 ? (local.y > 0 ? "Hold still and aim a little higher toward your last scanned area." : "Hold still and aim a little lower toward your last scanned area.") : "Hold this area in view while the connection is checked.";
+    this.stats.recoveryDirection = local.z > 0 ? "Turn back slowly toward the last saved area; capture keeps trying." :
+      Math.abs(local.x) > Math.abs(local.z) * 0.3 ? (local.x > 0 ? "Turn slowly right toward the last saved area; capture keeps trying." : "Turn slowly left toward the last saved area; capture keeps trying.") :
+      Math.abs(local.y) > Math.abs(local.z) * 0.3 ? (local.y > 0 ? "Aim a little higher toward the last saved area; capture keeps trying." : "Aim a little lower toward the last saved area; capture keeps trying.") : "Keep this area in view; capture keeps trying.";
   }
   updatePreview() {
     const allPoints = this.cloud.values();
@@ -1403,8 +1422,7 @@ export class RoomScanner {
     if (compacted) {
       // Previously the preview kept observations whose keyframes had been
       // discarded, falsely displaying coverage that fusion could never use.
-      this.cloud = new VoxelCloud();
-      this.keyframes.forEach((frame, index) => this.addSavedPreview(frame, index));
+      this.rebuildPreviewCloud();
     } else this.addSavedPreview(keyframe, this.keyframes.length - 1);
     this.lastMeshPose = pose;
     this.stats.fusionKeyframes = this.keyframes.length;
@@ -1444,11 +1462,11 @@ export class RoomScanner {
     );
   }
   addSavedPreview(frame, frameId) {
-    const filtered = filterDepth(frame);
+    const filtered = prepareCaptureFrame(frame);
     const points = [];
     filtered.measuredMask.forEach((measured, index) => {
       if (!measured) return;
-      const position = depthPosition(frame, index, filtered.filtered[index]);
+      const position = filtered.positions.subarray(index * 3, index * 3 + 3);
       if (!position?.every(Number.isFinite)) return;
       points.push({
         x: position[0], y: position[1], z: position[2],
@@ -1460,9 +1478,25 @@ export class RoomScanner {
     this.cloud.add(points, frameId, frame.camera,
       point => capturePointObserved(frame, [point.x, point.y, point.z]));
   }
+  recordSavedPreview(previousFrames, committed) {
+    const removed = previousFrames.some(saved => !this.keyframes.includes(saved));
+    if (removed) {
+      this.previewNeedsRebuild = true;
+      this.previewDiscardedCount++;
+    }
+    // Retention removes low-novelty views. Keep their verified splats in the
+    // live preview briefly, then batch the expensive exact rebuild. result()
+    // always rebuilds from retained views before returning final geometry.
+    if (removed && this.previewDiscardedCount >= PREVIEW_REBUILD_AFTER_REMOVALS)
+      this.rebuildPreviewCloud();
+    else committed.forEach(saved => this.addSavedPreview(saved, saved.captureId));
+  }
   rebuildPreviewCloud() {
     this.cloud = new VoxelCloud();
     this.keyframes.forEach((frame, index) => this.addSavedPreview(frame, frame.captureId ?? index));
+    this.stats.previewRebuilds++;
+    this.previewNeedsRebuild = false;
+    this.previewDiscardedCount = 0;
   }
   togglePause() {
     if (this.originChanged) return;
@@ -1474,7 +1508,12 @@ export class RoomScanner {
       throw new Error(
         "Tracking origin changed. Start a new scan before reconstructing the room.",
       );
-    this.updateAdaptiveStats();
+    if (this.previewNeedsRebuild) this.rebuildPreviewCloud();
+    this.updateAdaptiveStats(undefined, { forceCoverage: true });
+    this.stats.cloudCellSize = this.cloud.size;
+    this.stats.cloudCompactions = this.cloud.compactions;
+    this.stats.pointCount = this.cloud.cells.size;
+    this.stats.stablePointCount = this.cloud.previewStableCount();
     return {
       points: this.cloud.values(true),
       keyframes: this.keyframes,
