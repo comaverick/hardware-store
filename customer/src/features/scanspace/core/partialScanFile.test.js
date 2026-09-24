@@ -133,6 +133,31 @@ test("raw scan validation rejects a malformed keyframe before rendering", () => 
   expect(() => parsePartialScan(JSON.stringify(value))).toThrow(/inconsistent raw keyframe .* grid/);
 });
 
+test("separate captured areas survive export without being fused into the main keyframes", () => {
+  const scan = rawScan();
+  const frame = scan.rawCapture.keyframes[0];
+  scan.rawCapture.provisionalSegments = [{ id: 7, keyframes: [
+    { ...frame, captureId: 21, captureLinks: [22] },
+    { ...frame, captureId: 22, captureLinks: [21] },
+  ] }];
+  scan.rawCapture.stats.adaptiveCapture = { state: "capturing-new-area", connected: true,
+    frameCount: 1, provisionalFrameCount: 2, provisionalSegmentCount: 1 };
+  const restored = parsePartialScan(serializePartialScan(scan));
+  expect(restored.rawCapture.keyframes).toHaveLength(1);
+  expect(restored.rawCapture.provisionalSegments).toHaveLength(1);
+  expect(restored.rawCapture.provisionalSegments[0].keyframes.map(value => value.captureId)).toEqual([21, 22]);
+  expect(restored.rawCapture.stats.adaptiveCapture).toMatchObject({ state: "capturing-new-area",
+    provisionalFrameCount: 2, provisionalSegmentCount: 1 });
+});
+
+test("raw scan import rejects an unbounded or single-view separate area", () => {
+  const value = JSON.parse(serializePartialScan(rawScan()));
+  value.scan.rawCapture.provisionalSegments = [{ id: 1, keyframes: [value.scan.rawCapture.keyframes[0]] }];
+  expect(() => parsePartialScan(JSON.stringify(value))).toThrow(/invalid raw RGB-D capture/);
+  value.scan.rawCapture.provisionalSegments[0].keyframes = Array(80).fill(value.scan.rawCapture.keyframes[0]);
+  expect(() => parsePartialScan(JSON.stringify(value))).toThrow(/invalid raw RGB-D capture/);
+});
+
 test("adaptive capture connections and quality survive export without provisional frames or derived caches", () => {
   const scan = rawScan();
   Object.assign(scan.rawCapture.keyframes[0], {

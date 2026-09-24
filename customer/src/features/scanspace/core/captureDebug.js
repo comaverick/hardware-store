@@ -27,10 +27,7 @@ export function snapshotDepthCapture(raw) {
     stats: raw.stats,
     cameraImagesIncluded: false,
   };
-  const parts = [JSON.stringify(header).slice(0, -1), ',"keyframes":['];
-  raw.keyframes.forEach((frame, index) => {
-    if (index) parts.push(",");
-    parts.push(JSON.stringify({
+  const encodeFrame = frame => ({
       columns: frame.columns,
       rows: frame.rows,
       validCount: frame.validCount,
@@ -65,7 +62,18 @@ export function snapshotDepthCapture(raw) {
         frame.viewTransformMatrix || frame.transformMatrix,
       ),
       camera: Array.from(frame.camera || []),
-    }));
+    });
+  const parts = [JSON.stringify(header).slice(0, -1), ',"keyframes":['];
+  raw.keyframes.forEach((frame, index) => {
+    if (index) parts.push(",");
+    parts.push(JSON.stringify(encodeFrame(frame)));
+  });
+  const segments = raw.provisionalSegments || raw.capture?.provisionalSegments || [];
+  parts.push('],"provisionalSegments":[');
+  segments.forEach((segment, index) => {
+    if (index) parts.push(",");
+    parts.push(JSON.stringify({ id: segment.id,
+      keyframes: (segment.keyframes || segment.frames || []).map(encodeFrame) }));
   });
   parts.push("]}");
   return new Blob(parts, { type: "application/json" });
@@ -85,9 +93,12 @@ export function downloadDepthCapture(blob, diagnostics = null) {
 
 export function restoreDepthCapture(payload) {
   const capture = payload.capture || payload;
-  if (!Array.isArray(capture.keyframes) || capture.keyframes.length > 64)
+  const rawSegments = capture.provisionalSegments || [];
+  if (!Array.isArray(capture.keyframes) || !Array.isArray(rawSegments) || rawSegments.length > 2 ||
+      rawSegments.some(segment => !Array.isArray(segment?.keyframes)) ||
+      capture.keyframes.length + rawSegments.reduce((count, segment) => count + segment.keyframes.length, 0) > 64)
     throw new Error("Expected a ScanSpace capture with at most 64 keyframes.");
-  const keyframes = capture.keyframes.map((frame) => {
+  const restoreFrame = (frame) => {
     const count = frame.columns * frame.rows;
     if (!Number.isInteger(count) || count < 1 || count > 100000 ||
         frame.depths?.length !== count || frame.positions?.length !== count * 3 ||
@@ -132,9 +143,13 @@ export function restoreDepthCapture(payload) {
       colorImage: null,
       tracking: frame.tracking !== false,
     };
-  });
+  };
+  const keyframes = capture.keyframes.map(restoreFrame);
+  const provisionalSegments = rawSegments.map(segment => ({ id: segment.id,
+    keyframes: segment.keyframes.map(restoreFrame) }));
   return {
     keyframes,
+    provisionalSegments,
     options: { floorY: capture.floorY, observer: capture.observer },
     metadata: {
       captureVersion: capture.version || 1,
@@ -142,7 +157,7 @@ export function restoreDepthCapture(payload) {
       coordinateMode: capture.coordinateMode || "legacy-unspecified",
       buildId: capture.buildId || "unknown",
       browser: capture.browser || "unknown",
-      ambiguousLegacyGeometry: keyframes.some(
+      ambiguousLegacyGeometry: [...keyframes, ...provisionalSegments.flatMap(segment => segment.keyframes)].some(
         (frame) => frame.legacyGeometryAmbiguous,
       ),
     },

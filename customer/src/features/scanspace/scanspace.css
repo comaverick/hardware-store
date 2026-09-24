@@ -348,6 +348,44 @@
   cursor: not-allowed;
   opacity: .45;
 }
+.ss-area-switcher {
+  position: absolute;
+  z-index: 3;
+  top: 92px;
+  left: 14px;
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 8px;
+  background: #10231ee8;
+  box-shadow: 0 8px 18px #07130f40;
+}
+.ss-area-switcher button {
+  min-height: 30px;
+  padding: 4px 9px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: #edf7f2;
+  font-size: 11px;
+}
+.ss-area-switcher button.is-active {
+  border-color: #f1b18f;
+  background: var(--ss-accent);
+  color: #fff;
+}
+.ss-area-note {
+  position: absolute;
+  z-index: 3;
+  top: 132px;
+  left: 14px;
+  max-width: min(360px, calc(100% - 28px));
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: #10231ed9;
+  color: #edf7f2;
+  font-size: 10px;
+}
 .ss-inference-notice {
   border-color: #c9ddd5;
   background: #eef6f2;

@@ -81,6 +81,16 @@ test("a narrow camera baseline prompts a sideways view", () => {
   expect(screen.getByText(/sideways step/i)).toBeInTheDocument();
 });
 
+test("separate views count as saved progress without claiming a joined result is ready", () => {
+  render(<CaptureProgress stats={{ fusionKeyframes: 6, currentViewChecked: true,
+    adaptiveCapture: { state: "capturing-new-area", connected: true, provisionalFrameCount: 3,
+      provisionalSegmentCount: 1, coverage: { ratio: .8,
+        regions: [{ id: "middle", observed: 100, ratio: .8 }] } } }} />);
+  expect(screen.getByText("9")).toBeInTheDocument();
+  expect(screen.getByText("Capturing separate area")).toBeInTheDocument();
+  expect(screen.queryByText("Ready to review")).not.toBeInTheDocument();
+});
+
 test("failed review offers both another pass and an explicit partial save", () => {
   const continueScan = jest.fn(), save = jest.fn();
   render(<CaptureAuditNotice audit={{ issues: ["Upper surfaces need another overlapping pass."] }} onContinue={continueScan} onSave={save} />);

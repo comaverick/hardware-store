@@ -313,6 +313,7 @@ export class RoomScanner {
   constructor({ canvas, overlay, onUpdate, onEnd }) {
     Object.assign(this, { canvas, overlay, onUpdate, onEnd });
     this.cloud = new VoxelCloud();
+    this.provisionalCloud = new VoxelCloud(0.08, 20000);
     this.paused = false;
     this.floorY = null;
     this.closed = false;
@@ -340,6 +341,7 @@ export class RoomScanner {
       directionCoverage: Array(24).fill(false),
       currentDirection: 0,
       fusionKeyframes: 0,
+      provisionalKeyframes: 0,
       fusionKeyframeCompactions: 0,
       textureKeyframes: 0,
       independentTextureCaptures: 0,
@@ -695,9 +697,10 @@ export class RoomScanner {
         candidate.depthQuality = candidate.measuredDepthCount;
         this.captureDetail = captureDetail(candidate);
         const previousFrames = this.keyframes.slice();
+        const previousProvisionalFrames = new Set(this.capture.provisionalFrames());
         const decision = this.capture.consider(candidate, this.captureProfile);
-        outcome = { ...decision, committed: decision.committed.length,
-          matched: decision.reason !== "starting" && !!this.capture.lastMatch };
+        outcome = { ...decision, committed: decision.committed.length + (decision.provisionalCommitted?.length || 0),
+          matched: decision.reason === "connected" && !!this.capture.lastMatch };
         this.keyframes = this.capture.frames;
         const match = this.capture.lastMatch;
         this.stats.poseOverlapRatio = match?.overlap || 0;
@@ -713,19 +716,23 @@ export class RoomScanner {
           this.stats.acceptedDepthFrames++;
           this.keyframes = this.capture.frames;
           if (decision.committed.length) {
-            if (previousFrames.some(saved => !this.keyframes.includes(saved))) this.rebuildPreviewCloud();
+            if (previousFrames.some(saved => !this.keyframes.includes(saved)) ||
+                decision.committed.some(saved => previousProvisionalFrames.has(saved))) this.rebuildPreviewCloud();
             else decision.committed.forEach(saved => this.addSavedPreview(saved, saved.captureId));
             this.recordCommittedViews(decision.committed);
             this.lastMeshPose = keyframePose;
           }
+          if (decision.provisionalCommitted?.length)
+            decision.provisionalCommitted.forEach(saved => this.addSavedPreview(saved, saved.captureId, this.provisionalCloud));
           // Retain RGB with its OWN same-frame depth and camera pose, even
           // between geometry keyframes. These observations never enter TSDF
           // fusion or the confirmed-coverage preview.
-          this.captureTextureObservation(framePoints, view, columns, rows,
+          if (decision.reason === "connected") this.captureTextureObservation(framePoints, view, columns, rows,
             time, colorAt, keyframePose, depth, motion);
           // Pose gating decides whether this accepted depth frame adds a
           // useful new viewpoint. Fast/sparse frames never reach fusion.
-          if (!decision.committed.length) {
+          if (!decision.committed.length && !decision.provisionalCommitted?.length &&
+              decision.reason === "connected") {
             // A stationary revisit may contain a better depth sample even
             // though it is not a new independent viewpoint. Replace only the
             // nearby keyframe when its measured support is materially better;
@@ -750,8 +757,10 @@ export class RoomScanner {
           }
           // Feedback counts only views actually retained for fusion, with
           // the full image grid as denominator (including missing depth).
-          this.stats.currentConfirmedRatio =
-            confirmedViewRatio(candidate, this.capture.references(candidate));
+          const references = decision.reason === "provisional-connected"
+            ? this.capture.provisionalSegments.flatMap(segment => segment.frames)
+            : this.capture.references(candidate);
+          this.stats.currentConfirmedRatio = confirmedViewRatio(candidate, references);
         }
       } else {
         this.stats.rejectedDepthFrames++;
@@ -913,6 +922,7 @@ export class RoomScanner {
     this.stats.adaptiveCapture = this.capture.snapshot();
     this.stats.captureProfile = this.captureProfile.name;
     this.stats.fusionKeyframes = this.keyframes.length;
+    this.stats.provisionalKeyframes = this.capture.provisionalFrameCount();
     this.stats.fusionKeyframeCompactions = this.capture.events.removed;
     this.stats.connectedSurfaceCoverage = Math.round(this.stats.adaptiveCapture.coverage.ratio * 100);
     this.updateExperience(time);
@@ -954,8 +964,13 @@ export class RoomScanner {
   }
   updatePreview() {
     const allPoints = this.cloud.values();
-    const points = allPoints.filter((point) => point.hits >= 2);
+    const provisionalPoints = this.provisionalCloud.values();
+    const trusted = allPoints.filter(point => point.hits >= 2);
+    const provisional = provisionalPoints.filter(point => point.hits >= 2);
+    const points = trusted.concat(provisional);
     const stride = Math.max(1, Math.ceil(points.length / 12000));
+    const trustedColor = new THREE.Color("#83f2cb");
+    const provisionalColor = new THREE.Color("#ffc46b");
     if (this.coverageMaterial)
       this.coverageMaterial.size = coveragePreviewSize(this.cloud.size);
     let count = 0;
@@ -964,14 +979,14 @@ export class RoomScanner {
       this.positions.set([p.x, p.y, p.z], count * 3);
       // Only repeat-observed voxels stay visible. Single-hit samples are not
       // rendered because they made unconfirmed space look already scanned.
-      const c = new THREE.Color("#83f2cb");
+      const c = i < trusted.length ? trustedColor : provisionalColor;
       this.colors.set([c.r, c.g, c.b], count * 3);
       count++;
     }
     this.pointGeometry.attributes.position.needsUpdate = true;
     this.pointGeometry.attributes.color.needsUpdate = true;
     this.pointGeometry.setDrawRange(0, count);
-    this.stats.pointCount = allPoints.length;
+    this.stats.pointCount = allPoints.length + provisionalPoints.length;
     this.stats.stablePointCount = points.length;
   }
   keyframePose(view) {
@@ -1443,7 +1458,7 @@ export class RoomScanner {
       0,
     );
   }
-  addSavedPreview(frame, frameId) {
+  addSavedPreview(frame, frameId, cloud = this.cloud) {
     const filtered = filterDepth(frame);
     const points = [];
     filtered.measuredMask.forEach((measured, index) => {
@@ -1457,12 +1472,15 @@ export class RoomScanner {
           : undefined,
       });
     });
-    this.cloud.add(points, frameId, frame.camera,
+    cloud.add(points, frameId, frame.camera,
       point => capturePointObserved(frame, [point.x, point.y, point.z]));
   }
   rebuildPreviewCloud() {
     this.cloud = new VoxelCloud();
+    this.provisionalCloud = new VoxelCloud(0.08, 20000);
     this.keyframes.forEach((frame, index) => this.addSavedPreview(frame, frame.captureId ?? index));
+    this.capture.provisionalFrames().forEach((frame, index) =>
+      this.addSavedPreview(frame, frame.captureId ?? index, this.provisionalCloud));
   }
   togglePause() {
     if (this.originChanged) return;
@@ -1478,6 +1496,8 @@ export class RoomScanner {
     return {
       points: this.cloud.values(true),
       keyframes: this.keyframes,
+      provisionalSegments: this.capture.provisionalSegments.map(segment => ({ id: segment.id,
+        keyframes: segment.frames })),
       textureKeyframes: this.textureKeyframes || [],
       maxTextureSize: this.renderer?.capabilities?.maxTextureSize || 4096,
       floorY: this.floorY,

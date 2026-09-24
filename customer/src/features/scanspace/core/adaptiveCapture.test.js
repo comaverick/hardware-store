@@ -83,6 +83,61 @@ test("disconnected views remain bounded and invisible until a measured bridge re
   expect(capture.snapshot().connected).toBe(true);
 });
 
+test("a new area stays durable but separate until two linked views verify a bridge", () => {
+  const make = (area, x, timestamp, bridge = false) =>
+    Object.assign(wallFrame(x, timestamp), { area, bridge });
+  const strongPatch = { compared: 30, agreeing: 28, tiles: 5, support: 0.09,
+    agreement: 0.93, median: 0.02, upper: 0.04, freeSpaceRatio: 0 };
+  const compare = (left, right) => {
+    if (left.area === right.area) return { accepted: Math.abs(left.camera[0] - right.camera[0]) < 0.21,
+      conflict: false, overlap: 0.8 };
+    const bridge = left.area === "new" ? left.bridge : right.bridge;
+    return { accepted: false, conflict: false, overlap: bridge ? 0.09 : 0,
+      forward: bridge ? strongPatch : null, backward: bridge ? strongPatch : null };
+  };
+  const capture = new AdaptiveCapture({ compare });
+  capture.consider(make("main", 0, 100));
+  capture.consider(make("main", 0.08, 400));
+  capture.consider(make("new", 1, 700, true));
+  const seeded = capture.consider(make("new", 1.08, 1000));
+  expect(seeded.provisionalCommitted).toHaveLength(2);
+  expect(capture.snapshot()).toMatchObject({ frameCount: 2, provisionalFrameCount: 2,
+    provisionalSegmentCount: 1, state: "capturing-new-area", connected: true });
+  capture.failure("depth-missing", 10000);
+  expect(capture.provisionalSegments[0].frames).toHaveLength(2);
+  const joined = capture.consider(make("new", 1.16, 10200, true));
+  expect(joined.committed).toHaveLength(3);
+  expect(capture.snapshot()).toMatchObject({ frameCount: 5, provisionalFrameCount: 0,
+    provisionalSegmentCount: 0, provisionalMerged: 1, connected: true });
+});
+
+test("contradictory depth never seeds an independent area", () => {
+  const compare = (left, right) => ({ accepted: left.area === right.area,
+    conflict: left.area !== right.area, overlap: 0.8 });
+  const capture = new AdaptiveCapture({ compare });
+  const frame = (area, x, timestamp) => Object.assign(wallFrame(x, timestamp), { area });
+  capture.consider(frame("main", 0, 100));
+  capture.consider(frame("main", 0.08, 400));
+  capture.consider(frame("shifted", 1, 700));
+  capture.consider(frame("shifted", 1.08, 1000));
+  expect(capture.provisionalFrameCount()).toBe(0);
+  expect(capture.frames).toHaveLength(2);
+});
+
+test("separate areas share the same bounded frame budget", () => {
+  const compare = (left, right) => ({ accepted: left.area === right.area,
+    conflict: false, overlap: left.area === right.area ? .8 : 0 });
+  const capture = new AdaptiveCapture({ compare, maximumFrames: 4 });
+  const frame = (area, x, timestamp) => Object.assign(wallFrame(x, timestamp), { area });
+  capture.consider(frame("main", 0, 100));
+  capture.consider(frame("main", .08, 400));
+  capture.consider(frame("new", 1, 700));
+  capture.consider(frame("new", 1.08, 1000));
+  expect(capture.consider(frame("new", 1.16, 1300)).reason).toBe("capacity");
+  expect(capture.snapshot()).toMatchObject({ frameCount: 2, provisionalFrameCount: 2,
+    capacityReached: true, provisionalCapacityStops: 1 });
+});
+
 test("tracking loss and long gaps recover through new observations without pausing the reader", () => {
   const capture = started();
   capture.failure("tracking-lost", 600);

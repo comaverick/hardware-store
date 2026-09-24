@@ -476,6 +476,24 @@ function captureHarness() {
   return { scanner, frame, view, move, setEmulated: value => { emulated = value; }, setDepth: value => { depth = value; } };
 }
 
+test("live capture retains a locally connected area after losing main-map overlap", () => {
+  const { scanner, frame, move } = captureHarness();
+  scanner.capture.compare = (left, right) => {
+    const separation = Math.abs(left.camera[0] - right.camera[0]);
+    return { accepted: separation < .22, conflict: false, overlap: separation < .22 ? .8 : 0 };
+  };
+  move(1);
+  scanner.frame(4000, frame);
+  move(1.08);
+  scanner.frame(4500, frame);
+  expect(scanner.keyframes).toHaveLength(2);
+  expect(scanner.stats.adaptiveCapture).toMatchObject({ provisionalFrameCount: 2,
+    provisionalSegmentCount: 1, state: "capturing-new-area" });
+  expect(scanner.stats.captureDiagnostics.recent.at(-1)).toMatchObject({
+    reason: "provisional-connected", accepted: true, committed: 2 });
+  expect(scanner.result().provisionalSegments[0].keyframes).toHaveLength(2);
+});
+
 test("emulated tracking withholds geometry and automatically confirms recovery in two observations", () => {
   const { scanner, frame, move, setEmulated } = captureHarness();
   expect(scanner.keyframes).toHaveLength(2);

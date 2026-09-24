@@ -164,6 +164,19 @@ export function captureOverlap(left, right) {
   };
 }
 
+// A small shared patch can connect two larger views (for example, a wall
+// while turning toward the floor). It needs stronger absolute, spatial and
+// residual evidence than an ordinary full-frame match, and is never enough
+// by itself to join two capture sections.
+export function captureBridgeOverlap(result) {
+  if (!result || result.conflict) return false;
+  if (result.accepted) return true;
+  const passes = value => value && value.compared >= 24 && value.agreeing >= 20 &&
+    value.tiles >= 4 && value.support >= 0.06 && value.agreement >= 0.78 &&
+    value.median <= 0.045 && value.upper <= 0.07 && value.freeSpaceRatio <= 0.2;
+  return passes(result.forward) && passes(result.backward);
+}
+
 function graphConnected(frames, links, omit = null) {
   const ids = new Set(frames.map(frame => frame.captureId).filter(id => id !== omit));
   if (!ids.size) return false;
@@ -215,6 +228,8 @@ export class AdaptiveCapture {
     this.compare = compare;
     this.frames = [];
     this.pending = [];
+    this.provisionalSegments = [];
+    this.nextSegmentId = 0;
     this.links = new Map();
     this.sequence = 0;
     this.state = "starting";
@@ -223,7 +238,14 @@ export class AdaptiveCapture {
     this.pendingSupport = new WeakMap();
     this.events = { recoveries: 0, promoted: 0, expired: 0, removed: 0, capacityStops: 0,
       pendingAgeDrops: 0, pendingCapacityDrops: 0, pendingRedundantDrops: 0,
-      pendingConflictDrops: 0, pendingResetDrops: 0 };
+      pendingConflictDrops: 0, pendingResetDrops: 0, provisionalStarted: 0,
+      provisionalSaved: 0, provisionalMerged: 0, provisionalCapacityStops: 0 };
+  }
+  provisionalFrameCount() {
+    return this.provisionalSegments.reduce((count, segment) => count + segment.frames.length, 0);
+  }
+  provisionalFrames() {
+    return this.provisionalSegments.flatMap(segment => segment.frames);
   }
   clearRecoveryEvidence() {
     this.recoveryMatches = 0;
@@ -306,6 +328,126 @@ export class AdaptiveCapture {
       conflict: results.some(value => value.result.conflict),
       best: results.sort((a, b) => b.result.overlap - a.result.overlap)[0]?.result };
   }
+  provisionalMatch(frame) {
+    return this.provisionalSegments.map(segment => {
+      const nearest = segment.frames.slice().sort((a, b) =>
+        distance(camera(a), camera(frame)) + angle(a, frame) - distance(camera(b), camera(frame)) - angle(b, frame));
+      const references = [...new Set([...segment.frames.slice(-4), ...nearest.slice(0, 3)])];
+      const results = references.map(reference => ({ reference, result: this.compare(frame, reference) }));
+      return { segment, edges: results.filter(value => value.result.accepted).map(value => value.reference.captureId),
+        conflict: results.some(value => value.result.conflict),
+        support: Math.max(0, ...results.map(value => value.result.overlap || 0)) };
+    }).filter(match => !match.conflict && match.edges.length)
+      .sort((a, b) => b.support - a.support)[0];
+  }
+  considerProvisional(frame, profile) {
+    const match = this.provisionalMatch(frame);
+    if (match) {
+      const segment = match.segment;
+      const last = segment.frames[segment.frames.length - 1];
+      const novel = distance(camera(last), camera(frame)) >= profile.spacing || angle(last, frame) >= profile.turn;
+      if (novel && this.frames.length + this.provisionalFrameCount() >= this.maximumFrames) {
+        this.events.provisionalCapacityStops++;
+        this.capacityReached = true;
+        return { accepted: false, committed: [], provisionalCommitted: [], reason: "capacity" };
+      }
+      if (novel) {
+        segment.frames.push(frame);
+        segment.links.set(frame.captureId, new Set(match.edges));
+        match.edges.forEach(id => segment.links.get(id)?.add(frame.captureId));
+        this.events.provisionalSaved++;
+      }
+      this.capacityReached = false;
+      this.state = "capturing-new-area";
+      this.reason = "provisional-connected";
+      const merged = novel ? this.tryMergeProvisional(frame.timestamp) : [];
+      return { accepted: true, committed: merged, provisionalCommitted: merged.length || !novel ? [] : [frame],
+        reason: merged.length ? "connected" : "provisional-connected" };
+    }
+    if (this.provisionalSegments.length >= 2) {
+      this.events.provisionalCapacityStops++;
+      this.capacityReached = true;
+      return { accepted: false, committed: [], provisionalCommitted: [], reason: "capacity" };
+    }
+    const seed = this.pending.find(value => distance(camera(frame), camera(value)) >= 0.04 &&
+      this.compare(frame, value).accepted);
+    if (!seed) return null;
+    if (this.frames.length + this.provisionalFrameCount() + 2 > this.maximumFrames) {
+      this.events.provisionalCapacityStops++;
+      this.capacityReached = true;
+      return { accepted: false, committed: [], provisionalCommitted: [], reason: "capacity" };
+    }
+    const segment = { id: ++this.nextSegmentId, frames: [seed, frame],
+      links: new Map([[seed.captureId, new Set([frame.captureId])], [frame.captureId, new Set([seed.captureId])]]) };
+    this.pending = this.pending.filter(value => value !== seed);
+    this.provisionalSegments.push(segment);
+    this.events.provisionalStarted++;
+    this.events.provisionalSaved += 2;
+    this.capacityReached = false;
+    this.state = "capturing-new-area";
+    this.reason = "provisional-connected";
+    const merged = this.tryMergeProvisional(frame.timestamp);
+    return { accepted: true, committed: merged, provisionalCommitted: merged.length ? [] : [seed, frame],
+      reason: merged.length ? "connected" : "provisional-connected" };
+  }
+  bridgeMatches(frame) {
+    const references = this.references(frame).sort((left, right) =>
+      distance(camera(frame), camera(left)) + angle(frame, left) -
+      distance(camera(frame), camera(right)) - angle(frame, right)).slice(0, 5);
+    const results = references.map(reference => ({ reference, result: this.compare(frame, reference) }));
+    if (results.some(value => value.result.conflict)) return [];
+    return results.filter(value => captureBridgeOverlap(value.result)).map(value => value.reference.captureId);
+  }
+  tryMergeProvisional(timestamp) {
+    const joined = [];
+    for (const segment of this.provisionalSegments.slice()) {
+      // Keep bridge checks bounded during live capture. Revisit old views when
+      // the trusted path approaches them, but do not compare every retained
+      // frame against the entire map on every camera observation.
+      const nearest = segment.frames.slice().sort((left, right) => {
+        const proximity = frame => Math.min(...this.frames.map(main =>
+          distance(camera(frame), camera(main)) + angle(frame, main)));
+        return proximity(left) - proximity(right);
+      }).slice(0, 4);
+      const candidates = [...new Set([segment.frames[0], ...segment.frames.slice(-3), ...nearest])];
+      const bridges = candidates.map(frame => ({ frame, edges: this.bridgeMatches(frame) }))
+        .filter(value => value.edges.length);
+      const first = bridges.find((value, index) => bridges.slice(index + 1).some(other =>
+        distance(camera(value.frame), camera(other.frame)) >= 0.04 &&
+        segment.links.get(value.frame.captureId)?.has(other.frame.captureId)));
+      if (!first) continue;
+      this.provisionalSegments = this.provisionalSegments.filter(value => value !== segment);
+      const remaining = new Map(segment.frames.map(frame => [frame.captureId, frame]));
+      this.commit(first.frame, first.edges);
+      remaining.delete(first.frame.captureId);
+      joined.push(first.frame);
+      while (remaining.size) {
+        const next = [...remaining.values()].map(frame => ({ frame, edges: [
+          ...(segment.links.get(frame.captureId) || []),
+          ...(bridges.find(value => value.frame === frame)?.edges || []),
+        ].filter(id => this.links.has(id)) })).find(value => value.edges.length);
+        if (!next) break;
+        this.commit(next.frame, [...new Set(next.edges)]);
+        remaining.delete(next.frame.captureId);
+        joined.push(next.frame);
+      }
+      if (remaining.size) {
+        segment.frames = [...remaining.values()];
+        segment.links = new Map(segment.frames.map(frame => [frame.captureId,
+          new Set([...(segment.links.get(frame.captureId) || [])].filter(id => remaining.has(id)))]));
+        this.provisionalSegments.push(segment);
+      } else this.events.provisionalMerged++;
+    }
+    if (joined.length) {
+      this.frames.sort((a, b) => a.timestamp - b.timestamp);
+      this.state = "tracking";
+      this.reason = "connected";
+      this.lastReliableAt = timestamp;
+      this.uncertainSince = null;
+      this.clearRecoveryEvidence();
+    }
+    return joined.sort((left, right) => left.timestamp - right.timestamp);
+  }
   remove(frame) {
     this.links.delete(frame.captureId);
     for (const neighbors of this.links.values()) neighbors.delete(frame.captureId);
@@ -315,7 +457,7 @@ export class AdaptiveCapture {
     this.frames.push(frame);
     this.links.set(frame.captureId, new Set(edges));
     edges.forEach(id => this.links.get(id)?.add(frame.captureId));
-    if (this.frames.length > this.maximumFrames) {
+    if (this.frames.length + this.provisionalFrameCount() > this.maximumFrames) {
       const candidates = this.frames.slice(1, -1).filter(value => !value.colorImage?.length)
         .sort((a, b) => {
           const novelty = value => Math.min(...this.frames.filter(other => other !== value)
@@ -340,7 +482,8 @@ export class AdaptiveCapture {
     frame.captureId = ++this.sequence;
     const time = frame.timestamp;
     this.expire(time);
-    if (this.lastReliableAt != null && time - this.lastReliableAt > RECOVERY_EVIDENCE_MS)
+    if (this.lastReliableAt != null && time - this.lastReliableAt > RECOVERY_EVIDENCE_MS &&
+        ["tracking", "checking"].includes(this.state))
       this.recover("capture-gap", time);
     if (this.lastObserved && distance(camera(frame), camera(this.lastObserved)) > 0.5)
       this.recover("camera-jump", time);
@@ -372,11 +515,14 @@ export class AdaptiveCapture {
       }
       if (this.state === "checking" && time - this.uncertainSince >= OVERLAP_GRACE_MS)
         this.recover("overlap-lost", time);
+      const provisional = this.considerProvisional(frame, profile);
+      if (provisional) return provisional;
       this.reason = this.state === "recovering" ? "overlap-lost" : "checking-overlap";
       this.buffer(frame, match.best?.overlap || 0);
       return { accepted: false, committed: [], reason: this.reason };
     }
     this.lastReliableAt = time;
+    if (this.state === "capturing-new-area") this.state = "recovering";
     if (this.state === "recovering") {
       // Both observations must agree with the saved map AND each other. Mere
       // motion skips can separate them; drift, different patches and stale
@@ -394,6 +540,7 @@ export class AdaptiveCapture {
       if (this.recoveryMatches < 2) return { accepted: false, committed: [], reason: "confirming-recovery" };
     }
     this.state = "tracking";
+    this.capacityReached = false;
     this.uncertainSince = null;
     this.clearRecoveryEvidence();
     const last = this.frames[this.frames.length - 1];
@@ -418,6 +565,7 @@ export class AdaptiveCapture {
         }
       }
     }
+    if (this.frames.some(value => !before.has(value))) this.tryMergeProvisional(time);
     this.frames.sort((a, b) => a.timestamp - b.timestamp);
     this.reason = "connected";
     return { accepted: true, committed: this.frames.filter(value => !before.has(value)), reason: "connected", match: match.best };
@@ -435,9 +583,16 @@ export class AdaptiveCapture {
   snapshot() {
     this.coverage ||= connectedCoverage(this.frames);
     this.frames.forEach(frame => { frame.captureLinks = [...(this.links.get(frame.captureId) || [])]; });
+    this.provisionalSegments.forEach(segment => segment.frames.forEach(frame => {
+      frame.captureLinks = [...(segment.links.get(frame.captureId) || [])];
+    }));
     return { version: ADAPTIVE_CAPTURE_VERSION, state: this.state, reason: this.reason,
       connected: this.frames.length >= 2 && graphConnected(this.frames, this.links),
       frameCount: this.frames.length, pendingCount: this.pending.length,
+      provisionalFrameCount: this.provisionalFrameCount(),
+      provisionalSegmentCount: this.provisionalSegments.length,
+      provisionalSegments: this.provisionalSegments.map(segment => ({ id: segment.id,
+        frameCount: segment.frames.length, connected: graphConnected(segment.frames, segment.links) })),
       capacityReached: !!this.capacityReached, coverage: this.coverage, ...this.events };
   }
 }
@@ -451,6 +606,7 @@ export function auditCapture(stats, diagnostics = null) {
   if (capture && !capture.connected) issues.push("The saved views need a reliable connection.");
   if (["recovering", "checking"].includes(capture?.state)) issues.push("The latest view could not be connected. Previously saved views are included.");
   if (capture?.pendingCount) issues.push(`${capture.pendingCount} unconfirmed views were left out of this result.`);
+  if (capture?.provisionalSegmentCount) issues.push(`${capture.provisionalSegmentCount} captured area${capture.provisionalSegmentCount === 1 ? " remains" : "s remain"} separate because their connection to the main scan was not verified. Review each area before saving.`);
   if (capture?.capacityReached) issues.push("This section reached its safe capacity. Save it as a partial scan before starting another section.");
   const coverage = capture?.coverage;
   const labels = { upper: "Upper surfaces", middle: "Walls and objects", lower: "Lower surfaces" };

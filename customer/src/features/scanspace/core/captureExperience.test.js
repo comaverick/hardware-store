@@ -84,6 +84,20 @@ test("a completed area is not called stalled just because the phone stops moving
   expect(experience.captureStall).toBeNull();
 });
 
+test("saving views in a new area resets the stall timer and names the new capture state", () => {
+  const experience = new CaptureExperience();
+  const stats = { ...good(), fusionKeyframes: 6, adaptiveCapture: {
+    state: "capturing-new-area", connected: true, provisionalFrameCount: 2 }, currentConfirmedRatio: .3 };
+  experience.update(stats, 0);
+  experience.recordFrame({ timestamp: 100, reason: "provisional-connected", accepted: true,
+    committed: 2, state: "capturing-new-area" });
+  expect(experience.update(stats, 100)).toMatchObject({ code: "new-area", label: "Capturing a new area" });
+  experience.recordFrame({ timestamp: 3300, reason: "provisional-connected", accepted: true,
+    committed: 1, state: "capturing-new-area" });
+  expect(experience.update(stats, 3300).code).toBe("new-area");
+  expect(experience.captureStall).toBeNull();
+});
+
 test("camera permission and setup time do not count as a capture stall", () => {
   const experience = new CaptureExperience();
   const stats = { ...good(), fusionKeyframes: 0, currentConfirmedRatio: 0 };

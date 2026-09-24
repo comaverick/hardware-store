@@ -59,6 +59,18 @@ test("flags legacy transformed-UV captures instead of silently reinterpreting th
   expect(restored.keyframes[0].legacyGeometryAmbiguous).toBe(true);
 });
 
+test("diagnostic replay keeps separately saved areas distinct", async () => {
+  const identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+  const frame = { columns: 1, rows: 1, depths: [2], positions: [0, 0, -2],
+    colors: [1, 2, 3], colorMask: [1], projectionMatrix: identity, transformMatrix: identity };
+  const blob = snapshotDepthCapture({ keyframes: [frame], provisionalSegments: [
+    { id: 3, keyframes: [frame, frame] },
+  ], stats: {} });
+  const restored = restoreDepthCapture(JSON.parse(await readBlob(blob)));
+  expect(restored.keyframes).toHaveLength(1);
+  expect(restored.provisionalSegments[0].keyframes).toHaveLength(2);
+});
+
 test("rejects malformed replay dimensions before reconstruction allocates geometry", () => {
   expect(() => restoreDepthCapture({ keyframes: [{ columns: 999999, rows: 999999 }] }))
     .toThrow(/dimensions/);

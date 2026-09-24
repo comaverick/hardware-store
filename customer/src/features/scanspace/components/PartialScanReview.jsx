@@ -12,7 +12,7 @@ import {
 } from "../core/readiness";
 import { auditCapture } from "../core/adaptiveCapture";
 
-const hasCheckedPreview = scan => !!(scan.mesh && scan.fusionDiagnostics &&
+const hasCheckedPreview = scan => !!((scan.mesh || scan.sections?.some(section => section.mesh || section.cloud)) && scan.fusionDiagnostics &&
   scan.captureQuality?.captureAudit?.checkedReconstruction === true);
 
 export default function PartialScanReview({
@@ -26,6 +26,7 @@ export default function PartialScanReview({
     scan.rawCapture && !hasCheckedPreview(scan) ? null : scan,
   );
   const [renderError, setRenderError] = useState("");
+  const [selectedArea, setSelectedArea] = useState(null);
   const [renderProgress, setRenderProgress] = useState({
     stage: "preparing",
     progress: 0,
@@ -41,6 +42,16 @@ export default function PartialScanReview({
     }
     let active = true;
     const worker = createFusionWorker();
+    const buildSections = (results = []) => (scan.rawCapture.provisionalSegments || []).map((segment, index) => {
+      const result = results.find(value => value.id === segment.id);
+      const points = observationPoints(result?.observations) || rawCapturePoints({ keyframes: segment.keyframes });
+      return { id: segment.id, label: `Area ${index + 2}`, mesh: result?.mesh || null,
+        cloud: points.length ? buildScanCloud(points, {
+          floorY: scan.rawCapture.floorY, observer: scan.rawCapture.observer,
+          voxelSize: scan.rawCapture.stats?.cloudCellSize,
+        }) : null,
+        pointCount: points.length, diagnostics: result?.diagnostics || null };
+    });
     setRenderedScan(null);
     setRenderError("");
     setRenderProgress({ stage: "preparing", progress: 0 });
@@ -60,6 +71,7 @@ export default function PartialScanReview({
         setRenderedScan({
           ...scan,
           mesh: null,
+          sections: buildSections(),
           cloud: points.length
             ? buildScanCloud(points, {
                 floorY: scan.rawCapture.floorY,
@@ -81,13 +93,15 @@ export default function PartialScanReview({
             voxelSize: scan.rawCapture.stats?.cloudCellSize,
           })
         : null;
-      if (!fused.mesh && !cloud) {
+      const sections = buildSections(fused.sections);
+      if (!fused.mesh && !cloud && !sections.some(section => section.mesh || section.cloud)) {
         setRenderError(fused.diagnostics?.reason || "The raw scan did not contain enough measured depth.");
         return;
       }
       setRenderedScan({
         ...scan,
         mesh: fused.mesh || null,
+        sections,
         cloud,
         pointCount: points.length || scan.pointCount,
         fusionMode: "raw-import-rendered",
@@ -129,6 +143,7 @@ export default function PartialScanReview({
       setRenderedScan({
         ...scan,
         mesh: null,
+        sections: buildSections(),
         cloud: points.length
           ? buildScanCloud(points, {
               floorY: scan.rawCapture.floorY,
@@ -140,6 +155,7 @@ export default function PartialScanReview({
     };
     worker.postMessage({
       keyframes: scan.rawCapture.keyframes,
+      sections: scan.rawCapture.provisionalSegments || [],
       options: scanFusionOptions(scan.rawCapture, "surface"),
     });
     return () => {
@@ -148,6 +164,8 @@ export default function PartialScanReview({
     };
   }, [scan]);
   const displayScan = renderedScan || scan;
+  const measurementArea = selectedArea || (!displayScan.mesh && !displayScan.cloud
+    ? displayScan.sections?.find(section => section.mesh || section.cloud) : null);
   const quality = displayScan.captureQuality;
   const repair = displayScan.mesh?.surfaceRepair || quality?.surfaceRepair;
   const reviewMessages = new Set(displayScan.measuredReviewWarning?.issues?.map(issue => issue.message) || []);
@@ -193,6 +211,7 @@ export default function PartialScanReview({
       for (let index = 0; index < frame.positions.length / 3; index++) {
         const offset = index * 3;
         if (![frame.positions[offset], frame.positions[offset + 1], frame.positions[offset + 2]].every(Number.isFinite)) continue;
+        if (!(frame.depths?.[index] > 0)) continue;
         const point = { x: frame.positions[offset], y: frame.positions[offset + 1], z: frame.positions[offset + 2] };
         if (frame.colorMask?.[index]) point.color = Array.from(frame.colors.slice(offset, offset + 3));
         points.push(point);
@@ -285,7 +304,11 @@ export default function PartialScanReview({
           Check the sides and the ceiling in Walk inside; unscanned object faces remain open.
         </p>
       )}
-      <PartialScanScene scan={displayScan} />
+      {!!displayScan.sections?.length && <div className="ss-notice ss-notice--guidance" role="status">
+        <strong>Separate captured areas</strong>
+        <p>These areas were saved, but their connection to Area 1 was not verified. Inspect each area using the tabs. Measurements use only the selected area, not an invented joined room.</p>
+      </div>}
+      <PartialScanScene scan={displayScan} onAreaChange={setSelectedArea} />
       {displayScan.mesh && displayScan.cloud && <p className="ss-notice-detail">
         Inspect Photo, Geometry, and Depth points from the same angle and from the side.
         A defect only in Photo suggests color alignment; a gap in Geometry with depth points
@@ -388,9 +411,13 @@ export default function PartialScanReview({
         <button
           className="ss-primary"
           type="button"
-          onClick={() => onCompleteManually(displayScan)}
+          onClick={() => onCompleteManually(measurementArea
+            ? { ...displayScan, mesh: measurementArea.mesh || null, cloud: measurementArea.cloud || null }
+            : displayScan)}
         >
-          Continue with measurements
+          {displayScan.sections?.length
+            ? `Continue with ${measurementArea?.label || "Area 1"} measurements`
+            : "Continue with measurements"}
         </button>
       </div>
     </section>
