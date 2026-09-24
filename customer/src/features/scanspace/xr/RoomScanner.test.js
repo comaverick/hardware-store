@@ -606,6 +606,26 @@ test("missing depth is counted cumulatively even after sensor acquisition resume
   expect(scanner.stats.captureDiagnostics.attempts).toBe(5);
 });
 
+test("a corroborated narrow bridge adds views to the same saved scan", () => {
+  const { scanner, frame, move } = captureHarness();
+  const measured = { compared: 24, agreeing: 22, tiles: 4, support: 0.09,
+    agreement: 0.92, median: 0.01, upper: 0.02, freeSpaceRatio: 0 };
+  scanner.capture.compare = (left, right) => ({
+    accepted: left.timestamp > 1000 && right.timestamp > 1000,
+    conflict: false, overlap: 0.09, forward: measured, backward: measured,
+  });
+  move(0.16);
+  scanner.frame(1400, frame);
+  expect(scanner.keyframes).toHaveLength(2);
+  expect(scanner.stats.frameQuality).toBe("confirming-bridge");
+  move(0.23);
+  scanner.frame(1800, frame);
+  expect(scanner.keyframes).toHaveLength(4);
+  expect(scanner.stats.adaptiveCapture.connected).toBe(true);
+  expect(scanner.stats.fusionKeyframes).toBe(4);
+  expect(scanner.stats.captureDiagnostics.decisions["confirming-bridge"]).toBe(1);
+});
+
 test("the amber target is reserved for sustained reconnection, not routine coverage or confirmation", () => {
   const { scanner, view } = captureHarness();
   scanner.recoveryMarker = { visible: true, position: { fromArray: jest.fn() } };

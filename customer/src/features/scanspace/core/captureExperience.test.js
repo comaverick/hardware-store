@@ -64,6 +64,21 @@ test("a stalled scan names the current rejection and clears as soon as a view is
   expect(experience.captureStall).toBeNull();
 });
 
+test("bridge confirmation and conflicting depth have distinct guidance", () => {
+  const experience = new CaptureExperience();
+  const stats = { ...good(), fusionKeyframes: 2, currentConfirmedRatio: 0.3,
+    adaptiveCapture: { state: "recovering", connected: true } };
+  experience.update(stats, 0);
+  experience.recordFrame({ timestamp: 100, reason: "connected", accepted: true, committed: 2, state: "tracking" });
+  experience.recordFrame({ timestamp: 3200, reason: "confirming-bridge", state: "recovering" });
+  expect(experience.update(stats, 3200)).toMatchObject({ code: "stalled-bridge",
+    label: "Checking this connection" });
+  experience.recordFrame({ timestamp: 3400, reason: "alignment-conflict", state: "recovering" });
+  expect(experience.update(stats, 3400)).toMatchObject({ code: "stalled-alignment",
+    label: "Depth views disagree" });
+  expect(experience.snapshot().decisions["confirming-bridge"]).toBe(1);
+});
+
 test("a long spell of accepted but redundant views asks for a small sideways step", () => {
   const experience = new CaptureExperience();
   const stats = { ...good(), fusionKeyframes: 2, currentConfirmedRatio: 0.3 };

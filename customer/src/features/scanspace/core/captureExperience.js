@@ -7,7 +7,7 @@ const MAX_RECENT_DECISIONS = 48;
 const states = ["starting", "tracking", "checking", "recovering", "tracking-lost", "paused"];
 const reasons = ["connected", "starting", "moving-too-fast", "sparse-depth", "near-field-obstruction",
   "depth-error", "depth-missing", "invalid-depth", "checking-overlap", "overlap-lost",
-  "alignment-conflict", "confirming-recovery", "capacity", "unknown"];
+  "alignment-conflict", "confirming-recovery", "confirming-bridge", "capacity", "unknown"];
 const prompts = ["motion", "depth", "tracking", "reconnect", "reset", "unsupported", "capacity"];
 const measurements = ["gateLinearSpeed", "gateAngularSpeed", "maxLinearSpeed", "maxAngularSpeed",
   "sampledLinearSpeed", "sampledAngularSpeed", "validDepthRatio", "overlap", "medianResidual",
@@ -25,7 +25,11 @@ function stalledViewFeedback(reason, recoveryDirection) {
     label: "Depth is patchy", hint: "Step back slightly and aim at a well-lit, non-reflective surface." };
   if (reason === "near-field-obstruction") return { ...warning, code: "stalled-obstruction",
     label: "Move the phone back", hint: "Step back from nearby objects, then hold this area in view." };
-  if (["checking-overlap", "overlap-lost", "alignment-conflict"].includes(reason))
+  if (reason === "confirming-bridge") return { ...warning, code: "stalled-bridge",
+    label: "Checking this connection", hint: "Keep the same shared edge in view and move a little sideways." };
+  if (reason === "alignment-conflict") return { ...warning, code: "stalled-alignment",
+    label: "Depth views disagree", hint: "Hold on the saved area while ScanSpace checks alignment." };
+  if (["checking-overlap", "overlap-lost"].includes(reason))
     return { ...warning, code: "stalled-overlap", label: "Not enough overlap",
       hint: recoveryDirection || "Turn back until part of the last captured area is visible, then continue slowly." };
   if (reason === "confirming-recovery") return { ...warning, code: "stalled-recovery",
@@ -53,7 +57,7 @@ export function captureFeedbackCandidate(stats) {
   if (stats.movingTooFast) return { code: "motion", tone: "warning", label: "Move a little more slowly",
     hint: "Pause briefly, then continue with a slow sideways movement." };
   if (capture?.state === "recovering") {
-    if (stats.frameQuality === "confirming-recovery") return scanning();
+    if (["confirming-recovery", "confirming-bridge"].includes(stats.frameQuality)) return scanning();
     return { code: "reconnect", tone: "warning", label: "Reconnect this view",
       hint: stats.recoveryDirection || "Hold still and point back toward the last area you scanned." };
   }

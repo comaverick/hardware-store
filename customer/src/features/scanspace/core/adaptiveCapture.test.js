@@ -1,14 +1,14 @@
 import { Matrix4, PerspectiveCamera } from "three";
 import { createRgbdKeyframe } from "./fusion";
 import { unprojectDepth } from "./depth";
-import { AdaptiveCapture, adaptiveCaptureProfile, auditCapture, captureOverlap, confirmedViewRatio, connectedCoverage } from "./adaptiveCapture";
+import { AdaptiveCapture, adaptiveCaptureProfile, auditCapture, captureBridgeOverlap, captureOverlap, confirmedViewRatio, connectedCoverage } from "./adaptiveCapture";
 
-function wallFrame(x, timestamp, { yaw = 0, wallZ = -2, upperWallZ = null, sparse = false } = {}) {
+function wallFrame(x, timestamp, { yaw = 0, wallZ = -2, upperWallZ = null, sparse = false, visible = null } = {}) {
   const camera = new PerspectiveCamera(65, 1, 0.1, 20);
   const matrix = new Matrix4().makeRotationY(yaw).setPosition(x, 1.5, 0);
   const view = { projectionMatrix: camera.projectionMatrix.elements, transform: { matrix: matrix.elements } };
   const depth = { getDepthInMeters: (u, v) => {
-    if (sparse && (u > 0.2 || v > 0.2)) return 0;
+    if ((sparse && (u > 0.2 || v > 0.2)) || (visible && !visible(u, v))) return 0;
     const rayX = (u * 2 - 1) / view.projectionMatrix[0];
     return (v < 0.2 && upperWallZ != null ? upperWallZ : wallZ) / (-Math.sin(yaw) * rayX - Math.cos(yaw));
   } };
@@ -65,6 +65,59 @@ test("bidirectional depth tests accept ordinary turns and reject shifted layers 
   expect(captureOverlap(original, wallFrame(0.1, 400, { sparse: true })).accepted).toBe(false);
 });
 
+test("a thin measured strip is a possible bridge, but a shifted layer is not", () => {
+  const original = wallFrame(0, 100);
+  const strip = wallFrame(0.08, 400, { visible: (_u, v) => v < 0.1 });
+  const overlap = captureOverlap(original, strip);
+  expect(overlap.accepted).toBe(false);
+  expect(captureBridgeOverlap(overlap)).toBe(true);
+  expect(captureBridgeOverlap(captureOverlap(original, wallFrame(0.08, 400, { wallZ: -2.22 })))).toBe(false);
+  expect(captureBridgeOverlap(captureOverlap(original, wallFrame(0.08, 400, { sparse: true })))).toBe(false);
+});
+
+test("a sampling-phase miss during a turn gets a bounded bidirectional recheck", () => {
+  const original = wallFrame(0, 100);
+  const normal = captureOverlap(original, wallFrame(0.08, 400, { yaw: 1.08 }));
+  expect(normal.accepted).toBe(true);
+  expect(normal.forward.agreeing).toBeGreaterThan(20);
+  expect(normal.backward.agreeing).toBeGreaterThan(20);
+  const narrow = captureOverlap(original, wallFrame(0.08, 400, { yaw: 1.1 }));
+  expect(narrow.accepted).toBe(false);
+  expect(captureBridgeOverlap(narrow)).toBe(true);
+  expect(captureBridgeOverlap(captureOverlap(original, wallFrame(0.08, 400, { yaw: 1.16 })))).toBe(false);
+});
+
+test("two displaced, agreeing views reconnect a narrow bridge into one saved scan", () => {
+  const capture = started();
+  const bridge = wallFrame(0.08, 650, { yaw: 1.1 });
+  expect(capture.consider(bridge).accepted).toBe(false);
+  expect(capture.frames).toHaveLength(2);
+  expect(capture.snapshot().connected).toBe(true);
+  const result = capture.consider(wallFrame(0.13, 950, { yaw: 1.1 }));
+  expect(result.accepted).toBe(true);
+  expect(result.committed).toHaveLength(2);
+  expect(capture.snapshot().connected).toBe(true);
+  expect(capture.frames).toHaveLength(4);
+  expect(capture.pending).toHaveLength(0);
+});
+
+test("a narrow bridge cannot promote a second view from a shifted depth layer", () => {
+  const capture = started();
+  capture.consider(wallFrame(0.08, 650, { yaw: 1.1 }));
+  capture.consider(wallFrame(0.13, 950, { yaw: 1.1, wallZ: -2.22 }));
+  expect(capture.frames).toHaveLength(2);
+  expect(capture.snapshot().connected).toBe(true);
+});
+
+test("a bridge at the frame limit stops clearly without saving half the pair", () => {
+  const capture = started({ maximumFrames: 3 });
+  capture.consider(wallFrame(0.16, 650, { visible: (_u, v) => v < 0.1 }));
+  const result = capture.consider(wallFrame(0.23, 950, { visible: (_u, v) => v < 0.1 }));
+  expect(result.reason).toBe("capacity");
+  expect(capture.frames).toHaveLength(2);
+  expect(capture.snapshot()).toMatchObject({ connected: true, capacityReached: true });
+});
+
 test("disconnected views remain bounded and invisible until a measured bridge reconnects them", () => {
   const capture = started();
   const saved = capture.frames.length;
@@ -101,6 +154,15 @@ test("brief motion skips preserve recent recovery evidence without saving the sk
   expect(capture.frames).toHaveLength(2);
   expect(capture.consider(wallFrame(0.16, 1200)).accepted).toBe(true);
   expect(capture.state).toBe("tracking");
+});
+
+test("one uncertain depth read does not restart a verified recovery sequence", () => {
+  const capture = started();
+  capture.failure("tracking-lost", 600);
+  expect(capture.consider(wallFrame(0.1, 800)).accepted).toBe(false);
+  expect(capture.consider(wallFrame(0.12, 950, { wallZ: -2.1 })).accepted).toBe(false);
+  expect(capture.consider(wallFrame(0.16, 1150)).accepted).toBe(true);
+  expect(capture.snapshot().connected).toBe(true);
 });
 
 test("three motion rejections do not turn a connected scan into an amber recovery loop", () => {

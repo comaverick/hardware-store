@@ -111,10 +111,10 @@ export function adaptiveCaptureProfile({ depthType = "", width = 0, height = 0, 
   };
 }
 
-function directionalAgreement(first, second) {
+function directionalAgreement(first, second, maximumSamples = 280) {
   const errors = [], tiles = new Set();
   let samples = 0, compared = 0, agreeing = 0, freeSpace = 0;
-  const stride = Math.max(1, Math.ceil(first.filteredDepth.length / 280));
+  const stride = Math.max(1, Math.ceil(first.filteredDepth.length / maximumSamples));
   for (let index = 0; index < first.filteredDepth.length; index += stride) {
     if (!first.measuredMask[index]) continue;
     samples++;
@@ -148,8 +148,19 @@ function directionalAgreement(first, second) {
 }
 
 export function captureOverlap(left, right) {
-  const forward = directionalAgreement(prepareCaptureFrame(left), prepareCaptureFrame(right));
-  const backward = directionalAgreement(prepareCaptureFrame(right), prepareCaptureFrame(left));
+  const first = prepareCaptureFrame(left), second = prepareCaptureFrame(right);
+  let forward = directionalAgreement(first, second);
+  let backward = directionalAgreement(second, first);
+  const strongOneWay = value => value.agreeing >= 20 && value.tiles >= 4 &&
+    value.support >= 0.07 && value.agreement >= 0.8 && value.median <= 0.04;
+  // A fixed coarse sampling phase can miss a thin overlap at the edge of a
+  // turn, even though the opposite projection measured it. Recheck only that
+  // sparse direction; a direction with actual disagreeing depth is never
+  // rescued by picking a more favorable phase.
+  if (strongOneWay(forward) && backward.compared < 18)
+    backward = directionalAgreement(second, first, 1200);
+  if (strongOneWay(backward) && forward.compared < 18)
+    forward = directionalAgreement(first, second, 1200);
   const passes = value => value.compared >= 18 && value.agreeing >= 14 && value.tiles >= 4 &&
     value.support >= 0.12 && value.agreement >= 0.6 && value.median <= 0.055 && value.upper <= 0.09;
   return {
@@ -162,6 +173,17 @@ export function captureOverlap(left, right) {
     upper: Math.max(forward.upper, backward.upper),
     forward, backward,
   };
+}
+
+// A narrow shared strip (for example, where a wall meets the ceiling) can be
+// enough to reconnect two *locally agreeing* views. It is not enough by itself
+// to save a frame: consider() requires a second, displaced view of that strip.
+export function captureBridgeOverlap(result) {
+  if (!result || result.conflict) return false;
+  const passes = value => value && value.compared >= 20 && value.agreeing >= 18 &&
+    value.tiles >= 4 && value.support >= 0.07 && value.agreement >= 0.8 &&
+    value.median <= 0.04 && value.upper <= 0.06 && value.freeSpaceRatio <= 0.15;
+  return !!(passes(result.forward) && passes(result.backward));
 }
 
 function graphConnected(frames, links, omit = null) {
@@ -221,6 +243,7 @@ export class AdaptiveCapture {
     this.reason = "starting";
     this.recoveryMatches = 0;
     this.pendingSupport = new WeakMap();
+    this.pendingBridgeEdges = new WeakMap();
     this.events = { recoveries: 0, promoted: 0, expired: 0, removed: 0, capacityStops: 0,
       pendingAgeDrops: 0, pendingCapacityDrops: 0, pendingRedundantDrops: 0,
       pendingConflictDrops: 0, pendingResetDrops: 0 };
@@ -303,8 +326,52 @@ export class AdaptiveCapture {
   matches(frame) {
     const results = this.references(frame).map(reference => ({ reference, result: this.compare(frame, reference) }));
     return { edges: results.filter(value => value.result.accepted).map(value => value.reference.captureId),
+      bridgeEdges: results.filter(value => captureBridgeOverlap(value.result)).map(value => value.reference.captureId),
       conflict: results.some(value => value.result.conflict),
       best: results.sort((a, b) => b.result.overlap - a.result.overlap)[0]?.result };
+  }
+  reconnectPendingBridge(frame, timestamp) {
+    // A single small coincidental patch must never enter the saved scan. Two
+    // displaced observations must agree with each other, and at least one must
+    // independently agree with a saved view on that patch. Pending frames stay
+    // invisible to preview, fusion and export until this succeeds.
+    if (!this.pending.includes(frame)) return false;
+    // The saved graph has not changed while these views were pending, so any
+    // newly possible pair must contain the newest view. Limit work on mobile.
+    for (const other of this.pending) {
+      if (other === frame || distance(camera(frame), camera(other)) < 0.04) continue;
+      const choices = [frame, other].filter(value => (this.pendingBridgeEdges.get(value) || []).length);
+      if (!choices.length) continue;
+      const agreement = this.compare(frame, other);
+      if (!agreement.accepted || agreement.conflict) continue;
+      const bridge = choices.sort((a, b) =>
+        (this.pendingSupport.get(b) || 0) - (this.pendingSupport.get(a) || 0))[0];
+      const companion = bridge === frame ? other : frame;
+      // A normal saved view may have arrived since this candidate was
+      // buffered. Revalidate against the current graph before adding a link.
+      const verified = this.matches(bridge);
+      if (verified.conflict || !verified.bridgeEdges.length) continue;
+      // Do not half-commit a corroborated pair at the frame limit. Tell the
+      // user the area is full rather than leaving this path checking forever.
+      if (this.frames.length + 2 > this.maximumFrames) {
+        this.capacityReached = true;
+        this.events.capacityStops++;
+        this.reason = "capacity";
+        return "capacity";
+      }
+      this.commit(bridge, verified.bridgeEdges);
+      this.commit(companion, [bridge.captureId]);
+      this.pending = this.pending.filter(value => value !== bridge && value !== companion);
+      this.events.promoted += 2;
+      this.frames.sort((a, b) => a.timestamp - b.timestamp);
+      this.lastReliableAt = timestamp;
+      this.state = "tracking";
+      this.reason = "connected";
+      this.uncertainSince = null;
+      this.clearRecoveryEvidence();
+      return true;
+    }
+    return false;
   }
   remove(frame) {
     this.links.delete(frame.captureId);
@@ -340,7 +407,8 @@ export class AdaptiveCapture {
     frame.captureId = ++this.sequence;
     const time = frame.timestamp;
     this.expire(time);
-    if (this.lastReliableAt != null && time - this.lastReliableAt > RECOVERY_EVIDENCE_MS)
+    if (this.state !== "recovering" && this.lastReliableAt != null &&
+        time - this.lastReliableAt > RECOVERY_EVIDENCE_MS)
       this.recover("capture-gap", time);
     if (this.lastObserved && distance(camera(frame), camera(this.lastObserved)) > 0.5)
       this.recover("camera-jump", time);
@@ -365,7 +433,11 @@ export class AdaptiveCapture {
       return { accepted: false, committed: [], reason: this.reason };
     }
     if (!match.edges.length) {
-      this.clearRecoveryEvidence();
+      // A single uncertain depth read is not evidence that the previous good
+      // recovery view was wrong. Keep it briefly; the next good view must still
+      // agree with that exact observation before recovery can complete.
+      if (this.lastRecoveryMatchAt != null && time - this.lastRecoveryMatchAt > RECOVERY_EVIDENCE_MS)
+        this.clearRecoveryEvidence();
       if (this.state === "tracking") {
         this.state = "checking";
         this.uncertainSince = time;
@@ -373,7 +445,13 @@ export class AdaptiveCapture {
       if (this.state === "checking" && time - this.uncertainSince >= OVERLAP_GRACE_MS)
         this.recover("overlap-lost", time);
       this.reason = this.state === "recovering" ? "overlap-lost" : "checking-overlap";
+      this.pendingBridgeEdges.set(frame, match.bridgeEdges);
       this.buffer(frame, match.best?.overlap || 0);
+      const bridgeResult = this.reconnectPendingBridge(frame, time);
+      if (bridgeResult === "capacity") return { accepted: false, committed: [], reason: "capacity" };
+      if (bridgeResult)
+        return { accepted: true, committed: this.frames.filter(value => !before.has(value)), reason: "connected", match: match.best };
+      if (match.bridgeEdges.length && this.pending.includes(frame)) this.reason = "confirming-bridge";
       return { accepted: false, committed: [], reason: this.reason };
     }
     this.lastReliableAt = time;

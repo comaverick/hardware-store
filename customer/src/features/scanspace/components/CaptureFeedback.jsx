@@ -135,7 +135,7 @@ export function CaptureProgress({ stats }) {
           {stateLabel}
         </span>
       </div>
-      <p className="ss-capture-overlap">Observed-surface overlap <strong>{summary.overlap}%</strong> · Unscanned areas may stay open.</p>
+      <p className="ss-capture-overlap">Confirmed saved coverage <strong>{summary.overlap}%</strong> · Unscanned areas may stay open.</p>
       <p className="ss-capture-next" id="ss-capture-next"><strong>Next:</strong> {summary.next}</p>
       <CaptureCoverage coverage={stats.adaptiveCapture?.coverage} />
     </section>
