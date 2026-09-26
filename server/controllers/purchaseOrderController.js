@@ -9,6 +9,7 @@ const Product = require("../models/Product");
 const BranchInventory = require("../models/BranchInventory");
 
 const InventoryTransaction = require("../models/InventoryTransaction");
+const { fail, positiveQuantity, runStockOperation, sendStockError } = require("../lib/stockOperations");
 
 // =========================
 // GENERATE PO NUMBER
@@ -264,171 +265,74 @@ const updatePurchaseOrderStatus = async (req, res) => {
 
 const receivePurchaseOrder = async (req, res) => {
   try {
-    const { items } = req.body;
-    const order = await PurchaseOrder.findOne({
-      _id: req.params.id,
-      ...(req.user?.role === "SUPER_ADMIN"
-        ? {}
-        : { branch: req.user?.branch?._id }),
-    });
+    const { items } = req.body || {};
+    if (!Array.isArray(items) || !items.length) fail(400, "Received items are required.");
 
-    if (!order) {
-      return res.status(404).json({
-        message: "Purchase order not found.",
-      });
-    }
+    const result = await runStockOperation(req, `purchase-receipt:${req.params.id}`, async (session) => {
+      const order = await PurchaseOrder.findOne({
+        _id: req.params.id,
+        ...(req.user?.role === "SUPER_ADMIN" ? {} : { branch: req.user?.branch?._id }),
+      }).session(session);
+      if (!order) fail(404, "Purchase order not found.");
+      if (order.status === "CANCELLED") fail(400, "Cancelled purchase orders cannot be received.");
+      if (order.status === "RECEIVED") fail(400, "Purchase order has already been fully received.");
 
-    if (order.status === "CANCELLED") {
-      return res.status(400).json({
-        message: "Cancelled purchase orders cannot be received.",
-      });
-    }
-
-    if (order.status === "RECEIVED") {
-      return res.status(400).json({
-        message: "Purchase order has already been fully received.",
-      });
-    }
-
-    if (!items || !Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({
-        message: "Received items are required.",
-      });
-    }
-
-    for (const receivedItem of items) {
-      const orderItem = order.items.id(receivedItem.itemId);
-
-      if (!orderItem) {
-        return res.status(400).json({
-          message: "Purchase order item not found.",
-        });
-      }
-
-      const receiveQuantity = Number(receivedItem.quantity);
-
-      if (!receiveQuantity || receiveQuantity <= 0) {
-        return res.status(400).json({
-          message: "Received quantity must be greater than zero.",
-        });
-      }
-
-      const remainingQuantity = orderItem.quantity - orderItem.receivedQuantity;
-
-      if (receiveQuantity > remainingQuantity) {
-        return res.status(400).json({
-          message: `Cannot receive more than the remaining quantity for ${orderItem.product}.`,
-        });
-      }
-    }
-
-    // =========================
-    // UPDATE INVENTORY
-    // =========================
-
-    for (const receivedItem of items) {
-      const orderItem = order.items.id(receivedItem.itemId);
-
-      const receiveQuantity = Number(receivedItem.quantity);
-
-      let branchInventory = await BranchInventory.findOne({
-        branch: order.branch,
-        product: orderItem.product,
+      const seen = new Set();
+      const receipts = items.map((receivedItem) => {
+        const itemId = String(receivedItem.itemId || "").trim();
+        if (!itemId) fail(400, "Purchase order item ID is required.");
+        const orderItem = order.items.id(itemId);
+        if (!orderItem) fail(400, "Purchase order item not found.");
+        const lineId = String(orderItem._id);
+        if (seen.has(lineId)) fail(400, "A purchase order item can appear only once per receipt.");
+        seen.add(lineId);
+        const receiveQuantity = positiveQuantity(receivedItem.quantity, "Received quantity must be greater than zero.");
+        const remainingQuantity = orderItem.quantity - (orderItem.receivedQuantity || 0);
+        if (receiveQuantity > remainingQuantity) {
+          fail(409, `Cannot receive more than the remaining quantity for ${orderItem.product}.`);
+        }
+        return { orderItem, receiveQuantity };
       });
 
-      if (!branchInventory) {
-        branchInventory = await BranchInventory.create({
-          branch: order.branch,
-
+      for (const { orderItem, receiveQuantity } of receipts) {
+        const inventory = await BranchInventory.findOneAndUpdate(
+          { branch: order.branch, product: orderItem.product },
+          {
+            $inc: { quantity: receiveQuantity },
+            $setOnInsert: { reservedQuantity: 0, reorderLevel: 5, shelfLocation: "Not assigned" },
+          },
+          { session, upsert: true, new: true, runValidators: true, setDefaultsOnInsert: false },
+        );
+        orderItem.receivedQuantity = (orderItem.receivedQuantity || 0) + receiveQuantity;
+        await InventoryTransaction.create([{
           product: orderItem.product,
-
-          quantity: 0,
-
-          reorderLevel: 5,
-
-          shelfLocation: "Not assigned",
-        });
+          branch: order.branch,
+          type: "STOCK_IN",
+          quantity: receiveQuantity,
+          previousQuantity: inventory.quantity - receiveQuantity,
+          newQuantity: inventory.quantity,
+          reason: `Purchase Order ${order.poNumber}`,
+          reference: order.poNumber,
+          performedBy: req.user._id,
+          notes: "Stock received from purchase order.",
+        }], { session });
       }
 
-      const previousQuantity = branchInventory.quantity;
+      const fullyReceived = order.items.every((item) => item.receivedQuantity >= item.quantity);
+      const partiallyReceived = order.items.some((item) => item.receivedQuantity > 0);
+      if (fullyReceived) order.status = "RECEIVED";
+      else if (partiallyReceived) order.status = "PARTIALLY_RECEIVED";
+      await order.save({ session });
 
-      const newQuantity = previousQuantity + receiveQuantity;
-
-      branchInventory.quantity = newQuantity;
-
-      await branchInventory.save();
-
-      orderItem.receivedQuantity += receiveQuantity;
-
-      await InventoryTransaction.create({
-        product: orderItem.product,
-
-        branch: order.branch,
-
-        type: "STOCK_IN",
-
-        quantity: receiveQuantity,
-
-        previousQuantity,
-
-        newQuantity,
-
-        reason: `Purchase Order ${order.poNumber}`,
-
-        reference: order.poNumber,
-
-        performedBy: req.user._id,
-
-        notes: "Stock received from purchase order.",
-      });
-    }
-
-    // =========================
-    // DETERMINE STATUS
-    // =========================
-
-    const fullyReceived = order.items.every(
-      (item) => item.receivedQuantity >= item.quantity,
-    );
-
-    const partiallyReceived = order.items.some(
-      (item) => item.receivedQuantity > 0,
-    );
-
-    if (fullyReceived) {
-      order.status = "RECEIVED";
-    } else if (partiallyReceived) {
-      order.status = "PARTIALLY_RECEIVED";
-    }
-
-    await order.save();
-
-    const populatedOrder = await order.populate([
-      {
-        path: "supplier",
-        select: "name code",
-      },
-      {
-        path: "branch",
-        select: "name code",
-      },
-      {
-        path: "items.product",
-        select: "name sku unit",
-      },
-    ]);
-
-    res.json({
-      message: "Purchase order received successfully.",
-
-      purchaseOrder: populatedOrder,
+      const purchaseOrder = await PurchaseOrder.findById(order._id).session(session)
+        .populate("supplier", "name code")
+        .populate("branch", "name code")
+        .populate("items.product", "name sku unit");
+      return { status: 200, body: { message: "Purchase order received successfully.", purchaseOrder } };
     });
+    res.status(result.status).json(result.body);
   } catch (error) {
-    console.error("Receive purchase order error:", error);
-
-    res.status(500).json({
-      message: "Failed to receive purchase order.",
-    });
+    sendStockError(res, error, "Receive purchase order");
   }
 };
 

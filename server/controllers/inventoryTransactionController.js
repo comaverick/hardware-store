@@ -2,6 +2,8 @@
 
 const Inventory = require("../models/BranchInventory");
 const { branchFilter } = require("../lib/branchAccess");
+const crypto = require("node:crypto");
+const { fail, positiveQuantity, runStockOperation, sendStockError } = require("../lib/stockOperations");
 
 // =========================
 // GET ALL TRANSACTIONS
@@ -35,84 +37,39 @@ const getTransactions = async (req, res) => {
 
 const receiveStock = async (req, res) => {
   try {
-    const { inventoryId, quantity, reason, notes } = req.body;
+    const { inventoryId, quantity, reason, notes } = req.body || {};
+    if (!inventoryId) fail(400, "Inventory ID is required.");
+    const receivedQuantity = positiveQuantity(quantity);
 
-    if (!inventoryId) {
-      return res.status(400).json({
-        message: "Inventory ID is required.",
-      });
-    }
+    const result = await runStockOperation(req, `receive:${inventoryId}`, async (session) => {
+      const inventory = await Inventory.findOneAndUpdate(
+        { _id: inventoryId, ...branchFilter(req.user) },
+        { $inc: { quantity: receivedQuantity } },
+        { new: true, session, runValidators: true },
+      );
+      if (!inventory) fail(404, "Inventory record not found.");
 
-    if (!quantity || Number(quantity) <= 0) {
-      return res.status(400).json({
-        message: "Quantity must be greater than zero.",
-      });
-    }
-
-    const inventory = await Inventory.findOne({
-      _id: inventoryId,
-      ...branchFilter(req.user),
+      const [transaction] = await InventoryTransaction.create([{
+        product: inventory.product,
+        branch: inventory.branch,
+        type: "STOCK_IN",
+        quantity: receivedQuantity,
+        previousQuantity: inventory.quantity - receivedQuantity,
+        newQuantity: inventory.quantity,
+        reason: reason || "Stock received",
+        notes,
+        performedBy: req.user._id,
+      }], { session });
+      await transaction.populate([
+        { path: "product", select: "name sku barcode unit" },
+        { path: "branch", select: "name code" },
+        { path: "performedBy", select: "name email role" },
+      ]);
+      return { status: 201, body: { message: "Stock received successfully.", inventory, transaction } };
     });
-
-    if (!inventory) {
-      return res.status(404).json({
-        message: "Inventory record not found.",
-      });
-    }
-
-    const previousQuantity = inventory.quantity;
-
-    const newQuantity = previousQuantity + Number(quantity);
-
-    inventory.quantity = newQuantity;
-
-    await inventory.save();
-
-    const transaction = await InventoryTransaction.create({
-      product: inventory.product,
-      branch: inventory.branch,
-
-      type: "STOCK_IN",
-
-      quantity: Number(quantity),
-
-      previousQuantity,
-
-      newQuantity,
-
-      reason: reason || "Stock received",
-
-      notes,
-
-      performedBy: req.user._id,
-    });
-
-    const populatedTransaction = await transaction.populate([
-      {
-        path: "product",
-        select: "name sku barcode unit",
-      },
-      {
-        path: "branch",
-        select: "name code",
-      },
-      {
-        path: "performedBy",
-        select: "name email role",
-      },
-    ]);
-
-    res.status(201).json({
-      message: "Stock received successfully.",
-      inventory,
-      transaction: populatedTransaction,
-    });
+    res.status(result.status).json(result.body);
   } catch (error) {
-    console.error("Receive stock error:", error);
-
-    res.status(500).json({
-      message: "Failed to receive stock.",
-    });
+    sendStockError(res, error, "Receive stock");
   }
 };
 
@@ -122,96 +79,60 @@ const receiveStock = async (req, res) => {
 
 const adjustStock = async (req, res) => {
   try {
-    const { inventoryId, newQuantity, reason, notes } = req.body;
-
-    if (!inventoryId) {
-      return res.status(400).json({
-        message: "Inventory ID is required.",
-      });
-    }
-
-    if (newQuantity === undefined || Number(newQuantity) < 0) {
-      return res.status(400).json({
-        message: "New quantity must be zero or greater.",
-      });
-    }
-
-    if (!reason) {
-      return res.status(400).json({
-        message: "Adjustment reason is required.",
-      });
-    }
-
-    const inventory = await Inventory.findOne({
-      _id: inventoryId,
-      ...branchFilter(req.user),
-    });
-
-    if (!inventory) {
-      return res.status(404).json({
-        message: "Inventory record not found.",
-      });
-    }
-
-    const previousQuantity = inventory.quantity;
-
+    const { inventoryId, newQuantity, reason, notes } = req.body || {};
+    if (!inventoryId) fail(400, "Inventory ID is required.");
     const updatedQuantity = Number(newQuantity);
-
-    if (previousQuantity === updatedQuantity) {
-      return res.status(400).json({
-        message: "New quantity must be different from the current quantity.",
-      });
+    if (newQuantity === undefined || newQuantity === null || newQuantity === "" || !Number.isFinite(updatedQuantity) || updatedQuantity < 0) {
+      fail(400, "New quantity must be zero or greater.");
     }
+    if (!String(reason || "").trim()) fail(400, "Adjustment reason is required.");
 
-    inventory.quantity = updatedQuantity;
+    const result = await runStockOperation(req, `adjust:${inventoryId}`, async (session) => {
+      const current = await Inventory.findOne({
+        _id: inventoryId,
+        ...branchFilter(req.user),
+      }).session(session);
+      if (!current) fail(404, "Inventory record not found.");
+      if (current.quantity === updatedQuantity) {
+        fail(400, "New quantity must be different from the current quantity.");
+      }
+      if (updatedQuantity < (current.reservedQuantity || 0)) {
+        fail(409, `Cannot set stock below ${current.reservedQuantity} reserved units.`);
+      }
 
-    await inventory.save();
+      const inventory = await Inventory.findOneAndUpdate(
+        {
+          _id: inventoryId,
+          ...branchFilter(req.user),
+          quantity: current.quantity,
+          $expr: { $lte: [{ $ifNull: ["$reservedQuantity", 0] }, updatedQuantity] },
+        },
+        { $set: { quantity: updatedQuantity } },
+        { new: true, session, runValidators: true },
+      );
+      if (!inventory) fail(409, "Stock or reservations changed. Refresh inventory and try again.");
 
-    const transaction = await InventoryTransaction.create({
-      product: inventory.product,
-      branch: inventory.branch,
-
-      type: "ADJUSTMENT",
-
-      quantity: Math.abs(updatedQuantity - previousQuantity),
-
-      previousQuantity,
-
-      newQuantity: updatedQuantity,
-
-      reason,
-
-      notes,
-
-      performedBy: req.user._id,
+      const [transaction] = await InventoryTransaction.create([{
+        product: inventory.product,
+        branch: inventory.branch,
+        type: "ADJUSTMENT",
+        quantity: Math.abs(updatedQuantity - current.quantity),
+        previousQuantity: current.quantity,
+        newQuantity: updatedQuantity,
+        reason,
+        notes,
+        performedBy: req.user._id,
+      }], { session });
+      await transaction.populate([
+        { path: "product", select: "name sku barcode unit" },
+        { path: "branch", select: "name code" },
+        { path: "performedBy", select: "name email role" },
+      ]);
+      return { status: 200, body: { message: "Stock adjusted successfully.", inventory, transaction } };
     });
-
-    const populatedTransaction = await transaction.populate([
-      {
-        path: "product",
-        select: "name sku barcode unit",
-      },
-      {
-        path: "branch",
-        select: "name code",
-      },
-      {
-        path: "performedBy",
-        select: "name email role",
-      },
-    ]);
-
-    res.json({
-      message: "Stock adjusted successfully.",
-      inventory,
-      transaction: populatedTransaction,
-    });
+    res.status(result.status).json(result.body);
   } catch (error) {
-    console.error("Adjust stock error:", error);
-
-    res.status(500).json({
-      message: "Failed to adjust stock.",
-    });
+    sendStockError(res, error, "Adjust stock");
   }
 };
 
@@ -221,141 +142,90 @@ const adjustStock = async (req, res) => {
 
 const transferStock = async (req, res) => {
   try {
-    const { fromInventoryId, toInventoryId, quantity, reason, notes } =
-      req.body;
-
+    const { fromInventoryId, toInventoryId, quantity, reason, notes } = req.body || {};
     if (!fromInventoryId || !toInventoryId) {
-      return res.status(400).json({
-        message: "Source and destination inventory are required.",
-      });
+      fail(400, "Source and destination inventory are required.");
     }
-
-    if (fromInventoryId === toInventoryId) {
-      return res.status(400).json({
-        message: "Source and destination cannot be the same.",
-      });
+    if (String(fromInventoryId) === String(toInventoryId)) {
+      fail(400, "Source and destination cannot be the same.");
     }
+    const transferQuantity = positiveQuantity(quantity, "Transfer quantity must be greater than zero.");
 
-    if (!quantity || Number(quantity) <= 0) {
-      return res.status(400).json({
-        message: "Transfer quantity must be greater than zero.",
-      });
-    }
+    const result = await runStockOperation(req, `transfer:${fromInventoryId}:${toInventoryId}`, async (session) => {
+      const fromInventory = await Inventory.findById(fromInventoryId).session(session);
+      const toInventory = await Inventory.findById(toInventoryId).session(session);
+      if (!fromInventory) fail(404, "Source inventory not found.");
+      if (!toInventory) fail(404, "Destination inventory not found.");
+      if (String(fromInventory.product) !== String(toInventory.product)) {
+        fail(400, "Source and destination must contain the same product.");
+      }
+      if (String(fromInventory.branch) === String(toInventory.branch)) {
+        fail(400, "Source and destination must be different branches.");
+      }
+      if (fromInventory.quantity - (fromInventory.reservedQuantity || 0) < transferQuantity) {
+        fail(409, "Insufficient unreserved stock at source branch.");
+      }
 
-    const fromInventory = await Inventory.findById(fromInventoryId);
+      const source = await Inventory.findOneAndUpdate(
+        {
+          _id: fromInventoryId,
+          $expr: {
+            $gte: [
+              { $subtract: ["$quantity", { $ifNull: ["$reservedQuantity", 0] }] },
+              transferQuantity,
+            ],
+          },
+        },
+        { $inc: { quantity: -transferQuantity } },
+        { new: true, session, runValidators: true },
+      );
+      if (!source) fail(409, "Available stock changed. Refresh inventory and try again.");
 
-    const toInventory = await Inventory.findById(toInventoryId);
+      const destination = await Inventory.findOneAndUpdate(
+        { _id: toInventoryId, product: source.product },
+        { $inc: { quantity: transferQuantity } },
+        { new: true, session, runValidators: true },
+      );
+      if (!destination) fail(409, "Destination inventory changed. Refresh inventory and try again.");
 
-    if (!fromInventory) {
-      return res.status(404).json({
-        message: "Source inventory not found.",
-      });
-    }
-
-    if (!toInventory) {
-      return res.status(404).json({
-        message: "Destination inventory not found.",
-      });
-    }
-
-    if (String(fromInventory.product) !== String(toInventory.product)) {
-      return res.status(400).json({
-        message: "Source and destination must contain the same product.",
-      });
-    }
-
-    if (fromInventory.quantity < Number(quantity)) {
-      return res.status(400).json({
-        message: "Insufficient stock at source branch.",
-      });
-    }
-
-    const transferQuantity = Number(quantity);
-
-    const sourcePrevious = fromInventory.quantity;
-
-    const destinationPrevious = toInventory.quantity;
-
-    const sourceNew = sourcePrevious - transferQuantity;
-
-    const destinationNew = destinationPrevious + transferQuantity;
-
-    fromInventory.quantity = sourceNew;
-
-    toInventory.quantity = destinationNew;
-
-    await fromInventory.save();
-    await toInventory.save();
-
-    const transferReference = `TRF-${Date.now()}`;
-
-    const transferOut = await InventoryTransaction.create({
-      product: fromInventory.product,
-      branch: fromInventory.branch,
-
-      type: "TRANSFER_OUT",
-
-      quantity: transferQuantity,
-
-      previousQuantity: sourcePrevious,
-
-      newQuantity: sourceNew,
-
-      reason: reason || "Branch transfer",
-
-      reference: transferReference,
-
-      notes,
-
-      performedBy: req.user._id,
+      const transferReference = `TRF-${crypto.randomUUID()}`;
+      const transactions = await InventoryTransaction.create([{
+        product: source.product,
+        branch: source.branch,
+        type: "TRANSFER_OUT",
+        quantity: transferQuantity,
+        previousQuantity: source.quantity + transferQuantity,
+        newQuantity: source.quantity,
+        reason: reason || "Branch transfer",
+        reference: transferReference,
+        notes,
+        performedBy: req.user._id,
+      }, {
+        product: destination.product,
+        branch: destination.branch,
+        type: "TRANSFER_IN",
+        quantity: transferQuantity,
+        previousQuantity: destination.quantity - transferQuantity,
+        newQuantity: destination.quantity,
+        reason: reason || "Branch transfer",
+        reference: transferReference,
+        notes,
+        performedBy: req.user._id,
+      }], { session });
+      return {
+        status: 200,
+        body: {
+          message: "Stock transferred successfully.",
+          reference: transferReference,
+          source: { inventoryId: source._id, previousQuantity: source.quantity + transferQuantity, newQuantity: source.quantity },
+          destination: { inventoryId: destination._id, previousQuantity: destination.quantity - transferQuantity, newQuantity: destination.quantity },
+          transactions,
+        },
+      };
     });
-
-    const transferIn = await InventoryTransaction.create({
-      product: toInventory.product,
-      branch: toInventory.branch,
-
-      type: "TRANSFER_IN",
-
-      quantity: transferQuantity,
-
-      previousQuantity: destinationPrevious,
-
-      newQuantity: destinationNew,
-
-      reason: reason || "Branch transfer",
-
-      reference: transferReference,
-
-      notes,
-
-      performedBy: req.user._id,
-    });
-
-    res.json({
-      message: "Stock transferred successfully.",
-
-      reference: transferReference,
-
-      source: {
-        inventoryId: fromInventory._id,
-        previousQuantity: sourcePrevious,
-        newQuantity: sourceNew,
-      },
-
-      destination: {
-        inventoryId: toInventory._id,
-        previousQuantity: destinationPrevious,
-        newQuantity: destinationNew,
-      },
-
-      transactions: [transferOut, transferIn],
-    });
+    res.status(result.status).json(result.body);
   } catch (error) {
-    console.error("Transfer stock error:", error);
-
-    res.status(500).json({
-      message: "Failed to transfer stock.",
-    });
+    sendStockError(res, error, "Transfer stock");
   }
 };
 

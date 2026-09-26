@@ -11,128 +11,132 @@ const BranchInventory = require("../models/BranchInventory");
 const InventoryTransaction = require("../models/InventoryTransaction");
 const User = require("../models/User");
 const bcrypt = require("bcryptjs");
+const { fail, runStockOperation, sendStockError } = require("../lib/stockOperations");
 
 const refundSale = async (req, res) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
-
   try {
-    const saleFilter = {
-      _id: req.params.id,
-      ...(req.user?.role === "SUPER_ADMIN" ? {} : { branch: req.user?.branch?._id }),
-    };
-    const sale = await Sale.findOne(saleFilter).session(session);
-    if (!sale) {
-      await session.abortTransaction();
-      return res.status(404).json({ message: "Sale not found." });
-    }
-    if (!["COMPLETED", "PARTIALLY_REFUNDED"].includes(sale.status)) {
-      await session.abortTransaction();
-      return res.status(400).json({ message: "This sale cannot be refunded." });
-    }
-
-    const privilegedRoles = ["SUPER_ADMIN", "ADMIN", "MANAGER"];
-    let approver = privilegedRoles.includes(req.user?.role) ? req.user : null;
-    if (!approver) {
-      const approvalPin = String(req.body?.approvalPin || "");
-      if (!/^\d{4,6}$/.test(approvalPin)) {
-        await session.abortTransaction();
-        return res.status(400).json({ message: "A valid 4 to 6 digit manager PIN is required." });
-      }
-      const approvers = await User.find({
-        role: { $in: privilegedRoles },
-        isActive: true,
-        $or: [{ role: "SUPER_ADMIN" }, { branch: req.user?.branch?._id }],
-      }).select("+refundPin name role branch").lean();
-      for (const candidate of approvers) {
-        if (candidate.refundPin && await bcrypt.compare(approvalPin, candidate.refundPin)) {
-          approver = candidate;
-          break;
-        }
-      }
-      if (!approver) {
-        await session.abortTransaction();
-        return res.status(403).json({ message: "The manager PIN is incorrect or not configured." });
-      }
-    }
-
     const reason = String(req.body?.reason || "").trim();
     const requestedItems = Array.isArray(req.body?.items) ? req.body.items : [];
-    if (!reason) {
-      await session.abortTransaction();
-      return res.status(400).json({ message: "A refund reason is required." });
-    }
-    if (!requestedItems.length) {
-      await session.abortTransaction();
-      return res.status(400).json({ message: "Select at least one item to return." });
-    }
+    if (!reason) fail(400, "A refund reason is required.");
+    if (!requestedItems.length) fail(400, "Select at least one item to return.");
 
-    const discountFactor = sale.subtotal > 0 ? sale.totalAmount / sale.subtotal : 1;
-    const refundItems = [];
-    let refundAmount = 0;
-    for (const requested of requestedItems) {
-      const saleItem = sale.items.find((item) => String(item.product) === String(requested.product));
-      const quantity = Number(requested.quantity);
-      if (!saleItem || !Number.isInteger(quantity) || quantity < 1) {
-        await session.abortTransaction();
-        return res.status(400).json({ message: "Each returned item must belong to the sale and have a valid quantity." });
+    const result = await runStockOperation(req, `sale-refund:${req.params.id}`, async (session) => {
+      const saleFilter = {
+        _id: req.params.id,
+        ...(req.user?.role === "SUPER_ADMIN" ? {} : { branch: req.user?.branch?._id }),
+      };
+      const sale = await Sale.findOne(saleFilter).session(session);
+      if (!sale) fail(404, "Sale not found.");
+      if (!["COMPLETED", "PARTIALLY_REFUNDED"].includes(sale.status)) {
+        fail(400, "This sale cannot be refunded.");
       }
-      const remaining = saleItem.quantity - (saleItem.refundedQuantity || 0);
-      if (quantity > remaining) {
-        await session.abortTransaction();
-        return res.status(400).json({ message: `Cannot return more than the remaining quantity for an item. Remaining: ${remaining}.` });
+
+      const privilegedRoles = ["SUPER_ADMIN", "ADMIN", "MANAGER"];
+      let approver = privilegedRoles.includes(req.user?.role) ? req.user : null;
+      if (!approver) {
+        const approvalPin = String(req.body?.approvalPin || "");
+        if (!/^\d{4,6}$/.test(approvalPin)) {
+          fail(400, "A valid 4 to 6 digit manager PIN is required.");
+        }
+        const approvers = await User.find({
+          role: { $in: privilegedRoles },
+          isActive: true,
+          $or: [{ role: "SUPER_ADMIN" }, { branch: req.user?.branch?._id }],
+        }).select("+refundPin name role branch").lean();
+        for (const candidate of approvers) {
+          if (candidate.refundPin && await bcrypt.compare(approvalPin, candidate.refundPin)) {
+            approver = candidate;
+            break;
+          }
+        }
+        if (!approver) fail(403, "The manager PIN is incorrect or not configured.");
       }
-      const amount = Number((saleItem.unitPrice * quantity * discountFactor).toFixed(2));
-      refundItems.push({ product: saleItem.product, quantity, amount });
-      refundAmount += amount;
-    }
 
-    for (const item of refundItems) {
-      const saleItem = sale.items.find((saleLine) => String(saleLine.product) === String(item.product));
-      saleItem.refundedQuantity = (saleItem.refundedQuantity || 0) + item.quantity;
-      const inventory = await BranchInventory.findOne({ branch: sale.branch, product: item.product }).session(session);
-      if (!inventory) {
-        await session.abortTransaction();
-        return res.status(400).json({ message: "Inventory record not found for a returned product." });
+      const discountFactor = sale.subtotal > 0 ? sale.totalAmount / sale.subtotal : 1;
+      const seen = new Set();
+      const refundItems = [];
+      const saleLines = [];
+      let refundCents = 0;
+      for (const requested of requestedItems) {
+        let saleItem;
+        if (requested.itemId) {
+          saleItem = sale.items.id(requested.itemId);
+          if (saleItem && requested.product && String(saleItem.product) !== String(requested.product)) {
+            fail(400, "Returned item does not match the sale line.");
+          }
+        } else {
+          const matches = sale.items.filter((item) => String(item.product) === String(requested.product));
+          if (matches.length > 1) fail(400, "Sale line ID is required when a product appears more than once.");
+          saleItem = matches[0];
+        }
+        const quantity = Number(requested.quantity);
+        if (!saleItem || !Number.isSafeInteger(quantity) || quantity < 1) {
+          fail(400, "Each returned item must belong to the sale and have a valid quantity.");
+        }
+        const lineId = String(saleItem._id);
+        if (seen.has(lineId)) fail(400, "A sale item can appear only once per refund.");
+        seen.add(lineId);
+        const remaining = saleItem.quantity - (saleItem.refundedQuantity || 0);
+        if (quantity > remaining) {
+          fail(409, `Cannot return more than the remaining quantity for an item. Remaining: ${remaining}.`);
+        }
+        const amountCents = Math.round(saleItem.unitPrice * quantity * discountFactor * 100);
+        refundCents += amountCents;
+        refundItems.push({ saleItemId: saleItem._id, product: saleItem.product, quantity, amount: amountCents / 100 });
+        saleLines.push(saleItem);
       }
-      const previousQuantity = inventory.quantity || 0;
-      inventory.quantity = previousQuantity + item.quantity;
-      await inventory.save({ session });
-      await InventoryTransaction.create([{
-        product: item.product,
-        branch: sale.branch,
-        type: "STOCK_IN",
-        quantity: item.quantity,
-        previousQuantity,
-        newQuantity: inventory.quantity,
-        reason: "Customer return",
-        reference: sale.receiptNumber,
-        performedBy: req.user._id,
-        notes: reason,
-      }], { session });
-    }
 
-    sale.refundedAmount = Number(((sale.refundedAmount || 0) + refundAmount).toFixed(2));
-    sale.refunds.push({ refundedBy: req.user._id, approvedBy: approver._id, amount: refundAmount, reason, items: refundItems });
-    const fullyRefunded = sale.items.every((item) => (item.refundedQuantity || 0) >= item.quantity);
-    sale.status = fullyRefunded ? "REFUNDED" : "PARTIALLY_REFUNDED";
-    await sale.save({ session });
-    await session.commitTransaction();
+      let excessCents = refundCents - Math.round((sale.totalAmount - (sale.refundedAmount || 0)) * 100);
+      for (let index = refundItems.length - 1; index >= 0 && excessCents > 0; index -= 1) {
+        const reducible = Math.min(excessCents, Math.round(refundItems[index].amount * 100));
+        refundItems[index].amount = (Math.round(refundItems[index].amount * 100) - reducible) / 100;
+        refundCents -= reducible;
+        excessCents -= reducible;
+      }
+      if (excessCents > 0 || refundCents < 0) fail(409, "Refund exceeds the remaining paid amount.");
 
-    const populatedSale = await Sale.findById(sale._id)
-      .populate("branch", "name code")
-      .populate("cashier", "name email role")
-      .populate("items.product", "name sku barcode unit sellingPrice")
-      .populate("refunds.refundedBy", "name email role")
-      .populate("refunds.approvedBy", "name email role")
-      .lean();
-    res.json({ message: "Refund processed successfully.", refundAmount, sale: populatedSale });
+      for (let index = 0; index < refundItems.length; index += 1) {
+        const item = refundItems[index];
+        saleLines[index].refundedQuantity = (saleLines[index].refundedQuantity || 0) + item.quantity;
+        const inventory = await BranchInventory.findOneAndUpdate(
+          { branch: sale.branch, product: item.product },
+          { $inc: { quantity: item.quantity } },
+          { new: true, session, runValidators: true },
+        );
+        if (!inventory) fail(409, "Inventory record not found for a returned product.");
+        await InventoryTransaction.create([{
+          product: item.product,
+          branch: sale.branch,
+          type: "STOCK_IN",
+          quantity: item.quantity,
+          previousQuantity: inventory.quantity - item.quantity,
+          newQuantity: inventory.quantity,
+          reason: "Customer return",
+          reference: sale.receiptNumber,
+          performedBy: req.user._id,
+          notes: reason,
+        }], { session });
+      }
+
+      const refundAmount = refundCents / 100;
+      sale.refundedAmount = Number(((sale.refundedAmount || 0) + refundAmount).toFixed(2));
+      sale.refunds.push({ refundedBy: req.user._id, approvedBy: approver._id, amount: refundAmount, reason, items: refundItems });
+      const fullyRefunded = sale.items.every((item) => (item.refundedQuantity || 0) >= item.quantity);
+      sale.status = fullyRefunded ? "REFUNDED" : "PARTIALLY_REFUNDED";
+      await sale.save({ session });
+
+      const populatedSale = await Sale.findById(sale._id).session(session)
+        .populate("branch", "name code")
+        .populate("cashier", "name email role")
+        .populate("items.product", "name sku barcode unit sellingPrice")
+        .populate("refunds.refundedBy", "name email role")
+        .populate("refunds.approvedBy", "name email role")
+        .lean();
+      return { status: 200, body: { message: "Refund processed successfully.", refundAmount, sale: populatedSale } };
+    });
+    res.status(result.status).json(result.body);
   } catch (error) {
-    await session.abortTransaction();
-    console.error("Refund sale error:", error);
-    res.status(500).json({ message: "Failed to process refund." });
-  } finally {
-    session.endSession();
+    sendStockError(res, error, "Process refund");
   }
 };
 
@@ -207,6 +211,7 @@ const createSale = async (req, res) => {
     let subtotal = 0;
 
     const saleItems = [];
+    const seenProducts = new Set();
 
     for (const item of items) {
       if (!item.product || !item.quantity) {
@@ -217,11 +222,15 @@ const createSale = async (req, res) => {
 
       const quantity = Number(item.quantity);
 
-      if (quantity <= 0) {
+      if (!Number.isFinite(quantity) || quantity <= 0) {
         return res.status(400).json({
           message: "Quantity must be greater than zero.",
         });
       }
+      if (seenProducts.has(String(item.product))) {
+        return res.status(400).json({ message: "Each product can appear only once in a sale." });
+      }
+      seenProducts.add(String(item.product));
 
       const product = await Product.findById(item.product).session(session);
 
@@ -340,20 +349,23 @@ const createSale = async (req, res) => {
     // =========================
 
     for (const item of saleItems) {
-      const inventory = await BranchInventory.findOne({
-        branch,
-        product: item.product,
-      }).session(session);
-
-      const previousQuantity = inventory.quantity;
-
-      const newQuantity = previousQuantity - item.quantity;
-
-      inventory.quantity = newQuantity;
-
-      await inventory.save({
-        session,
-      });
+      const inventory = await BranchInventory.findOneAndUpdate(
+        {
+          branch,
+          product: item.product,
+          $expr: {
+            $gte: [
+              { $subtract: ["$quantity", { $ifNull: ["$reservedQuantity", 0] }] },
+              item.quantity,
+            ],
+          },
+        },
+        { $inc: { quantity: -item.quantity } },
+        { new: true, session, runValidators: true },
+      );
+      if (!inventory) fail(409, "Available stock changed. Refresh the sale and try again.");
+      const previousQuantity = inventory.quantity + item.quantity;
+      const newQuantity = inventory.quantity;
 
       // =========================
       // STOCK OUT TRANSACTION
@@ -403,12 +415,7 @@ const createSale = async (req, res) => {
     });
   } catch (error) {
     await session.abortTransaction();
-
-    console.error("Create sale error:", error);
-
-    res.status(500).json({
-      message: "Failed to complete sale.",
-    });
+    sendStockError(res, error, "Complete sale");
   } finally {
     session.endSession();
   }

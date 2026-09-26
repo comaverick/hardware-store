@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
 import {
@@ -35,6 +35,7 @@ import {
 
 import api from "../../services/api";
 import { useAuth } from "../../context/AuthContext";
+import { createRequestKey } from "../../utils/idempotency";
 
 import "./Inventory.css";
 
@@ -73,6 +74,23 @@ const Inventory = () => {
   const [receiveForm] = Form.useForm();
   const [adjustForm] = Form.useForm();
   const [transferForm] = Form.useForm();
+  const selectedAdjustInventoryId = Form.useWatch("inventoryId", adjustForm);
+  const reservedForAdjustment = inventory.find((item) => item._id === selectedAdjustInventoryId)?.reservedQuantity || 0;
+  const stockRequestRef = useRef(null);
+
+  useEffect(() => {
+    stockRequestRef.current = null;
+  }, [actionModal]);
+
+  const postStockAction = (path, values) => {
+    const signature = JSON.stringify({ path, values });
+    if (stockRequestRef.current?.signature !== signature) {
+      stockRequestRef.current = { signature, key: createRequestKey() };
+    }
+    return api.post(path, values, {
+      headers: { "Idempotency-Key": stockRequestRef.current.key },
+    });
+  };
 
   // =========================
   // FETCH INVENTORY
@@ -371,7 +389,7 @@ const Inventory = () => {
     try {
       setSaving(true);
 
-      await api.post("/inventory-transactions/receive", values);
+      await postStockAction("/inventory-transactions/receive", values);
 
       message.success("Stock received successfully.");
 
@@ -399,7 +417,7 @@ const Inventory = () => {
     try {
       setSaving(true);
 
-      await api.post("/inventory-transactions/adjust", values);
+      await postStockAction("/inventory-transactions/adjust", values);
 
       message.success("Stock adjusted successfully.");
 
@@ -425,7 +443,7 @@ const Inventory = () => {
     try {
       setSaving(true);
 
-      await api.post("/inventory-transactions/transfer", values);
+      await postStockAction("/inventory-transactions/transfer", values);
 
       message.success("Stock transferred successfully.");
 
@@ -975,6 +993,7 @@ const Inventory = () => {
           <Form.Item
             label="New Quantity"
             name="newQuantity"
+            extra={`${reservedForAdjustment} units are reserved and must remain in stock.`}
             rules={[
               {
                 required: true,
@@ -983,7 +1002,7 @@ const Inventory = () => {
             ]}
           >
             <InputNumber
-              min={0}
+              min={reservedForAdjustment}
               style={{
                 width: "100%",
               }}
@@ -1071,7 +1090,7 @@ const Inventory = () => {
                 label:
                   `${item.product?.name} - ` +
                   `${item.branch?.code} ` +
-                  `(Available: ${item.quantity})`,
+                  `(Available: ${Math.max((item.quantity || 0) - (item.reservedQuantity || 0), 0)})`,
               }))}
             />
           </Form.Item>

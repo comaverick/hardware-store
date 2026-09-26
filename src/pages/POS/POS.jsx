@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createRequestKey } from "../../utils/idempotency";
 
 import {
   BarcodeOutlined,
@@ -138,6 +139,7 @@ const POS = () => {
   const [refundSale, setRefundSale] = useState(null);
   const [refundSaving, setRefundSaving] = useState(false);
   const [refundForm] = Form.useForm();
+  const refundRequestRef = useRef(null);
 
   // =========================
   // INITIAL DATA
@@ -658,6 +660,7 @@ const POS = () => {
   }, [salesHistory, salesHistorySearch]);
 
   const openRefund = (sale) => {
+    refundRequestRef.current = null;
     setRefundSale(sale);
     refundForm.setFieldsValue({
       reason: "Customer return",
@@ -671,6 +674,7 @@ const POS = () => {
     if (!refundSale) return;
     const items = (values.items || [])
       .map((item, index) => ({
+        itemId: refundSale.items[index]._id,
         product: refundSale.items[index].product?._id || refundSale.items[index].product,
         quantity: Number(item.quantity || 0),
       }))
@@ -681,12 +685,20 @@ const POS = () => {
     }
     try {
       setRefundSaving(true);
-      const response = await api.post(`/sales/${refundSale._id}/refund`, {
+      const payload = {
         items,
         reason: values.reason,
         ...(canRefundDirectly ? {} : { approvalPin: values.approvalPin }),
+      };
+      const signature = JSON.stringify({ saleId: refundSale._id, items, reason: values.reason });
+      if (refundRequestRef.current?.signature !== signature) {
+        refundRequestRef.current = { signature, key: createRequestKey() };
+      }
+      const response = await api.post(`/sales/${refundSale._id}/refund`, payload, {
+        headers: { "Idempotency-Key": refundRequestRef.current.key },
       });
       message.success(`Refund processed: \u20B1${Number(response.data.refundAmount || 0).toLocaleString("en-PH", { minimumFractionDigits: 2 })}.`);
+      refundRequestRef.current = null;
       setRefundSale(null);
       refundForm.resetFields();
       await fetchSalesHistory();

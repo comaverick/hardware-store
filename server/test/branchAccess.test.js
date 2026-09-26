@@ -3,6 +3,7 @@ const { afterEach, mock, test } = require("node:test");
 const { once } = require("node:events");
 const express = require("express");
 const jwt = require("jsonwebtoken");
+const mongoose = require("mongoose");
 
 const User = require("../models/User");
 const AuditLog = require("../models/AuditLog");
@@ -12,12 +13,14 @@ const Reservation = require("../models/Reservation");
 const Product = require("../models/Product");
 const Branch = require("../models/Branch");
 const Sale = require("../models/Sale");
+const StockOperation = require("../models/StockOperation");
 const { receiveStock, adjustStock } = require("../controllers/inventoryTransactionController");
 const { updateInventory } = require("../controllers/branchInventoryController");
 const { getReservations, updateReservationStatus } = require("../controllers/reservationController");
 const { getProduct } = require("../controllers/productController");
 const smartInventoryRoutes = require("../routes/smartInventoryRoutes");
 const inventoryTransactionRoutes = require("../routes/inventoryTransactionRoutes");
+const purchaseOrderRoutes = require("../routes/purchaseOrderRoutes");
 
 const branchA = "aaaaaaaaaaaaaaaaaaaaaaaa";
 const branchB = "bbbbbbbbbbbbbbbbbbbbbbbb";
@@ -49,6 +52,16 @@ const mockLogin = (user) => {
     select() { return this; },
     async populate() { return user; },
   }));
+};
+
+const mockStockTransaction = () => {
+  mock.method(mongoose, "startSession", async () => ({
+    withTransaction: async (work) => work(),
+    endSession: async () => {},
+  }));
+  mock.method(StockOperation, "init", async () => {});
+  mock.method(StockOperation, "findOne", () => ({ lean: async () => null }));
+  mock.method(StockOperation, "create", async () => []);
 };
 
 test("restock requires a login and rejects another branch", async () => {
@@ -112,6 +125,25 @@ test("cashiers cannot post stock changes", async () => {
   }
 });
 
+test("cashiers cannot receive purchase orders", async () => {
+  mockLogin({ ...staff, role: "CASHIER" });
+  mock.method(AuditLog, "create", async () => ({}));
+  const server = await startServer("/api/purchase-orders", purchaseOrderRoutes);
+  try {
+    const result = await fetch(`${server.url}/api/purchase-orders/${branchA}/receive`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer fixture-token",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ items: [{ itemId: "item-a", quantity: 1 }] }),
+    });
+    assert.equal(result.status, 403);
+  } finally {
+    await server.close();
+  }
+});
+
 test("branch managers cannot make an unapproved cross-branch transfer", async () => {
   mockLogin({ ...staff, role: "MANAGER" });
   mock.method(AuditLog, "create", async () => ({}));
@@ -132,19 +164,24 @@ test("branch managers cannot make an unapproved cross-branch transfer", async ()
 });
 
 test("receiving and adjusting stock query only the assigned branch", async () => {
+  mockStockTransaction();
   const filters = [];
-  mock.method(BranchInventory, "findOne", async (filter) => {
+  mock.method(BranchInventory, "findOneAndUpdate", async (filter) => {
     filters.push(filter);
     return null;
+  });
+  mock.method(BranchInventory, "findOne", (filter) => {
+    filters.push(filter);
+    return { session: async () => null };
   });
   mock.method(InventoryTransaction, "create", () => assert.fail("No stock transaction should be created"));
 
   const received = response();
-  await receiveStock({ user: staff, body: { inventoryId: "inventory-b", quantity: 2 } }, received);
+  await receiveStock({ user: staff, body: { inventoryId: "inventory-b", quantity: 2, requestId: "branch-check-receive" } }, received);
   assert.equal(received.statusCode, 404);
 
   const adjusted = response();
-  await adjustStock({ user: staff, body: { inventoryId: "inventory-b", newQuantity: 0, reason: "Count" } }, adjusted);
+  await adjustStock({ user: staff, body: { inventoryId: "inventory-b", newQuantity: 0, reason: "Count", requestId: "branch-check-adjust" } }, adjusted);
   assert.equal(adjusted.statusCode, 404);
   assert.deepEqual(filters, [
     { _id: "inventory-b", branch: branchA },
@@ -153,23 +190,24 @@ test("receiving and adjusting stock query only the assigned branch", async () =>
 });
 
 test("receiving stock still works in the assigned branch", async () => {
+  mockStockTransaction();
   const inventory = {
     _id: "inventory-a",
     branch: branchA,
     product: "product-a",
-    quantity: 2,
-    async save() {},
+    quantity: 5,
   };
-  mock.method(BranchInventory, "findOne", async (filter) => {
+  mock.method(BranchInventory, "findOneAndUpdate", async (filter) => {
     assert.deepEqual(filter, { _id: inventory._id, branch: branchA });
     return inventory;
   });
-  mock.method(InventoryTransaction, "create", async (details) => ({
-    async populate() { return details; },
-  }));
+  mock.method(InventoryTransaction, "create", async (details) => [{
+    ...details[0],
+    async populate() {},
+  }]);
 
   const result = response();
-  await receiveStock({ user: staff, body: { inventoryId: inventory._id, quantity: 3 } }, result);
+  await receiveStock({ user: staff, body: { inventoryId: inventory._id, quantity: 3, requestId: "own-branch-receive" } }, result);
   assert.equal(result.statusCode, 201);
   assert.equal(inventory.quantity, 5);
   assert.equal(result.body.transaction.branch, branchA);
@@ -241,14 +279,21 @@ test("a reservation status change cannot find another branch's record", async ()
 });
 
 test("staff can update a reservation in their own branch", async () => {
+  mock.method(mongoose, "startSession", async () => ({
+    withTransaction: async (work) => work(),
+    endSession: async () => {},
+  }));
   const reservation = {
     branch: branchA,
     status: "ACTIVE",
     async save() {},
   };
-  mock.method(Reservation, "findOne", async (filter) => {
+  mock.method(Reservation, "findOne", (filter) => {
     assert.deepEqual(filter, { _id: "reservation-a", branch: branchA });
-    return reservation;
+    return {
+      session: async () => reservation,
+      then: (resolve) => resolve(reservation),
+    };
   });
   mock.method(Reservation, "find", (filter) => {
     assert.equal(filter.branch, branchA);

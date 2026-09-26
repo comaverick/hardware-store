@@ -116,6 +116,7 @@ const saleSchema = new mongoose.Schema(
         reason: { type: String, trim: true, required: true },
         items: [
           {
+            saleItemId: { type: mongoose.Schema.Types.ObjectId },
             product: { type: mongoose.Schema.Types.ObjectId, ref: "Product", required: true },
             quantity: { type: Number, required: true, min: 1 },
             amount: { type: Number, required: true, min: 0 },
