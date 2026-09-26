@@ -1,389 +1,326 @@
 import { useState } from "react";
 import {
   ArrowRight,
-  CaretDown,
   CheckCircle,
   ClipboardText,
   Drop,
   Hammer,
   HardHat,
-  Heart,
   House,
   Lightning,
-  List,
   MagnifyingGlass,
   MapPin,
   PaintBrush,
   ShoppingCart,
   SquaresFour,
   Storefront,
-  Truck,
-  UserCircle,
   Wrench,
-  X,
 } from "@phosphor-icons/react";
-import heroImage from "./assets/hardware-hero.webp";
-import drillImage from "./assets/product-drill.webp";
-import hammerImage from "./assets/product-hammer.webp";
-import paintImage from "./assets/product-paint.webp";
-import fastenersImage from "./assets/product-fasteners.webp";
-import "./App.css";
+import heroImage from "./assets/hardware-hero-minimal.webp";
+import scanSpaceImage from "./assets/scanspace-room-feature.webp";
 import { useReservationCart } from "./cart/reservationCart";
+import { categories, formatPrice, products } from "./storefrontCatalog";
+import "./App.css";
 
-const categories = [
-  { name: "Tools", detail: "Hand and power", Icon: Hammer },
-  { name: "Paint", detail: "Color and supplies", Icon: PaintBrush },
-  { name: "Electrical", detail: "Safe connections", Icon: Lightning },
-  { name: "Plumbing", detail: "Pipes and fittings", Icon: Drop },
-  { name: "Hardware", detail: "Fasteners and locks", Icon: Wrench },
-  { name: "Safety", detail: "Worksite essentials", Icon: HardHat },
-];
+const categoryIcons = {
+  Tools: Hammer,
+  Paint: PaintBrush,
+  Electrical: Lightning,
+  Plumbing: Drop,
+  Hardware: Wrench,
+  Safety: HardHat,
+};
 
-const products = [
-  {
-    name: "18V Cordless Drill Set",
-    category: "Power tools",
-    price: "₱3,490",
-    stock: "Available today",
-    image: drillImage,
-  },
-  {
-    name: "Steel Claw Hammer",
-    category: "Hand tools",
-    price: "₱445",
-    stock: "Available today",
-    image: hammerImage,
-  },
-  {
-    name: "Interior Paint Starter Set",
-    category: "Paint supplies",
-    price: "₱1,280",
-    stock: "Limited stock",
-    image: paintImage,
-  },
-  {
-    name: "Screw and Anchor Kit",
-    category: "Fasteners",
-    price: "₱690",
-    stock: "Available today",
-    image: fastenersImage,
-  },
-];
+function Brand({ footer = false }) {
+  return (
+    <a
+      className={`shop-brand${footer ? " shop-brand--footer" : ""}`}
+      href="#top"
+      aria-label="Hardware Store home"
+    >
+      <span className="shop-brand__mark" aria-hidden="true">
+        HS
+      </span>
+      <span>Hardware Store</span>
+    </a>
+  );
+}
 
 function App() {
-  const [menuOpen, setMenuOpen] = useState(false);
-  const cart = useReservationCart();
+  const [query, setQuery] = useState("");
+  const [activeCategory, setActiveCategory] = useState("All");
+  const { draft, show, addItem } = useReservationCart();
+  const cartCount = draft?.items?.reduce(
+    (total, item) => total + Number(item.quantity || 0),
+    0,
+  ) || 0;
+  const normalizedQuery = query.trim().toLowerCase();
+  const visibleProducts = products.filter((product) => {
+    const matchesCategory =
+      activeCategory === "All" || product.category === activeCategory;
+    const matchesSearch =
+      !normalizedQuery ||
+      `${product.name} ${product.category} ${product.detail}`
+        .toLowerCase()
+        .includes(normalizedQuery);
+    return matchesCategory && matchesSearch;
+  });
+
+  function resetFilters() {
+    setActiveCategory("All");
+    setQuery("");
+  }
+
+  function chooseCategory(category) {
+    setActiveCategory(category);
+    setQuery("");
+  }
+
+  function handleSearch(event) {
+    event.preventDefault();
+    document.getElementById("products")?.scrollIntoView();
+  }
 
   return (
-    <div className="storefront-shell">
-      <div className="service-strip">
-        <div className="page-width service-strip__content">
-          <span>Reserve online. Pick up at your preferred branch.</span>
-          <button type="button">How pickup works</button>
-        </div>
-      </div>
-
-      <header className="site-header">
-        <div className="page-width header-row">
-          <a className="brand" href="#top" aria-label="Hardware Store home">
-            <span className="brand__mark" aria-hidden="true">
-              HS
-            </span>
-            <span className="brand__name">Hardware Store</span>
+    <div className="storefront-shell" id="top">
+      <header className="shop-header">
+        <div className="shop-container shop-header__main">
+          <Brand />
+          <form className="shop-search" role="search" onSubmit={handleSearch}>
+            <MagnifyingGlass size={20} aria-hidden="true" />
+            <input
+              aria-label="Search products"
+              placeholder="Search products"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              type="search"
+            />
+            <button type="submit" aria-label="Show search results">
+              <ArrowRight size={19} weight="bold" />
+            </button>
+          </form>
+          <a className="shop-header__pickup" href="#pickup">
+            <MapPin size={21} weight="bold" />
+            <span>Branch pickup</span>
           </a>
-
-          <nav className="desktop-nav" aria-label="Primary navigation">
-            <a href="#categories">Categories</a>
-            <a href="#products">Best sellers</a>
-            <a href="#pickup">Branch pickup</a>
-            <a href="/scanspace">ScanSpace</a>
-          </nav>
-
-          <div className="header-actions">
-            <button className="location-button" type="button">
-              <MapPin size={19} weight="bold" />
-              <span>Choose branch</span>
-              <CaretDown size={14} weight="bold" />
-            </button>
-            <button
-              className="icon-button account-button"
-              type="button"
-              aria-label="Customer account"
-            >
-              <UserCircle size={24} />
-            </button>
-            <button
-              className="icon-button"
-              type="button"
-              aria-label="Reservation cart"
-              onClick={cart.show}
-            >
-              <ShoppingCart size={23} />
-              <span className="cart-count">
-                {cart.draft?.items?.reduce(
-                  (sum, item) => sum + item.quantity,
-                  0,
-                ) || 0}
-              </span>
-            </button>
-            <button
-              className="icon-button menu-button"
-              type="button"
-              aria-label={menuOpen ? "Close navigation" : "Open navigation"}
-              aria-expanded={menuOpen}
-              onClick={() => setMenuOpen((current) => !current)}
-            >
-              {menuOpen ? <X size={24} /> : <List size={25} />}
-            </button>
-          </div>
-        </div>
-
-        <div className="page-width search-row">
-          <label className="search-box">
-            <span className="visually-hidden">Search products</span>
-            <MagnifyingGlass size={22} aria-hidden="true" />
-            <input placeholder="What are you looking for?" />
-            <button type="button">Search</button>
-          </label>
-          <button className="orders-button" type="button">
-            <ClipboardText size={21} />
-            My reservations
+          <button
+            className="shop-header__cart"
+            type="button"
+            aria-label={`Reservation cart, ${cartCount} items`}
+            onClick={show}
+          >
+            <ShoppingCart size={23} />
+            <span>Cart</span>
+            {cartCount > 0 && <small>{cartCount}</small>}
           </button>
         </div>
-
-        {menuOpen && (
-          <nav className="mobile-menu" aria-label="Mobile navigation">
-            <a href="#categories" onClick={() => setMenuOpen(false)}>
-              Categories
+        <nav className="shop-container shop-header__nav" aria-label="Shop categories">
+          {categories.map((category) => (
+            <a
+              href="#products"
+              key={category}
+              onClick={() => chooseCategory(category)}
+              aria-current={activeCategory === category ? "true" : undefined}
+            >
+              {category}
             </a>
-            <a href="#products" onClick={() => setMenuOpen(false)}>
-              Best sellers
-            </a>
-            <a href="#pickup" onClick={() => setMenuOpen(false)}>
-              Branch pickup
-            </a>
-            <button type="button">
-              <MapPin size={20} /> Choose branch
-            </button>
-          </nav>
-        )}
+          ))}
+          <a className="shop-header__scanspace" href="/scanspace">
+            ScanSpace
+          </a>
+        </nav>
       </header>
 
-      <main id="top">
-        <div className="page-width scanspace-entry">
-          <a href="/scanspace">
-            <SquaresFour size={20} />
-            <span>
-              <strong>Meet ScanSpace</strong> Scan your room. Try a new look.
-              Plan your materials.
-            </span>
-            <ArrowRight size={20} />
+      <main>
+        <div className="shop-container shop-hero-layout">
+          <section className="shop-hero" aria-labelledby="shop-hero-title">
+            <div className="shop-hero__copy">
+              <h1 id="shop-hero-title">Everything for your next project.</h1>
+              <p>Tools and materials for home and trade.</p>
+              <a className="shop-button shop-button--primary" href="#products" onClick={resetFilters}>
+                Shop products <ArrowRight size={18} weight="bold" />
+              </a>
+            </div>
+            <div className="shop-hero__image">
+              <img
+                src={heroImage}
+                alt="Cordless drill, paint and tools arranged on a light workbench"
+                fetchPriority="high"
+              />
+            </div>
+          </section>
+
+          <a className="shop-scan-feature" href="/scanspace">
+            <div className="shop-scan-feature__copy">
+              <span className="shop-scan-feature__eyebrow">ScanSpace · Room planning</span>
+              <h2>See your space before you build.</h2>
+              <p>Try finishes and plan materials in your room.</p>
+              <span className="shop-scan-feature__link">
+                Explore ScanSpace <ArrowRight size={17} weight="bold" aria-hidden="true" />
+              </span>
+            </div>
+            <img className="shop-scan-feature__image" src={scanSpaceImage} alt="" />
           </a>
         </div>
-        <section className="hero page-width" aria-labelledby="hero-title">
-          <div className="hero__copy">
-            <p className="eyebrow">For home and trade</p>
-            <h1 id="hero-title">Everything your project needs.</h1>
-            <p className="hero__body">
-              Check local stock, reserve online, and pick up from the branch
-              nearest you.
-            </p>
-            <div className="hero__actions">
-              <a className="button button--primary" href="#products">
-                Shop now <ArrowRight size={18} weight="bold" />
-              </a>
-              <a className="button button--secondary" href="#categories">
-                Browse categories
-              </a>
+
+        <section className="shop-container shop-benefits" aria-label="Shopping benefits">
+          <div>
+            <CheckCircle size={26} aria-hidden="true" />
+            <span>
+              <strong>Local stock</strong>
+              <small>Check what your branch has.</small>
+            </span>
+          </div>
+          <div>
+            <ClipboardText size={26} aria-hidden="true" />
+            <span>
+              <strong>Reserve online</strong>
+              <small>Keep your items in one place.</small>
+            </span>
+          </div>
+          <div>
+            <Storefront size={27} aria-hidden="true" />
+            <span>
+              <strong>Branch pickup</strong>
+              <small>Collect from your chosen store.</small>
+            </span>
+          </div>
+        </section>
+
+        <section className="shop-container shop-section" id="categories">
+          <div className="shop-section__heading">
+            <div>
+              <h2>Shop by category</h2>
+              <p>Find the right supplies for the job.</p>
             </div>
           </div>
-          <div className="hero__visual">
-            <img
-              src={heroImage}
-              alt="Organized hardware store shelves and tools"
-              fetchPriority="high"
-            />
+          <div className="shop-categories">
+            {categories.map((category) => {
+              const Icon = categoryIcons[category];
+              return (
+                <a
+                  className="shop-category"
+                  href="#products"
+                  key={category}
+                  onClick={() => chooseCategory(category)}
+                >
+                  <span className="shop-category__image">
+                    <Icon size={43} weight="duotone" aria-hidden="true" />
+                  </span>
+                  <strong>{category}</strong>
+                </a>
+              );
+            })}
           </div>
         </section>
 
-        <section
-          className="assurance page-width"
-          aria-label="Reservation benefits"
-        >
-          <div>
-            <CheckCircle size={23} weight="fill" />
-            <span>
-              <strong>Live branch stock</strong>Know what is available before
-              visiting.
-            </span>
-          </div>
-          <div>
-            <Storefront size={23} weight="fill" />
-            <span>
-              <strong>Easy reservation</strong>Set items aside without online
-              payment.
-            </span>
-          </div>
-          <div>
-            <Truck size={24} weight="fill" />
-            <span>
-              <strong>Convenient pickup</strong>Choose the branch that works for
-              you.
-            </span>
-          </div>
-        </section>
-
-        <section className="section page-width" id="categories">
-          <div className="section-heading">
-            <h2>Shop by category</h2>
-            <p>Start with the job, then find the exact supplies.</p>
-          </div>
-          <div className="category-grid">
-            {categories.map(({ name, detail, Icon }) => (
-              <button className="category-tile" type="button" key={name}>
-                <span className="category-tile__icon">
-                  <Icon size={27} weight="duotone" />
-                </span>
-                <span>
-                  <strong>{name}</strong>
-                  <small>{detail}</small>
-                </span>
-                <ArrowRight size={17} weight="bold" />
-              </button>
-            ))}
-          </div>
-        </section>
-
-        <section className="section section--products" id="products">
-          <div className="page-width">
-            <div className="section-heading section-heading--action">
-              <div>
-                <h2>Ready for your next job</h2>
-                <p>
-                  Popular supplies shown with sample prices and availability.
-                </p>
-              </div>
-              <button className="text-link" type="button">
-                View all <ArrowRight size={17} />
-              </button>
+        <section className="shop-container shop-section shop-products" id="products">
+          <div className="shop-section__heading">
+            <div>
+              <h2>{activeCategory === "All" ? "Popular products" : activeCategory}</h2>
+              <p>Sample prices and availability. Confirm with your branch before pickup.</p>
             </div>
-
-            <div className="product-grid">
-              {products.map((product) => (
-                <article className="product-card" key={product.name}>
-                  <div className="product-card__image">
-                    <img
-                      src={product.image}
-                      alt={product.name}
-                      loading="lazy"
-                    />
-                    <button
-                      className="favorite-button"
-                      type="button"
-                      aria-label={`Save ${product.name}`}
-                    >
-                      <Heart size={20} />
-                    </button>
+            {(activeCategory !== "All" || query) && (
+              <button className="shop-text-button" type="button" onClick={resetFilters}>
+                View all products <ArrowRight size={17} />
+              </button>
+            )}
+          </div>
+          {visibleProducts.length ? (
+            <div className="shop-products__grid">
+              {visibleProducts.map((product) => (
+                <article className="shop-product" key={product.id}>
+                  <div className="shop-product__image">
+                    <img src={product.image} alt={product.name} loading="lazy" />
                   </div>
-                  <div className="product-card__content">
-                    <span className="product-card__category">
-                      {product.category}
-                    </span>
+                  <div className="shop-product__details">
+                    <span className="shop-product__category">{product.detail}</span>
                     <h3>{product.name}</h3>
-                    <div className="product-card__meta">
-                      <strong>{product.price}</strong>
-                      <span>{product.stock}</span>
-                    </div>
-                    <button className="reserve-button" type="button">
-                      Reserve item
+                    <strong className="shop-product__price">{formatPrice(product.price)}</strong>
+                    <span className="shop-product__stock">
+                      <span aria-hidden="true" />
+                      {product.stock}
+                    </span>
+                    <button
+                      className="shop-product__button"
+                      type="button"
+                      onClick={() => addItem(product)}
+                    >
+                      Add to cart
                     </button>
                   </div>
                 </article>
               ))}
             </div>
-          </div>
+          ) : (
+            <div className="shop-products__empty">
+              <MagnifyingGlass size={28} aria-hidden="true" />
+              <h3>No sample products found</h3>
+              <p>Try a different search or browse all products.</p>
+              <button className="shop-button shop-button--outline" type="button" onClick={resetFilters}>
+                View all products
+              </button>
+            </div>
+          )}
         </section>
 
-        <section className="pickup page-width" id="pickup">
-          <div className="pickup__icon" aria-hidden="true">
-            <MapPin size={39} weight="duotone" />
+        <section className="shop-container shop-pickup" id="pickup">
+          <div className="shop-pickup__intro">
+            <MapPin size={25} weight="duotone" aria-hidden="true" />
+            <div>
+              <h2>Easy branch pickup</h2>
+              <p>Get your supplies in a few simple steps.</p>
+            </div>
           </div>
-          <div className="pickup__copy">
-            <h2>Pick up where it suits you.</h2>
-            <p>
-              Select a branch to see local availability and reserve supplies
-              before making the trip.
-            </p>
-          </div>
-          <button className="button button--primary" type="button">
-            Choose a branch
+          <ol>
+            <li><b>1</b><span><strong>Shop supplies</strong><small>Find the items you need.</small></span></li>
+            <li><b>2</b><span><strong>Review your cart</strong><small>Keep a saved draft of your items.</small></span></li>
+            <li><b>3</b><span><strong>Confirm pickup</strong><small>Check stock and price with your branch.</small></span></li>
+          </ol>
+          <button className="shop-button shop-button--primary" type="button" onClick={show}>
+            View cart
           </button>
         </section>
 
-        <section className="project-callout page-width">
+        <section className="shop-container shop-buildmatch" aria-label="BuildMatch">
+          <SquaresFour size={27} weight="duotone" aria-hidden="true" />
           <div>
-            <span className="project-callout__icon">
-              <SquaresFour size={26} weight="duotone" />
-            </span>
-            <h2>Not sure what fits?</h2>
-            <p>
-              Use BuildMatch to identify a part and find compatible products in
-              stock.
-            </p>
+            <h2>Find the right materials for your project.</h2>
+            <p>BuildMatch product recommendations are coming soon.</p>
           </div>
-          <button className="button button--secondary" type="button">
-            Try BuildMatch
-          </button>
+          <span>Coming soon</span>
         </section>
       </main>
 
-      <footer className="site-footer">
-        <div className="page-width footer-grid">
+      <footer className="shop-footer">
+        <div className="shop-container shop-footer__main">
           <div>
-            <a className="brand brand--footer" href="#top">
-              <span className="brand__mark" aria-hidden="true">
-                HS
-              </span>
-              <span className="brand__name">Hardware Store</span>
-            </a>
-            <p>Reserve dependable supplies from your local branch.</p>
+            <Brand footer />
+            <p>Dependable supplies for home and trade.</p>
           </div>
           <div>
             <strong>Shop</strong>
             <a href="#categories">Categories</a>
-            <a href="#products">Products</a>
-            <a href="#pickup">Branches</a>
+            <a href="#products" onClick={resetFilters}>Products</a>
+            <a href="#pickup">Branch pickup</a>
           </div>
           <div>
-            <strong>Customer care</strong>
-            <a href="#top">How reservations work</a>
-            <a href="#top">Contact us</a>
-            <a href="#top">FAQs</a>
+            <strong>Explore</strong>
+            <a href="/scanspace">ScanSpace</a>
+            <button type="button" onClick={show}>Reservation cart</button>
           </div>
         </div>
-        <div className="page-width footer-bottom">
-          <span>© 2026 Hardware Store. Layout preview.</span>
-          <span>Privacy</span>
+        <div className="shop-container shop-footer__bottom">
+          <span>© {new Date().getFullYear()} Hardware Store.</span>
+          <span>Prices and stock shown are samples.</span>
         </div>
       </footer>
 
-      <nav className="mobile-bottom-nav" aria-label="Quick navigation">
-        <a href="#top" className="is-active">
-          <House size={22} weight="fill" />
-          <span>Home</span>
-        </a>
-        <a href="#categories">
-          <SquaresFour size={22} />
-          <span>Browse</span>
-        </a>
-        <button type="button">
-          <ClipboardText size={22} />
-          <span>Reservations</span>
-        </button>
-        <button type="button">
-          <UserCircle size={22} />
-          <span>Account</span>
-        </button>
+      <nav className="shop-mobile-nav" aria-label="Mobile navigation">
+        <a href="#top"><House size={22} weight="fill" /><span>Home</span></a>
+        <a href="#categories"><SquaresFour size={22} /><span>Browse</span></a>
+        <button type="button" onClick={show}><ShoppingCart size={22} /><span>Cart</span></button>
+        <a href="/scanspace"><Wrench size={22} /><span>ScanSpace</span></a>
       </nav>
     </div>
   );
