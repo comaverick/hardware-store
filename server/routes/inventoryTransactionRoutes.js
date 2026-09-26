@@ -9,7 +9,12 @@ const {
   transferStock,
 } = require("../controllers/inventoryTransactionController");
 
-const { protect, authorizeBranch } = require("../middleware/authMiddleware");
+const {
+  protect,
+  authorize,
+  authorizeBranch,
+  requireBranchAssignment,
+} = require("../middleware/authMiddleware");
 
 const router = express.Router();
 
@@ -32,10 +37,22 @@ router.get(
 // STOCK ACTIONS
 // =========================
 
-router.post("/receive", protect, receiveStock);
+router.post(
+  "/receive",
+  protect,
+  authorize("SUPER_ADMIN", "ADMIN", "MANAGER", "INVENTORY_STAFF"),
+  requireBranchAssignment,
+  receiveStock,
+);
 
-router.post("/adjust", protect, adjustStock);
+router.post(
+  "/adjust",
+  protect,
+  authorize("SUPER_ADMIN", "ADMIN", "MANAGER", "INVENTORY_STAFF"),
+  requireBranchAssignment,
+  adjustStock,
+);
 
-router.post("/transfer", protect, transferStock);
+router.post("/transfer", protect, authorize("SUPER_ADMIN"), transferStock);
 
 module.exports = router;

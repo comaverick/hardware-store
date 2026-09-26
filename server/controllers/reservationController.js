@@ -2,16 +2,23 @@ const Reservation = require("../models/Reservation");
 const BranchInventory = require("../models/BranchInventory");
 const Branch = require("../models/Branch");
 const Product = require("../models/Product");
+const {
+  branchFilter,
+  canAccessBranch,
+  getAssignedBranchId,
+  isSuperAdmin,
+} = require("../lib/branchAccess");
 
 const generateReservationNumber = async () => {
   const count = await Reservation.countDocuments();
   return `RES-${String(count + 1).padStart(6, "0")}`;
 };
 
-const releaseExpiredReservations = async () => {
+const releaseExpiredReservations = async (branchId = null) => {
   const expired = await Reservation.find({
     status: "ACTIVE",
     expiresAt: { $lte: new Date() },
+    ...(branchId ? { branch: branchId } : {}),
   }).select("_id branch product quantity");
 
   for (const reservation of expired) {
@@ -32,17 +39,28 @@ const releaseExpiredReservations = async () => {
 
 const reservationQuery = (req) => {
   const query = {};
-  if (req.query.branch) query.branch = req.query.branch;
-  else if (req.user.role !== "SUPER_ADMIN" && req.user.branch)
-    query.branch = req.user.branch._id;
+  if (isSuperAdmin(req.user)) {
+    if (req.query.branch) query.branch = req.query.branch;
+  } else {
+    query.branch = getAssignedBranchId(req.user);
+  }
   if (req.query.status) query.status = req.query.status;
   return query;
 };
 
 const getReservations = async (req, res) => {
   try {
-    await releaseExpiredReservations();
-    const reservations = await Reservation.find(reservationQuery(req))
+    if (
+      !isSuperAdmin(req.user) &&
+      req.query.branch &&
+      !canAccessBranch(req.user, req.query.branch)
+    ) {
+      return res.status(403).json({ message: "You do not have access to this branch." });
+    }
+
+    const query = reservationQuery(req);
+    await releaseExpiredReservations(query.branch);
+    const reservations = await Reservation.find(query)
       .populate("branch", "name code")
       .populate("product", "name sku barcode unit sellingPrice")
       .populate("createdBy", "name email")
@@ -83,7 +101,7 @@ const createReservation = async (req, res) => {
         .status(404)
         .json({ message: "Active branch or product not found." });
 
-    await releaseExpiredReservations();
+    await releaseExpiredReservations(branch);
     const inventory = await BranchInventory.findOneAndUpdate(
       {
         branch,
@@ -147,13 +165,18 @@ const createReservation = async (req, res) => {
 
 const updateReservationStatus = async (req, res) => {
   try {
-    await releaseExpiredReservations();
     const { status } = req.body;
     if (!["READY_FOR_PICKUP", "COMPLETED", "CANCELLED"].includes(status)) {
       return res.status(400).json({ message: "Invalid reservation status." });
     }
 
-    const reservation = await Reservation.findById(req.params.id);
+    const filter = { _id: req.params.id, ...branchFilter(req.user) };
+    let reservation = await Reservation.findOne(filter);
+    if (!reservation)
+      return res.status(404).json({ message: "Reservation not found." });
+
+    await releaseExpiredReservations(reservation.branch);
+    reservation = await Reservation.findOne(filter);
     if (!reservation)
       return res.status(404).json({ message: "Reservation not found." });
     if (!["ACTIVE", "READY_FOR_PICKUP"].includes(reservation.status)) {

@@ -1,6 +1,7 @@
 ﻿const InventoryTransaction = require("../models/InventoryTransaction");
 
 const Inventory = require("../models/BranchInventory");
+const { branchFilter } = require("../lib/branchAccess");
 
 // =========================
 // GET ALL TRANSACTIONS
@@ -48,7 +49,10 @@ const receiveStock = async (req, res) => {
       });
     }
 
-    const inventory = await Inventory.findById(inventoryId);
+    const inventory = await Inventory.findOne({
+      _id: inventoryId,
+      ...branchFilter(req.user),
+    });
 
     if (!inventory) {
       return res.status(404).json({
@@ -138,7 +142,10 @@ const adjustStock = async (req, res) => {
       });
     }
 
-    const inventory = await Inventory.findById(inventoryId);
+    const inventory = await Inventory.findOne({
+      _id: inventoryId,
+      ...branchFilter(req.user),
+    });
 
     if (!inventory) {
       return res.status(404).json({

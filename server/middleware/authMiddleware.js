@@ -1,6 +1,11 @@
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 const AuditLog = require("../models/AuditLog");
+const {
+  canAccessBranch,
+  getAssignedBranchId,
+  isSuperAdmin,
+} = require("../lib/branchAccess");
 
 const getRequestBranch = (req) =>
   req.params.branchId ||
@@ -90,16 +95,14 @@ const protect = async (req, res, next) => {
   }
 };
 const authorizeBranch = (req, res, next) => {
-  // Super admins can access all branches
-  if (req.user.role === "SUPER_ADMIN") {
+  if (isSuperAdmin(req.user)) {
     return next();
   }
 
   const requestedBranchId =
-    req.params.branchId || req.body.branch || req.query.branch;
+    req.params.branchId || req.body?.branch || req.query?.branch;
 
-  // User has no assigned branch
-  if (!req.user.branch) {
+  if (!getAssignedBranchId(req.user)) {
     return res.status(403).json({
       message: "User is not assigned to a branch.",
     });
@@ -112,13 +115,22 @@ const authorizeBranch = (req, res, next) => {
     });
   }
 
-  if (req.user.branch._id.toString() !== requestedBranchId.toString()) {
+  if (!canAccessBranch(req.user, requestedBranchId)) {
     return res.status(403).json({
       message: "You do not have access to this branch.",
     });
   }
 
   next();
+};
+const requireBranchAssignment = (req, res, next) => {
+  if (isSuperAdmin(req.user) || getAssignedBranchId(req.user)) {
+    return next();
+  }
+
+  return res.status(403).json({
+    message: "User is not assigned to a branch.",
+  });
 };
 const authorize = (...roles) => {
   return (req, res, next) => {
@@ -142,4 +154,5 @@ module.exports = {
   protect,
   authorize,
   authorizeBranch,
+  requireBranchAssignment,
 };

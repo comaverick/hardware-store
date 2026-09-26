@@ -1,5 +1,6 @@
 const Product = require("../models/Product");
 const BranchInventory = require("../models/BranchInventory");
+const { branchFilter } = require("../lib/branchAccess");
 
 const getProducts = async (req, res) => {
   try {
@@ -31,6 +32,7 @@ const getProduct = async (req, res) => {
 
     const inventory = await BranchInventory.find({
       product: product._id,
+      ...branchFilter(req.user),
     }).populate("branch", "name code");
 
     res.status(200).json({

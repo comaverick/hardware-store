@@ -34,12 +34,16 @@ import {
 } from "antd";
 
 import api from "../../services/api";
+import { useAuth } from "../../context/AuthContext";
 
 import "./Inventory.css";
 
 const { Text } = Typography;
 
 const Inventory = () => {
+  const { user } = useAuth();
+  const canManageStock = ["SUPER_ADMIN", "ADMIN", "MANAGER", "INVENTORY_STAFF"].includes(user?.role);
+  const canTransferStock = user?.role === "SUPER_ADMIN";
   const [searchParams] = useSearchParams();
   const focusedSku = searchParams.get("product") || "";
   const [inventory, setInventory] = useState([]);
@@ -624,35 +628,43 @@ const Inventory = () => {
             History
           </Button>
 
-          <Button
-            icon={<InboxOutlined />}
-            onClick={() => setActionModal("receive")}
-          >
-            Receive Stock
-          </Button>
+          {canManageStock && (
+            <>
+              <Button
+                icon={<InboxOutlined />}
+                onClick={() => setActionModal("receive")}
+              >
+                Receive Stock
+              </Button>
 
-          <Button
-            icon={<WarningOutlined />}
-            onClick={() => setActionModal("adjust")}
-          >
-            Adjust Stock
-          </Button>
+              <Button
+                icon={<WarningOutlined />}
+                onClick={() => setActionModal("adjust")}
+              >
+                Adjust Stock
+              </Button>
+            </>
+          )}
 
-          <Button
-            type="primary"
-            icon={<SwapOutlined />}
-            onClick={() => setActionModal("transfer")}
-          >
-            Transfer Stock
-          </Button>
+          {canTransferStock && (
+            <Button
+              type="primary"
+              icon={<SwapOutlined />}
+              onClick={() => setActionModal("transfer")}
+            >
+              Transfer Stock
+            </Button>
+          )}
 
           <Button icon={<DownloadOutlined />} onClick={exportInventory}>
             Export Inventory
           </Button>
 
-          <Button icon={<UploadOutlined />} onClick={() => { setImportOpen(true); setImportResult(null); setImportPreview([]); }}>
-            Import Inventory
-          </Button>
+          {canManageStock && (
+            <Button icon={<UploadOutlined />} onClick={() => { setImportOpen(true); setImportResult(null); setImportPreview([]); }}>
+              Import Inventory
+            </Button>
+          )}
         </Space>
       </div>
 

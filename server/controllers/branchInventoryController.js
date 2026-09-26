@@ -1,6 +1,7 @@
 const BranchInventory = require("../models/BranchInventory");
 const Product = require("../models/Product");
 const Branch = require("../models/Branch");
+const { branchFilter } = require("../lib/branchAccess");
 
 const normalizeImportValue = (value) => String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
 
@@ -163,24 +164,17 @@ const createInventory = async (req, res) => {
 // Update inventory
 const updateInventory = async (req, res) => {
   try {
-    const existingInventory = await BranchInventory.findById(req.params.id);
-
-    if (!existingInventory) {
-      return res.status(404).json({ message: "Inventory record not found" });
+    const changes = req.body || {};
+    const keys = Object.keys(changes);
+    if (!keys.length || keys.some((key) => !["reorderLevel", "shelfLocation"].includes(key))) {
+      return res.status(400).json({
+        message: "Only reorder level and shelf location can be updated here.",
+      });
     }
 
-    if (
-      req.user?.role !== "SUPER_ADMIN" &&
-      String(existingInventory.branch) !== String(req.user?.branch?._id)
-    ) {
-      return res
-        .status(403)
-        .json({ message: "You do not have access to this branch." });
-    }
-
-    const inventory = await BranchInventory.findByIdAndUpdate(
-      req.params.id,
-      req.body,
+    const inventory = await BranchInventory.findOneAndUpdate(
+      { _id: req.params.id, ...branchFilter(req.user) },
+      { $set: changes },
       {
         new: true,
         runValidators: true,
