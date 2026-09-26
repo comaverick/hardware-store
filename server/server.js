@@ -8,6 +8,7 @@ const purchaseOrderRoutes = require("./routes/purchaseOrderRoutes");
 const saleRoutes = require("./routes/saleRoutes");
 const smartInventoryRoutes = require("./routes/smartInventoryRoutes");
 const reservationRoutes = require("./routes/reservationRoutes");
+const { startReservationExpiryWorker, getReservationExpiryStatus } = require("./lib/reservationExpiry");
 const {
   apiRateLimiter,
   authRateLimiter,
@@ -26,6 +27,7 @@ app.use("/api/assistant", aiRateLimiter);
 app.use("/api/product-finder", aiRateLimiter);
 
 connectDB();
+startReservationExpiryWorker();
 
 app.use("/api/branches", require("./routes/branchRoutes"));
 app.use("/api/categories", require("./routes/categoryRoutes"));
@@ -58,6 +60,7 @@ app.get("/api/health", (req, res) => {
     status: healthy ? "ok" : "degraded",
     service: "hardware-store-api",
     database,
+    reservationExpiry: getReservationExpiryStatus(),
     timestamp: new Date().toISOString(),
   });
 });

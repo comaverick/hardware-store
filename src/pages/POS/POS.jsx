@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { createRequestKey } from "../../utils/idempotency";
 
 import {
@@ -52,6 +53,12 @@ const printerFetch = (path, options = {}) =>
   });
 
 const POS = () => {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const routeReservationRef = useRef({
+    number: searchParams.get("reservation"),
+    branch: searchParams.get("branch"),
+  });
+  const routeReservationLoadedRef = useRef(false);
   const { user } = useAuth();
   const canRefundDirectly = ["SUPER_ADMIN", "ADMIN", "MANAGER"].includes(user?.role);
   const searchRef = useRef(null);
@@ -94,6 +101,11 @@ const POS = () => {
   // =========================
 
   const [cart, setCart] = useState([]);
+  const [selectedReservation, setSelectedReservation] = useState(null);
+  const [reservationSearchOpen, setReservationSearchOpen] = useState(false);
+  const [reservationNumber, setReservationNumber] = useState("");
+  const [reservationLoading, setReservationLoading] = useState(false);
+  const checkoutRequestRef = useRef(null);
 
   useEffect(() => {
     if (!selectedCartProductId) return;
@@ -163,7 +175,10 @@ const POS = () => {
       setBranches(activeBranches);
 
       if (activeBranches.length > 0) {
-        setSelectedBranch(activeBranches[0]._id);
+        const requestedBranch = routeReservationRef.current.branch;
+        setSelectedBranch(
+          activeBranches.find((branch) => branch._id === requestedBranch)?._id || activeBranches[0]._id,
+        );
       }
     } catch (error) {
       console.error(error);
@@ -361,6 +376,8 @@ const POS = () => {
 
     setCart([]);
     setAmountPaid(0);
+    setSelectedReservation(null);
+    checkoutRequestRef.current = null;
   }, [selectedBranch]);
 
   // =========================
@@ -378,6 +395,73 @@ const POS = () => {
 
     return map;
   }, [inventory]);
+
+  const loadReservation = useCallback(async (number) => {
+    const response = await api.get("/reservations/lookup", { params: { number } });
+    const reservation = response.data;
+    const pickupBranch = reservation.branch?._id || reservation.branch;
+    if (String(pickupBranch) !== String(selectedBranch)) {
+      throw new Error(`Select ${reservation.branch?.name || "the pickup branch"} before checkout.`);
+    }
+    const product = reservation.product;
+    if (!product?._id || !product.isActive) {
+      throw new Error("The reserved product is no longer available for sale.");
+    }
+    const unitPrice = Number(product.sellingPrice);
+    setCart((current) => [
+      ...current.filter((item) => !item.isReserved && item.product !== product._id),
+      {
+        product: product._id,
+        name: product.name,
+        sku: product.sku,
+        unit: product.unit,
+        unitPrice,
+        quantity: reservation.quantity,
+        subtotal: unitPrice * reservation.quantity,
+        available: reservation.quantity,
+        isReserved: true,
+      },
+    ]);
+    setSelectedReservation(reservation);
+    setSelectedCartProductId(product._id);
+    setAmountPaid(0);
+    setReservationSearchOpen(false);
+    checkoutRequestRef.current = null;
+    return reservation;
+  }, [selectedBranch]);
+
+  const findReservation = async () => {
+    const number = reservationNumber.trim();
+    if (!number) {
+      message.error("Enter a reservation number.");
+      return;
+    }
+    setReservationLoading(true);
+    try {
+      const reservation = await loadReservation(number);
+      message.success(`${reservation.reservationNumber} added to the sale.`);
+    } catch (error) {
+      message.error(error.response?.data?.message || error.message || "Failed to find reservation.");
+    } finally {
+      setReservationLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    const target = routeReservationRef.current;
+    if (!target.number || !selectedBranch || routeReservationLoadedRef.current) return;
+    routeReservationLoadedRef.current = true;
+    loadReservation(target.number)
+      .catch((error) => message.error(error.response?.data?.message || error.message || "Failed to load reservation."))
+      .finally(() => {
+        setSearchParams((current) => {
+          const next = new URLSearchParams(current);
+          next.delete("reservation");
+          next.delete("branch");
+          return next;
+        }, { replace: true });
+      });
+  }, [selectedBranch, loadReservation, setSearchParams]);
 
   // =========================
   // SEARCH PRODUCTS
@@ -446,6 +530,10 @@ const POS = () => {
   const addToCart = (product) => {
     if (!selectedBranch) {
       message.warning("Select a branch first.");
+      return;
+    }
+    if (selectedReservation && String(selectedReservation.product?._id) === String(product._id)) {
+      message.info("The reserved quantity is fixed for this checkout.");
       return;
     }
 
@@ -539,6 +627,10 @@ const POS = () => {
     const cartItem = cart.find((item) => item.product === productId);
 
     if (!cartItem) return;
+    if (cartItem.isReserved) {
+      message.info("The reserved quantity is fixed for this checkout.");
+      return;
+    }
 
     const newQuantity = Number(quantity);
 
@@ -603,6 +695,10 @@ const POS = () => {
   // =========================
 
   const removeFromCart = (productId) => {
+    if (cart.find((item) => item.product === productId)?.isReserved) {
+      setSelectedReservation(null);
+      checkoutRequestRef.current = null;
+    }
     setCart(cart.filter((item) => item.product !== productId));
     setSelectedCartProductId((selected) =>
       selected === productId ? null : selected,
@@ -838,7 +934,18 @@ const POS = () => {
       // CREATE SALE
       // =========================
 
-      const response = await api.post("/sales", payload);
+      const checkoutPath = selectedReservation
+        ? `/reservations/${selectedReservation._id}/checkout`
+        : "/sales";
+      let requestOptions;
+      if (selectedReservation) {
+        const signature = JSON.stringify({ checkoutPath, payload });
+        if (checkoutRequestRef.current?.signature !== signature) {
+          checkoutRequestRef.current = { signature, key: createRequestKey() };
+        }
+        requestOptions = { headers: { "Idempotency-Key": checkoutRequestRef.current.key } };
+      }
+      const response = await api.post(checkoutPath, payload, requestOptions);
 
       const sale = response.data.sale;
 
@@ -864,7 +971,9 @@ const POS = () => {
       // =========================
 
       setCart([]);
-        setAmountPaid(0);
+      setSelectedReservation(null);
+      checkoutRequestRef.current = null;
+      setAmountPaid(0);
       // =========================
       // PRINT
       // =========================
@@ -905,7 +1014,9 @@ const POS = () => {
 
       onOk: () => {
         setCart([]);
-            setAmountPaid(0);
+        setSelectedReservation(null);
+        checkoutRequestRef.current = null;
+        setAmountPaid(0);
       },
     });
   };
@@ -1081,6 +1192,9 @@ const POS = () => {
       <div className="pos-header">
         <div className="pos-header-controls">
           <div className="pos-toolbar-history">
+            <Button icon={<SearchOutlined />} onClick={() => setReservationSearchOpen(true)}>
+              Find reservation
+            </Button>
             <Button icon={<HistoryOutlined />} onClick={openSalesHistory}>
               Transaction history
             </Button>
@@ -1285,7 +1399,11 @@ const POS = () => {
 
             <div className="pos-products-grid">
               {visibleProducts.map((product) => {
-                const stock = inventoryMap[product._id]?.quantity || 0;
+                const stock = Math.max(
+                  (inventoryMap[product._id]?.quantity || 0) -
+                  (inventoryMap[product._id]?.reservedQuantity || 0),
+                  0,
+                );
 
                 const inCart = cart.find(
                   (item) => item.product === product._id,
@@ -1407,6 +1525,20 @@ const POS = () => {
               </div>
             }
           >
+            {selectedReservation && (
+              <div className="pos-reservation-banner" role="status">
+                <div>
+                  <strong>Held for {selectedReservation.customerName}</strong>
+                  <span>
+                    {selectedReservation.reservationNumber} · {selectedReservation.quantity} units ·
+                    expires {new Date(selectedReservation.expiresAt).toLocaleString("en-PH")}
+                  </span>
+                </div>
+                <Button size="small" onClick={() => removeFromCart(selectedReservation.product?._id || selectedReservation.product)}>
+                  Remove hold
+                </Button>
+              </div>
+            )}
             {cart.length === 0 ? (
               <Empty
                 image={<ShoppingCartOutlined className="cart-empty-icon" />}
@@ -1453,7 +1585,9 @@ const POS = () => {
                         / {item.unit}
                       </div>
 
-                      {item.quantity >= item.available && (
+                      {item.isReserved ? (
+                        <span className="cart-item-warning" role="status">Held quantity</span>
+                      ) : item.quantity >= item.available && (
                         <span className="cart-item-warning" role="status">
                           Maximum available stock reached
                         </span>
@@ -1466,6 +1600,7 @@ const POS = () => {
                           icon={<MinusOutlined />}
                           aria-label={`Decrease ${item.name} quantity`}
                           onClick={() => decreaseQuantity(item.product)}
+                          disabled={item.isReserved}
                         />
 
                         <InputNumber
@@ -1478,12 +1613,14 @@ const POS = () => {
                           controls={false}
                           aria-label={`Quantity for ${item.name}`}
                           className="cart-quantity"
+                          disabled={item.isReserved}
                         />
 
                         <Button
                           icon={<PlusOutlined />}
                           aria-label={`Increase ${item.name} quantity`}
                           onClick={() => increaseQuantity(item.product)}
+                          disabled={item.isReserved}
                         />
                       </Space.Compact>
 
@@ -1643,6 +1780,26 @@ const POS = () => {
           </Card>
         </Col>
       </Row>
+
+      <Modal
+        title="Find reservation"
+        open={reservationSearchOpen}
+        onCancel={() => setReservationSearchOpen(false)}
+        footer={null}
+      >
+        <Text type="secondary">Enter the customer's reservation number to add its held item to this sale.</Text>
+        <Input.Search
+          autoFocus
+          size="large"
+          placeholder="RES-000001"
+          value={reservationNumber}
+          onChange={(event) => setReservationNumber(event.target.value)}
+          onSearch={findReservation}
+          enterButton="Find"
+          loading={reservationLoading}
+          style={{ marginTop: 16 }}
+        />
+      </Modal>
 
       {/* TRANSACTION HISTORY */}
 

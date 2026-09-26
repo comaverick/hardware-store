@@ -5,7 +5,7 @@
   "main": "server.js",
   "scripts": {
     "test:auth": "node --test test/authMiddleware.test.js test/branchAccess.test.js",
-    "test:stock": "node --test test/stockOperations.test.js",
+    "test:stock": "node --test test/stockOperations.test.js test/reservationFulfillment.test.js",
     "test:scanspace": "node --test test/scanspace*.test.js",
     "start": "node server.js",
     "dev": "nodemon server.js",

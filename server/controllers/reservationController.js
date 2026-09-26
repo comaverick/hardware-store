@@ -2,8 +2,8 @@ const Reservation = require("../models/Reservation");
 const BranchInventory = require("../models/BranchInventory");
 const Branch = require("../models/Branch");
 const Product = require("../models/Product");
-const InventoryTransaction = require("../models/InventoryTransaction");
 const { fail, positiveQuantity, runTransaction, sendStockError } = require("../lib/stockOperations");
+const { expireReservation, processExpiredReservations, EXPIRABLE_STATUSES } = require("../lib/reservationExpiry");
 const {
   branchFilter,
   canAccessBranch,
@@ -14,39 +14,6 @@ const {
 const generateReservationNumber = async () => {
   const count = await Reservation.countDocuments();
   return `RES-${String(count + 1).padStart(6, "0")}`;
-};
-
-const releaseExpiredReservations = async (branchId = null) => {
-  const expired = await Reservation.find({
-    status: { $in: ["ACTIVE", "READY_FOR_PICKUP"] },
-    expiresAt: { $lte: new Date() },
-    ...(branchId ? { branch: branchId } : {}),
-  }).select("_id branch product quantity");
-
-  for (const reservation of expired) {
-    await runTransaction(async (session) => {
-      const released = await Reservation.findOneAndUpdate(
-        {
-          _id: reservation._id,
-          status: { $in: ["ACTIVE", "READY_FOR_PICKUP"] },
-          expiresAt: { $lte: new Date() },
-        },
-        { $set: { status: "EXPIRED" } },
-        { new: true, session },
-      );
-      if (!released) return;
-      const inventory = await BranchInventory.findOneAndUpdate(
-        {
-          branch: released.branch,
-          product: released.product,
-          reservedQuantity: { $gte: released.quantity },
-        },
-        { $inc: { reservedQuantity: -released.quantity } },
-        { new: true, session },
-      );
-      if (!inventory) fail(409, "Reservation hold could not be released.");
-    });
-  }
 };
 
 const reservationQuery = (req) => {
@@ -71,7 +38,8 @@ const getReservations = async (req, res) => {
     }
 
     const query = reservationQuery(req);
-    await releaseExpiredReservations(query.branch);
+    const expiry = await processExpiredReservations({ branchId: query.branch, maxBatches: 2 });
+    for (const error of expiry.errors) console.error("Reservation expiry error:", error);
     const reservations = await Reservation.find(query)
       .populate("branch", "name code")
       .populate("product", "name sku barcode unit sellingPrice")
@@ -106,7 +74,8 @@ const createReservation = async (req, res) => {
       fail(404, "Active branch or product not found.");
     }
 
-    await releaseExpiredReservations(branch);
+    const expiryPass = await processExpiredReservations({ branchId: branch, maxBatches: 2 });
+    for (const error of expiryPass.errors) console.error("Reservation expiry error:", error);
     const reservation = await runTransaction(async (session) => {
       const inventory = await BranchInventory.findOneAndUpdate(
         {
@@ -144,65 +113,80 @@ const createReservation = async (req, res) => {
   }
 };
 
+const lookupReservation = async (req, res) => {
+  try {
+    const number = String(req.query?.number || "").trim().toUpperCase();
+    if (!/^RES-[A-Z0-9-]{1,40}$/.test(number)) {
+      fail(400, "Enter a valid reservation number.");
+    }
+    const reservation = await Reservation.findOne({
+      reservationNumber: number,
+      ...branchFilter(req.user),
+    })
+      .populate("branch", "name code")
+      .populate("product", "name sku unit sellingPrice isActive");
+    if (!reservation) fail(404, "Reservation not found in your branch.");
+    if (new Date(reservation.expiresAt) <= new Date()) {
+      await expireReservation(reservation);
+      fail(409, "This reservation has expired.");
+    }
+    if (!EXPIRABLE_STATUSES.includes(reservation.status)) {
+      fail(409, "This reservation is no longer available for checkout.");
+    }
+    res.json(reservation);
+  } catch (error) {
+    sendStockError(res, error, "Find reservation");
+  }
+};
+
 const updateReservationStatus = async (req, res) => {
   try {
     const { status } = req.body || {};
-    if (!["READY_FOR_PICKUP", "COMPLETED", "CANCELLED"].includes(status)) {
+    if (status === "COMPLETED") {
+      fail(400, "Complete reservations through POS checkout.");
+    }
+    if (!["READY_FOR_PICKUP", "CANCELLED"].includes(status)) {
       fail(400, "Invalid reservation status.");
     }
 
     const filter = { _id: req.params.id, ...branchFilter(req.user) };
     const existing = await Reservation.findOne(filter);
     if (!existing) fail(404, "Reservation not found.");
-    await releaseExpiredReservations(existing.branch);
+    if (new Date(existing.expiresAt) <= new Date()) {
+      await expireReservation(existing);
+      fail(409, "This reservation has expired.");
+    }
 
     const reservation = await runTransaction(async (session) => {
+      const now = new Date();
       const current = await Reservation.findOne(filter).session(session);
       if (!current) fail(404, "Reservation not found.");
-      if (!["ACTIVE", "READY_FOR_PICKUP"].includes(current.status)) {
+      if (!EXPIRABLE_STATUSES.includes(current.status) || new Date(current.expiresAt) <= now) {
         fail(409, "Reservation is no longer active.");
       }
-
-      if (status === "COMPLETED") {
+      const updated = await Reservation.findOneAndUpdate(
+        {
+          ...filter,
+          status: { $in: EXPIRABLE_STATUSES },
+          expiresAt: { $gt: now },
+        },
+        { $set: { status } },
+        { new: true, session },
+      );
+      if (!updated) fail(409, "Reservation changed. Refresh and try again.");
+      if (status === "CANCELLED") {
         const inventory = await BranchInventory.findOneAndUpdate(
           {
-            branch: current.branch,
-            product: current.product,
-            quantity: { $gte: current.quantity },
-            reservedQuantity: { $gte: current.quantity },
+            branch: updated.branch,
+            product: updated.product,
+            reservedQuantity: { $gte: updated.quantity },
           },
-          { $inc: { quantity: -current.quantity, reservedQuantity: -current.quantity } },
-          { new: true, session },
-        );
-        if (!inventory) fail(409, "Inventory cannot fulfill this reservation.");
-        await InventoryTransaction.create([{
-          product: current.product,
-          branch: current.branch,
-          type: "STOCK_OUT",
-          quantity: current.quantity,
-          previousQuantity: inventory.quantity + current.quantity,
-          newQuantity: inventory.quantity,
-          reason: "Reservation pickup",
-          reference: current.reservationNumber,
-          performedBy: req.user._id,
-        }], { session });
-      } else if (status === "CANCELLED") {
-        const inventory = await BranchInventory.findOneAndUpdate(
-          {
-            branch: current.branch,
-            product: current.product,
-            reservedQuantity: { $gte: current.quantity },
-          },
-          { $inc: { reservedQuantity: -current.quantity } },
+          { $inc: { reservedQuantity: -updated.quantity } },
           { new: true, session },
         );
         if (!inventory) fail(409, "Reservation hold could not be released.");
       }
-
-      current.status = status;
-      current.completedAt = status === "COMPLETED" ? new Date() : undefined;
-      await current.save({ session });
-      return current;
+      return updated;
     });
     res.json(reservation);
   } catch (error) {
@@ -212,6 +196,7 @@ const updateReservationStatus = async (req, res) => {
 
 module.exports = {
   getReservations,
+  lookupReservation,
   createReservation,
   updateReservationStatus,
 };

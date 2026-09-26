@@ -1593,8 +1593,34 @@
 }
 
 .pos-toolbar-history {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
   min-width: 0;
   justify-self: start;
+}
+
+.pos-reservation-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 12px;
+  border: 1px solid #93c5b0;
+  border-radius: 8px;
+  background: #edf9f2;
+  color: #174b31;
+}
+
+.pos-reservation-banner > div {
+  display: grid;
+  gap: 2px;
+}
+
+.pos-reservation-banner span {
+  font-size: 12px;
 }
 
 .pos-branch {

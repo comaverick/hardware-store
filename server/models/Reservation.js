@@ -28,6 +28,7 @@ const reservationSchema = new mongoose.Schema(
       required: true,
     },
     completedAt: Date,
+    sale: { type: mongoose.Schema.Types.ObjectId, ref: "Sale" },
   },
   { timestamps: true },
 );

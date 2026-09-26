@@ -50,6 +50,7 @@ const saleSchema = new mongoose.Schema(
       ref: "Branch",
       required: true,
     },
+    reservation: { type: mongoose.Schema.Types.ObjectId, ref: "Reservation" },
 
     items: {
       type: [saleItemSchema],
@@ -135,6 +136,11 @@ const saleSchema = new mongoose.Schema(
   {
     timestamps: true,
   },
+);
+
+saleSchema.index(
+  { reservation: 1 },
+  { unique: true, partialFilterExpression: { reservation: { $type: "objectId" } } },
 );
 
 module.exports = mongoose.model("Sale", saleSchema);

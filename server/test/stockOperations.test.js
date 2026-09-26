@@ -229,9 +229,10 @@ test("a replay cannot reveal an old branch after staff are reassigned", async ()
 
 test("an expired ready-for-pickup reservation releases its hold in one transaction", async () => {
   const { session, state } = mockSession();
-  const expired = { _id: "reservation-a", branch: branchA, product: productId, quantity: 2 };
+  const expired = { _id: "reservation-a", branch: branchA, product: productId, quantity: 2,
+    status: "READY_FOR_PICKUP", expiresAt: new Date(Date.now() - 60_000) };
   mock.method(Reservation, "find", (filter) => filter.expiresAt
-    ? { select: async () => [expired] }
+    ? { sort() { return this; }, limit() { return this; }, async select() { return [expired]; } }
     : { populate() { return this; }, sort: async () => [] });
   mock.method(Reservation, "findOneAndUpdate", async (filter, update, options) => {
     assert.deepEqual(filter.status.$in, ["ACTIVE", "READY_FOR_PICKUP"]);

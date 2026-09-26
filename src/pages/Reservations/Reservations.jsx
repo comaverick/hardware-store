@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 import {
   ClockCircleOutlined,
@@ -35,6 +36,7 @@ import "./Reservations.css";
 const { Text } = Typography;
 
 const Reservations = () => {
+  const navigate = useNavigate();
   const [inventory, setInventory] = useState([]);
   const [reservations, setReservations] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -66,7 +68,11 @@ const Reservations = () => {
   useEffect(() => {
     fetchData();
     const interval = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(interval);
+    const refresh = window.setInterval(fetchData, 60 * 1000);
+    return () => {
+      window.clearInterval(interval);
+      window.clearInterval(refresh);
+    };
   }, []);
 
   const products = useMemo(() => {
@@ -96,13 +102,13 @@ const Reservations = () => {
   }, [inventory, search]);
 
   const activeReservations = reservations.filter((item) =>
-    ["ACTIVE", "READY_FOR_PICKUP"].includes(item.status),
+    ["ACTIVE", "READY_FOR_PICKUP"].includes(item.status) && new Date(item.expiresAt).getTime() > now,
   );
   const reservedUnits = activeReservations.reduce(
     (total, item) => total + item.quantity,
     0,
   );
-  const readyCount = reservations.filter(
+  const readyCount = activeReservations.filter(
     (item) => item.status === "READY_FOR_PICKUP",
   ).length;
 
@@ -153,6 +159,11 @@ const Reservations = () => {
         error.response?.data?.message || "Failed to update reservation.",
       );
     }
+  };
+
+  const checkoutInPOS = (reservation) => {
+    const branchId = reservation.branch?._id || reservation.branch;
+    navigate(`/pos?reservation=${encodeURIComponent(reservation.reservationNumber)}&branch=${encodeURIComponent(branchId)}`);
   };
 
   const availabilityColumns = [
@@ -271,7 +282,7 @@ const Reservations = () => {
       title: "Hold expires",
       key: "expiresAt",
       render: (_, item) =>
-        item.status === "ACTIVE" ? (
+        ["ACTIVE", "READY_FOR_PICKUP"].includes(item.status) ? (
           <Text
             type={
               new Date(item.expiresAt).getTime() - now < 15 * 60 * 1000
@@ -291,6 +302,10 @@ const Reservations = () => {
       title: "Actions",
       key: "actions",
       render: (_, item) => {
+        const expired = new Date(item.expiresAt).getTime() <= now;
+        if (expired && ["ACTIVE", "READY_FOR_PICKUP"].includes(item.status)) {
+          return <Tag color="orange">Expiry pending</Tag>;
+        }
         if (item.status === "ACTIVE") {
           return (
             <Space wrap>
@@ -299,6 +314,9 @@ const Reservations = () => {
                 onClick={() => updateStatus(item._id, "READY_FOR_PICKUP")}
               >
                 Ready for pickup
+              </Button>
+              <Button type="primary" size="small" onClick={() => checkoutInPOS(item)}>
+                Checkout in POS
               </Button>
               <Button
                 size="small"
@@ -316,9 +334,9 @@ const Reservations = () => {
               <Button
                 type="primary"
                 size="small"
-                onClick={() => updateStatus(item._id, "COMPLETED")}
+                onClick={() => checkoutInPOS(item)}
               >
-                Complete pickup
+                Checkout in POS
               </Button>
               <Button
                 size="small"

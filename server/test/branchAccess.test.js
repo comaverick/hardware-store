@@ -254,16 +254,20 @@ test("reservation lists default to the assigned branch", async () => {
   const filters = [];
   mock.method(Reservation, "find", (filter) => {
     filters.push(filter);
-    return {
-      async select() { return []; },
-      populate() { return this; },
-      async sort() { return []; },
-    };
+    if (filter.expiresAt) {
+      return {
+        sort() { return this; },
+        limit() { return this; },
+        async select() { return []; },
+      };
+    }
+    return { populate() { return this; }, async sort() { return []; } };
   });
   const result = response();
   await getReservations({ user: staff, query: {} }, result);
   assert.equal(result.statusCode, 200);
   assert.equal(filters[0].branch, branchA);
+  assert.deepEqual(filters[0].status.$in, ["ACTIVE", "READY_FOR_PICKUP"]);
   assert.deepEqual(filters[1], { branch: branchA });
 });
 
@@ -278,6 +282,15 @@ test("a reservation status change cannot find another branch's record", async ()
   assert.equal(result.statusCode, 404);
 });
 
+test("pickup completion must go through POS checkout", async () => {
+  mock.method(InventoryTransaction, "create", () => assert.fail("No stock-out should be logged"));
+  mock.method(BranchInventory, "findOneAndUpdate", () => assert.fail("No stock should be deducted"));
+  const result = response();
+  await updateReservationStatus({ user: staff, params: { id: "reservation-a" }, body: { status: "COMPLETED" } }, result);
+  assert.equal(result.statusCode, 400);
+  assert.match(result.body.message, /POS checkout/);
+});
+
 test("staff can update a reservation in their own branch", async () => {
   mock.method(mongoose, "startSession", async () => ({
     withTransaction: async (work) => work(),
@@ -286,7 +299,7 @@ test("staff can update a reservation in their own branch", async () => {
   const reservation = {
     branch: branchA,
     status: "ACTIVE",
-    async save() {},
+    expiresAt: new Date(Date.now() + 60_000),
   };
   mock.method(Reservation, "findOne", (filter) => {
     assert.deepEqual(filter, { _id: "reservation-a", branch: branchA });
@@ -295,9 +308,12 @@ test("staff can update a reservation in their own branch", async () => {
       then: (resolve) => resolve(reservation),
     };
   });
-  mock.method(Reservation, "find", (filter) => {
+  mock.method(Reservation, "findOneAndUpdate", async (filter, update) => {
     assert.equal(filter.branch, branchA);
-    return { async select() { return []; } };
+    assert.deepEqual(filter.status.$in, ["ACTIVE", "READY_FOR_PICKUP"]);
+    assert.equal(update.$set.status, "READY_FOR_PICKUP");
+    reservation.status = update.$set.status;
+    return reservation;
   });
 
   const result = response();
