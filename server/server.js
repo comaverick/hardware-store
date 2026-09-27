@@ -32,6 +32,7 @@ startReservationExpiryWorker();
 app.use("/api/branches", require("./routes/branchRoutes"));
 app.use("/api/categories", require("./routes/categoryRoutes"));
 app.use("/api/products", require("./routes/productRoutes"));
+app.use("/api/storefront", require("./routes/storefrontRoutes").router);
 app.use("/api/inventory", require("./routes/branchInventoryRoutes"));
 app.use("/api/auth", require("./routes/authRoutes"));
 app.use("/api/users", require("./routes/userRoutes"));

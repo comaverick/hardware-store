@@ -1,10 +1,24 @@
 import { create } from "zustand";
 
+const retiredSampleIds = new Set([
+  "drill-18v",
+  "steel-claw-hammer",
+  "interior-paint-set",
+  "screw-anchor-kit",
+]);
+
 function read() {
   try {
-    return JSON.parse(
+    const draft = JSON.parse(
       localStorage.getItem("customer:reservation-cart") || "null",
     );
+    if (!Array.isArray(draft?.items)) return draft;
+    const items = draft.items.filter((item) => !retiredSampleIds.has(item.productId));
+    if (items.length === draft.items.length) return draft;
+    const updated = items.length ? { ...draft, ...recalculate(items) } : null;
+    if (updated) localStorage.setItem("customer:reservation-cart", JSON.stringify(updated));
+    else localStorage.removeItem("customer:reservation-cart");
+    return updated;
   } catch {
     return null;
   }
@@ -51,13 +65,20 @@ export const useReservationCart = create((set, get) => ({
     const items = Array.isArray(current?.items) ? [...current.items] : [];
     const index = items.findIndex((item) => item.productId === product.id);
     if (index >= 0) {
-      items[index] = { ...items[index], quantity: Number(items[index].quantity || 0) + 1 };
+      items[index] = {
+        ...items[index],
+        name: product.name,
+        unitPrice: product.price,
+        image: product.image || "",
+        quantity: Number(items[index].quantity || 0) + 1,
+      };
     } else {
       items.push({
         productId: product.id,
         name: product.name,
         quantity: 1,
         unitPrice: product.price,
+        image: product.image || "",
         total: product.price,
       });
     }

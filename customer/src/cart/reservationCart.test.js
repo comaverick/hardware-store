@@ -1,5 +1,6 @@
 import { acceptScanSpaceCart, useReservationCart } from "./reservationCart";
-import { products } from "../storefrontCatalog";
+
+const product = { id: "b".repeat(24), name: "Claw hammer", price: 445, image: "https://example.com/hammer.jpg" };
 
 beforeEach(() => {
   localStorage.clear();
@@ -8,14 +9,14 @@ beforeEach(() => {
 
 test("storefront items update the saved cart total and quantity", () => {
   const cart = useReservationCart.getState();
-  cart.addItem(products[0]);
-  cart.addItem(products[0]);
+  cart.addItem(product);
+  cart.addItem(product);
   expect(useReservationCart.getState().draft).toMatchObject({
-    total: 6980,
-    items: [{ productId: "drill-18v", quantity: 2, total: 6980 }],
+    total: 890,
+    items: [{ productId: product.id, quantity: 2, total: 890, image: product.image }],
   });
 
-  cart.changeQuantity("drill-18v", 0);
+  cart.changeQuantity(product.id, 0);
   expect(useReservationCart.getState().draft).toBeNull();
   expect(localStorage.getItem("customer:reservation-cart")).toBeNull();
 });

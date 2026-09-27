@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { useLocation } from "react-router-dom";
 import { ShoppingCart, Trash, X } from "@phosphor-icons/react";
 import { useReservationCart } from "./reservationCart";
-import { formatPrice, products } from "../storefrontCatalog";
+import { formatPrice } from "../storefrontCatalog";
 import "./cart.css";
 
 export default function CartDrawer() {
@@ -45,49 +45,46 @@ export default function CartDrawer() {
                   <span>Confirm stock and prices with your branch before pickup.</span>
                 </div>
                 <ul className="customer-cart__items">
-                  {items.map((item) => {
-                    const product = products.find((entry) => entry.id === item.productId);
-                    return (
-                      <li key={item.productId}>
-                        <div className="customer-cart__thumbnail">
-                          {product ? (
-                            <img src={product.image} alt="" />
-                          ) : (
-                            <ShoppingCart size={25} aria-hidden="true" />
-                          )}
+                  {items.map((item) => (
+                    <li key={item.productId}>
+                      <div className="customer-cart__thumbnail">
+                        {item.image ? (
+                          <img src={item.image} alt="" />
+                        ) : (
+                          <ShoppingCart size={25} aria-hidden="true" />
+                        )}
+                      </div>
+                      <div className="customer-cart__item-copy">
+                        <strong>{item.name}</strong>
+                        <b>{formatPrice(item.total)}</b>
+                        <div className="customer-cart__quantity">
+                          <button
+                            type="button"
+                            onClick={() => changeQuantity(item.productId, item.quantity - 1)}
+                            aria-label={`Decrease quantity of ${item.name}`}
+                          >
+                            −
+                          </button>
+                          <span aria-label={`Quantity ${item.quantity}`}>{item.quantity}</span>
+                          <button
+                            type="button"
+                            onClick={() => changeQuantity(item.productId, item.quantity + 1)}
+                            aria-label={`Increase quantity of ${item.name}`}
+                          >
+                            +
+                          </button>
                         </div>
-                        <div className="customer-cart__item-copy">
-                          <strong>{item.name}</strong>
-                          <b>{formatPrice(item.total)}</b>
-                          <div className="customer-cart__quantity">
-                            <button
-                              type="button"
-                              onClick={() => changeQuantity(item.productId, item.quantity - 1)}
-                              aria-label={`Decrease quantity of ${item.name}`}
-                            >
-                              −
-                            </button>
-                            <span aria-label={`Quantity ${item.quantity}`}>{item.quantity}</span>
-                            <button
-                              type="button"
-                              onClick={() => changeQuantity(item.productId, item.quantity + 1)}
-                              aria-label={`Increase quantity of ${item.name}`}
-                            >
-                              +
-                            </button>
-                          </div>
-                        </div>
-                        <button
-                          className="customer-cart__remove"
-                          type="button"
-                          onClick={() => changeQuantity(item.productId, 0)}
-                          aria-label={`Remove ${item.name}`}
-                        >
-                          <Trash size={18} />
-                        </button>
-                      </li>
-                    );
-                  })}
+                      </div>
+                      <button
+                        className="customer-cart__remove"
+                        type="button"
+                        onClick={() => changeQuantity(item.productId, 0)}
+                        aria-label={`Remove ${item.name}`}
+                      >
+                        <Trash size={18} />
+                      </button>
+                    </li>
+                  ))}
                 </ul>
                 <button className="customer-cart__clear" type="button" onClick={clear}>
                   Clear cart

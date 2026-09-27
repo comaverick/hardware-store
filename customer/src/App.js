@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ArrowRight,
   CheckCircle,
@@ -19,17 +19,31 @@ import {
 import heroImage from "./assets/hardware-hero-minimal.webp";
 import scanSpaceImage from "./assets/scanspace-room-feature.webp";
 import { useReservationCart } from "./cart/reservationCart";
-import { categories, formatPrice, products } from "./storefrontCatalog";
+import { fetchStorefrontCatalog, formatPrice, productImageUrl } from "./storefrontCatalog";
 import "./App.css";
 
 const categoryIcons = {
   Tools: Hammer,
+  "Hand Tools": Hammer,
+  "Power Tools": Wrench,
   Paint: PaintBrush,
   Electrical: Lightning,
   Plumbing: Drop,
   Hardware: Wrench,
+  Fasteners: Wrench,
   Safety: HardHat,
 };
+
+function ProductVisual({ product }) {
+  const image = productImageUrl(product.image);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => setFailed(false), [image]);
+  if (image && !failed) {
+    return <img src={image} alt={product.name} loading="lazy" onError={() => setFailed(true)} />;
+  }
+  const Icon = categoryIcons[product.category] || SquaresFour;
+  return <Icon className="shop-product__placeholder" size={58} weight="duotone" aria-hidden="true" />;
+}
 
 function Brand({ footer = false }) {
   return (
@@ -49,7 +63,43 @@ function Brand({ footer = false }) {
 function App() {
   const [query, setQuery] = useState("");
   const [activeCategory, setActiveCategory] = useState("All");
+  const [products, setProducts] = useState([]);
+  const [branches, setBranches] = useState([]);
+  const [branchId, setBranchId] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [retryKey, setRetryKey] = useState(0);
   const { draft, show, addItem } = useReservationCart();
+  useEffect(() => {
+    let active = true;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 15000);
+    setLoading(true);
+    setError("");
+    setProducts([]);
+    fetchStorefrontCatalog(branchId, controller.signal)
+      .then((catalog) => {
+        if (!active) return;
+        setProducts(catalog.products);
+        setBranches(catalog.branches);
+      })
+      .catch(() => {
+        if (active) setError("Store catalog could not load. Please try again.");
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+        window.clearTimeout(timer);
+      });
+    return () => {
+      active = false;
+      controller.abort();
+      window.clearTimeout(timer);
+    };
+  }, [branchId, retryKey]);
+
+  const categories = [...new Set(products.map((product) => product.category || "Other"))]
+    .sort((left, right) => left.localeCompare(right));
+  const selectedBranch = branches.find((branch) => branch._id === branchId);
   const cartCount = draft?.items?.reduce(
     (total, item) => total + Number(item.quantity || 0),
     0,
@@ -60,7 +110,7 @@ function App() {
       activeCategory === "All" || product.category === activeCategory;
     const matchesSearch =
       !normalizedQuery ||
-      `${product.name} ${product.category} ${product.detail}`
+      `${product.name} ${product.category} ${product.description} ${product.sku} ${product.brand}`
         .toLowerCase()
         .includes(normalizedQuery);
     return matchesCategory && matchesSearch;
@@ -79,6 +129,15 @@ function App() {
   function handleSearch(event) {
     event.preventDefault();
     document.getElementById("products")?.scrollIntoView();
+  }
+
+  function handleAddToCart(product) {
+    addItem({
+      id: product._id,
+      name: product.name,
+      price: product.sellingPrice,
+      image: productImageUrl(product.image),
+    });
   }
 
   return (
@@ -168,7 +227,7 @@ function App() {
             <CheckCircle size={26} aria-hidden="true" />
             <span>
               <strong>Local stock</strong>
-              <small>Check what your branch has.</small>
+              <small>Choose a branch to check stock.</small>
             </span>
           </div>
           <div>
@@ -196,7 +255,7 @@ function App() {
           </div>
           <div className="shop-categories">
             {categories.map((category) => {
-              const Icon = categoryIcons[category];
+              const Icon = categoryIcons[category] || SquaresFour;
               return (
                 <a
                   className="shop-category"
@@ -211,14 +270,19 @@ function App() {
                 </a>
               );
             })}
+            {!categories.length && (
+              <p className="shop-categories__status">
+                {loading ? "Loading categories…" : "Categories will appear when products are available."}
+              </p>
+            )}
           </div>
         </section>
 
         <section className="shop-container shop-section shop-products" id="products">
           <div className="shop-section__heading">
             <div>
-              <h2>{activeCategory === "All" ? "Popular products" : activeCategory}</h2>
-              <p>Sample prices and availability. Confirm with your branch before pickup.</p>
+              <h2>{activeCategory === "All" ? "Shop products" : activeCategory}</h2>
+              <p>Current catalog prices. Stock is shown for your chosen branch.</p>
             </div>
             {(activeCategory !== "All" || query) && (
               <button className="shop-text-button" type="button" onClick={resetFilters}>
@@ -226,27 +290,56 @@ function App() {
               </button>
             )}
           </div>
-          {visibleProducts.length ? (
+          <div className="shop-products__controls">
+            <label htmlFor="shop-branch">Check stock at</label>
+            <select
+              id="shop-branch"
+              value={branchId}
+              onChange={(event) => setBranchId(event.target.value)}
+              disabled={!branches.length}
+            >
+              <option value="">Choose a branch</option>
+              {branches.map((branch) => (
+                <option key={branch._id} value={branch._id}>{branch.name}</option>
+              ))}
+            </select>
+          </div>
+          {loading ? (
+            <div className="shop-products__empty" role="status">Loading products…</div>
+          ) : error ? (
+            <div className="shop-products__empty" role="alert">
+              <h3>Products are unavailable</h3>
+              <p>{error}</p>
+              <button className="shop-button shop-button--outline" type="button" onClick={() => setRetryKey((value) => value + 1)}>
+                Try again
+              </button>
+            </div>
+          ) : visibleProducts.length ? (
             <div className="shop-products__grid">
               {visibleProducts.map((product) => (
-                <article className="shop-product" key={product.id}>
+                <article className="shop-product" key={product._id}>
                   <div className="shop-product__image">
-                    <img src={product.image} alt={product.name} loading="lazy" />
+                    <ProductVisual product={product} />
                   </div>
                   <div className="shop-product__details">
-                    <span className="shop-product__category">{product.detail}</span>
+                    <span className="shop-product__category">{product.brand ? `${product.brand} · ` : ""}{product.sku}</span>
                     <h3>{product.name}</h3>
-                    <strong className="shop-product__price">{formatPrice(product.price)}</strong>
-                    <span className="shop-product__stock">
+                    <strong className="shop-product__price">{formatPrice(product.sellingPrice)} <small>/ {product.unit}</small></strong>
+                    <span className={`shop-product__stock${branchId && product.availableQuantity === 0 ? " shop-product__stock--empty" : ""}`}>
                       <span aria-hidden="true" />
-                      {product.stock}
+                      {!branchId
+                        ? "Choose a branch to check stock"
+                        : product.availableQuantity > 0
+                          ? `${product.availableQuantity} available at ${selectedBranch?.name || "this branch"}`
+                          : `Out of stock at ${selectedBranch?.name || "this branch"}`}
                     </span>
                     <button
                       className="shop-product__button"
                       type="button"
-                      onClick={() => addItem(product)}
+                      disabled={Boolean(branchId && product.availableQuantity === 0)}
+                      onClick={() => handleAddToCart(product)}
                     >
-                      Add to cart
+                      {branchId && product.availableQuantity === 0 ? "Out of stock" : "Add to cart"}
                     </button>
                   </div>
                 </article>
@@ -255,11 +348,13 @@ function App() {
           ) : (
             <div className="shop-products__empty">
               <MagnifyingGlass size={28} aria-hidden="true" />
-              <h3>No sample products found</h3>
-              <p>Try a different search or browse all products.</p>
-              <button className="shop-button shop-button--outline" type="button" onClick={resetFilters}>
-                View all products
-              </button>
+              <h3>{products.length ? "No products found" : "No products available"}</h3>
+              <p>{products.length ? "Try a different search or browse all products." : "Please check back later."}</p>
+              {products.length > 0 && (
+                <button className="shop-button shop-button--outline" type="button" onClick={resetFilters}>
+                  View all products
+                </button>
+              )}
             </div>
           )}
         </section>
@@ -312,7 +407,7 @@ function App() {
         </div>
         <div className="shop-container shop-footer__bottom">
           <span>© {new Date().getFullYear()} Hardware Store.</span>
-          <span>Prices and stock shown are samples.</span>
+          <span>Prices and stock may change. Confirm with your branch.</span>
         </div>
       </footer>
 
