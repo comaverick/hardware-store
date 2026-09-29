@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
 import {
   AppstoreOutlined,
+  DeleteOutlined,
   EditOutlined,
   EyeOutlined,
   PlusOutlined,
@@ -27,12 +28,17 @@ import {
 } from "antd";
 
 import api from "../../services/api";
+import { useAuth } from "../../context/AuthContext";
 
 import "./Products.css";
 
 const { Title, Text } = Typography;
+const MAX_PRODUCT_IMAGE_BYTES = 5 * 1024 * 1024;
+const IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 const Products = () => {
+  const { user } = useAuth();
+  const canManageProducts = ["SUPER_ADMIN", "ADMIN", "MANAGER", "INVENTORY_STAFF"].includes(user?.role);
   // =========================
   // STATE
   // =========================
@@ -51,12 +57,26 @@ const Products = () => {
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState(null);
+  const [imageFile, setImageFile] = useState(null);
+  const [imagePreview, setImagePreview] = useState("");
+  const [removeImage, setRemoveImage] = useState(false);
+  const imageInputRef = useRef(null);
 
   const [detailsOpen, setDetailsOpen] = useState(false);
 
   const [selectedProduct, setSelectedProduct] = useState(null);
 
   const [form] = Form.useForm();
+
+  useEffect(() => {
+    if (!imageFile) {
+      setImagePreview("");
+      return undefined;
+    }
+    const previewUrl = URL.createObjectURL(imageFile);
+    setImagePreview(previewUrl);
+    return () => URL.revokeObjectURL(previewUrl);
+  }, [imageFile]);
 
   // =========================
   // FETCH DATA
@@ -144,18 +164,22 @@ const Products = () => {
     try {
       setSaving(true);
 
+      const payload = new FormData();
+      Object.entries(values).forEach(([key, value]) => {
+        if (value !== undefined && value !== null) payload.append(key, String(value));
+      });
+      if (imageFile) payload.append("imageFile", imageFile);
+      if (removeImage) payload.append("removeImage", "true");
+
       if (editingProduct) {
-        await api.put(`/products/${editingProduct._id}`, values);
+        await api.putForm(`/products/${editingProduct._id}`, payload);
         message.success("Product updated successfully.");
       } else {
-        await api.post("/products", values);
+        await api.postForm("/products", payload);
         message.success("Product added successfully.");
       }
 
-      form.resetFields();
-
-      setModalOpen(false);
-      setEditingProduct(null);
+      closeProductModal();
 
       await fetchData();
     } catch (error) {
@@ -167,14 +191,46 @@ const Products = () => {
     }
   };
 
+  const resetImageSelection = () => {
+    setImageFile(null);
+    setRemoveImage(false);
+    if (imageInputRef.current) imageInputRef.current.value = "";
+  };
+
+  const closeProductModal = () => {
+    form.resetFields();
+    resetImageSelection();
+    setModalOpen(false);
+    setEditingProduct(null);
+  };
+
+  const handleImageChange = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (!IMAGE_TYPES.has(file.type)) {
+      message.error("Choose a JPG, PNG, or WebP image.");
+      event.target.value = "";
+      return;
+    }
+    if (file.size > MAX_PRODUCT_IMAGE_BYTES) {
+      message.error("Product images must be 5 MB or smaller.");
+      event.target.value = "";
+      return;
+    }
+    setImageFile(file);
+    setRemoveImage(false);
+  };
+
   const openAddProduct = () => {
     setEditingProduct(null);
     form.resetFields();
+    resetImageSelection();
     setModalOpen(true);
   };
 
   const openEditProduct = (product) => {
     setEditingProduct(product);
+    resetImageSelection();
     form.setFieldsValue({
       name: product.name,
       sku: product.sku,
@@ -211,7 +267,7 @@ const Products = () => {
       render: (_, product) => (
         <div className="product-cell">
           <div className="product-icon">
-            <AppstoreOutlined />
+            {product.image ? <img src={product.image} alt="" /> : <AppstoreOutlined />}
           </div>
 
           <div>
@@ -292,13 +348,15 @@ const Products = () => {
           >
             View
           </Button>
-          <Button
-            type="text"
-            icon={<EditOutlined />}
-            onClick={() => openEditProduct(product)}
-          >
-            Edit
-          </Button>
+          {canManageProducts && (
+            <Button
+              type="text"
+              icon={<EditOutlined />}
+              onClick={() => openEditProduct(product)}
+            >
+              Edit
+            </Button>
+          )}
         </div>
       ),
     },
@@ -354,17 +412,19 @@ const Products = () => {
             </Select>
           </Col>
 
-          <Col xs={24} md={5} lg={4}>
-            <Button
-              type="primary"
-              icon={<PlusOutlined />}
-              size="large"
-              block
-              onClick={openAddProduct}
-            >
-              Add Product
-            </Button>
-          </Col>
+          {canManageProducts && (
+            <Col xs={24} md={5} lg={4}>
+              <Button
+                type="primary"
+                icon={<PlusOutlined />}
+                size="large"
+                block
+                onClick={openAddProduct}
+              >
+                Add Product
+              </Button>
+            </Col>
+          )}
         </Row>
       </Card>
 
@@ -396,13 +456,11 @@ const Products = () => {
       ========================= */}
 
       <Modal
-          title={editingProduct ? "Edit Product" : "Add Product"}
+        title={editingProduct ? "Edit Product" : "Add Product"}
         open={modalOpen}
         onCancel={() => {
           if (!saving) {
-            form.resetFields();
-            setModalOpen(false);
-            setEditingProduct(null);
+            closeProductModal();
           }
         }}
         footer={null}
@@ -486,6 +544,43 @@ const Products = () => {
           <Form.Item label="Description" name="description">
             <Input.TextArea rows={3} placeholder="Product description..." />
           </Form.Item>
+
+          <div className="product-image-field">
+            <label htmlFor="product-image-input">Product image</label>
+            <div className="product-image-controls">
+              <div className="product-image-preview">
+                {(!removeImage && (imagePreview || editingProduct?.image)) ? (
+                  <img src={imagePreview || editingProduct.image} alt="Product preview" />
+                ) : (
+                  <AppstoreOutlined />
+                )}
+              </div>
+              <div className="product-image-options">
+                <input
+                  id="product-image-input"
+                  ref={imageInputRef}
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  onChange={handleImageChange}
+                />
+                <Text type="secondary">JPG, PNG, or WebP. Up to 5 MB.</Text>
+                {(imageFile || (editingProduct?.image && !removeImage)) && (
+                  <Button
+                    type="link"
+                    danger
+                    icon={<DeleteOutlined />}
+                    onClick={() => {
+                      setImageFile(null);
+                      setRemoveImage(Boolean(editingProduct?.image));
+                      if (imageInputRef.current) imageInputRef.current.value = "";
+                    }}
+                  >
+                    Remove image
+                  </Button>
+                )}
+              </div>
+            </div>
+          </div>
 
           <Row gutter={16}>
             <Col span={8}>
@@ -573,7 +668,7 @@ const Products = () => {
 
               <Select.Option value="liter">Liter</Select.Option>
 
-              <Select.Option value="kg">Kilogram</Select.Option>
+              <Select.Option value="kilogram">Kilogram</Select.Option>
             </Select>
           </Form.Item>
 
@@ -582,9 +677,7 @@ const Products = () => {
           <div className="product-modal-footer">
             <Button
               onClick={() => {
-                form.resetFields();
-                setModalOpen(false);
-                setEditingProduct(null);
+                closeProductModal();
               }}
               disabled={saving}
             >
@@ -618,7 +711,11 @@ const Products = () => {
 
             <div className="product-details-header">
               <div className="product-details-icon">
-                <AppstoreOutlined />
+                {selectedProduct.image ? (
+                  <img src={selectedProduct.image} alt="" />
+                ) : (
+                  <AppstoreOutlined />
+                )}
               </div>
 
               <div>

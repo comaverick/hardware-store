@@ -75,6 +75,9 @@ const productSchema = new mongoose.Schema(
     image: {
       type: String,
     },
+    imagePublicId: {
+      type: String,
+    },
 
     scanSpace: {
       enabled: { type: Boolean, default: false },

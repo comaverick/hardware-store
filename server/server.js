@@ -1,6 +1,10 @@
+const dotenv = require("dotenv");
+const path = require("path");
+
+dotenv.config({ path: path.join(__dirname, ".env") });
+
 const express = require("express");
 const cors = require("cors");
-const dotenv = require("dotenv");
 const { connectDB, getDatabaseStatus } = require("./config/db");
 const inventoryTransactionRoutes = require("./routes/inventoryTransactionRoutes");
 const supplierRoutes = require("./routes/supplierRoutes");
@@ -14,8 +18,6 @@ const {
   authRateLimiter,
   aiRateLimiter,
 } = require("./middleware/rateLimitMiddleware");
-
-dotenv.config();
 
 const app = express();
 

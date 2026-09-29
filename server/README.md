@@ -1,5 +1,11 @@
 # Stock operation API
 
+## Product images
+
+Set `CLOUDINARY_URL` on the API service using the API environment variable from Cloudinary. Keep it in the server environment only. Product editors can upload one JPG, PNG, or WebP image up to 5 MB when creating or editing a product. The API uploads the file to Cloudinary and stores its secure URL and public ID in MongoDB. Replacing or removing a managed image also deletes its previous Cloudinary asset. Existing products with no image continue to use the fallback icon.
+
+The product form is available to super admins, admins, managers, and inventory staff. Cashiers can view products but cannot change them. Local image uploads also require `CLOUDINARY_URL` in `server/.env`.
+
 The following authenticated write endpoints require a unique `Idempotency-Key` header (8 to 128 letters, digits, hyphens, or underscores):
 
 - `POST /api/sales/:id/refund`

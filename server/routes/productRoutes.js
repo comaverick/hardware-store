@@ -9,6 +9,7 @@ const {
 } = require("../controllers/productController");
 
 const { protect, authorize } = require("../middleware/authMiddleware");
+const parseProductImage = require("../middleware/productImageUpload");
 
 const router = express.Router();
 
@@ -16,18 +17,20 @@ const router = express.Router();
 router.get("/", protect, getProducts);
 router.get("/:id", protect, getProduct);
 
-// Only administrators and managers can modify products
+// Administrators, managers, and inventory staff can manage the catalog.
 router.post(
   "/",
   protect,
-  authorize("SUPER_ADMIN", "ADMIN", "MANAGER"),
+  authorize("SUPER_ADMIN", "ADMIN", "MANAGER", "INVENTORY_STAFF"),
+  parseProductImage,
   createProduct,
 );
 
 router.put(
   "/:id",
   protect,
-  authorize("SUPER_ADMIN", "ADMIN", "MANAGER"),
+  authorize("SUPER_ADMIN", "ADMIN", "MANAGER", "INVENTORY_STAFF"),
+  parseProductImage,
   updateProduct,
 );
 
