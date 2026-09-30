@@ -404,7 +404,7 @@ export class RoomScanner {
     this.observer = { x: 0, z: 0 };
     this.planes = new Map();
     this.keyframes = [];
-    this.capture = new AdaptiveCapture({ maximumFrames: MAX_FUSION_KEYFRAMES });
+    this.capture = new AdaptiveCapture({ maximumFrames: MAX_FUSION_KEYFRAMES, validateOverlap: false });
     this.experience = new CaptureExperience();
     this.captureProfile = adaptiveCaptureProfile();
     this.captureProcessingMs = 0;
@@ -613,6 +613,7 @@ export class RoomScanner {
     }
     const evidence = this.capture.recoveryEvidence;
     this.runtimeDiagnostics.update({ ...this.stats, closed: this.closed, paused: this.paused,
+      captureValidationMode: this.capture.validateOverlap ? "depth-overlap" : "xr-tracking",
       recoveryEvidenceCount: evidence.length,
       recoveryEvidenceAgeMs: evidence.length ? (this.lastFrameAt ?? this.capture.lastSeen) - evidence[0].timestamp : 0,
     });

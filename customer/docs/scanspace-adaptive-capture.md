@@ -1,34 +1,31 @@
 # Adaptive capture
 
-The live scanner keeps a bounded, connected graph of saved depth views. This
-improves **future captures**; it cannot recover measurements missing from an old
-export or guarantee a closed mesh of unseen object faces.
+The live scanner retains a bounded sequence of depth views using WebXR camera
+tracking. Geometric overlap is independently validated during reconstruction,
+rather than blocking acquisition when the camera moves to another area. Missing
+measurements cannot be recovered from old exports, and unseen surfaces remain open.
 
-- Bootstrap needs two translated views with bidirectional depth agreement. The
+- Bootstrap needs two usable, translated views. The
   initial anchor stays fixed during tiny steps so a very slow sweep can start.
 - Timing, sample density, pose spacing, and motion limits adapt to reported depth
   type/resolution, measured depth quality, scene detail, and processing cost.
 - Every XR pose contributes to a short motion window, so an out-and-back shake
   cannot hide between depth samples. RGB readback is throttled independently.
-- A motion/quality skip is not a tracking failure. Brief skips leave the saved
-  map and recent recovery evidence intact. A new non-conflicting overlap miss
-  starts a 900 ms checking grace period; the view stays provisional throughout.
-  Tracking loss and a camera jump clear recovery evidence immediately. Conflicting
-  depth is rejected without erasing other recent, map-validated observations.
-  An XR reference-space reset still requires a new scan.
-- Recovery keeps reading the sensor and retains at most three map-validated
-  observations for 1.8 seconds. It still needs two agreeing observations at
-  least 120 ms apart, both matching the saved map and each other. A noisy read
-  or a different valid patch between them cannot continually restart confirmation.
-  Expired observations and hard tracking failures cannot vote. Existing
-  bidirectional support, conflict vetoes, and residual limits are unchanged.
-- Unconnected observations stay out of the saved surface and confirmed preview.
-  At most six are held for eight seconds, with no extra sensor-frame history.
-  Redundant views are discarded first, and capacity eviction protects the most
-  promising bridge back to the saved map. Every promotion must independently
-  pass the original geometry tests. Drop causes are counted separately.
-- At the 60-view limit, only graph-safe redundant views can be removed. If none
-  can be removed safely, the user is prompted to save this section.
+- Live acquisition does not run saved-map overlap comparisons, old-reference
+  conflict vetoes, bridge confirmation, capture-gap recovery, or repeated
+  reconnection confirmation. RoomScanner uses `validateOverlap: false`; the
+  original strict mode remains available to legacy replay and regression checks.
+- Invalid/missing depth, sparse measurements, nearby obstruction, excessive motion,
+  deliberate pause, and lost/emulated tracking still withhold geometry. A sudden
+  camera jump skips that observation. The next usable tracked view resumes capture
+  without needing to match an older saved surface. An XR reference-space reset
+  still stops the scan and requires a new session.
+- Pending views are used only during startup and remain bounded to six views for
+  eight seconds. After startup, usable novel views are retained immediately.
+  Capture links in `xr-tracking` mode describe native trajectory continuity;
+  they do not certify geometric depth agreement.
+- The 60-view limit remains. Once the retained trajectory reaches capacity, save
+  this section rather than silently replacing earlier captured areas.
 - The live progress panel separates accepted room-direction sweep from confirmed
   overlap on observed surfaces. Unseen regions remain "Not seen", completed
   lower/wall/upper regions stay marked as covered, and the weakest area becomes
@@ -43,13 +40,15 @@ export or guarantee a closed mesh of unseen object faces.
   replace it. The amber target is only shown with directional reconnection
   guidance, never as a routine coverage obligation. Coordinate-reset warnings
   are immediate.
-- Review builds the saved, connected result directly and shows an orbitable
+- Review validates geometric overlap, refines alignment, and builds the saved
+  result using the existing reconstruction pipeline. It shows an orbitable
   preview before asking to save or continue. Coverage/alignment concerns remain
   in an expandable audit, with explicit partial save. Separate furniture alone
   is not treated as failed capture. Continue preserves the raw observations;
   save reuses the checked mesh instead of reconstructing twice. A closed camera
   session or preview-render failure does not remove the save option.
-- Raw exports retain capture IDs, validated links, and a bounded quality summary.
+- Raw exports retain capture IDs, links, the `xr-tracking` or `depth-overlap`
+  validation mode, and a bounded quality summary.
   Imported links are diagnostic metadata, never a substitute for reconstruction
   validation. Provisional observations are not exported as confirmed geometry.
 - Development-only local diagnostics include per-reason decisions, useful commits,
@@ -66,8 +65,9 @@ node node_modules/react-scripts/scripts/build.js
 node scripts/replay-adaptive-capture.cjs "C:/path/to/raw-scan.json"
 ```
 
-The replay independently checks every retained link and asserts the graph and
-memory limits after every observation. It is deliberately **not** a camera test:
+The replay exercises the original strict overlap mode, independently checks its
+retained links, and asserts the graph and memory limits after every observation.
+It is deliberately **not** a camera test:
 old files omit rejected frames and the high-rate pose stream, and a recording
 cannot respond to the new recovery guidance.
 
@@ -98,10 +98,10 @@ and capture resumes after validated overlap. Check an upper surface, floor/wall
 join, and object silhouette from the front and both sides in the final preview.
 Exercise both Keep scanning and Save partial scan after a failed review.
 
-Repeat brief motion skips during recovery, a depth interruption, and an actual
-coordinate reset. A brief skip should not produce repeated slowdown/amber loops;
-real disconnected or contradictory depth must still stay out of the saved graph.
-Review should be available even while the latest view is still unconfirmed.
+Repeat brief motion skips, a depth interruption, and an actual coordinate reset.
+Capture should resume on the next usable tracked view; turning to new areas must
+not trigger a saved-map overlap loop. Review should reject unsupported or
+contradictory depth instead of treating trajectory links as geometric proof.
 
 Repeat on raw-depth and smooth-depth devices, including a mid-range phone.
 Inspect capture interval, processing cost, retained/provisional views, and final

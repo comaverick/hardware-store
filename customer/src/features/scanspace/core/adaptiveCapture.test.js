@@ -1,5 +1,6 @@
 import { Matrix4, PerspectiveCamera } from "three";
-import { createRgbdKeyframe } from "./fusion";
+import { createRgbdKeyframe, fuseRgbdKeyframes } from "./fusion";
+import { scanFusionOptions } from "./fusionOptions";
 import { unprojectDepth } from "./depth";
 import { AdaptiveCapture, adaptiveCaptureProfile, auditCapture, captureBridgeOverlap, captureOverlap, confirmedViewRatio, connectedCoverage } from "./adaptiveCapture";
 
@@ -24,6 +25,92 @@ function started(options) {
   capture.consider(wallFrame(0.08, 400));
   return capture;
 }
+
+test("XR-tracked capture saves new areas without live overlap comparisons", () => {
+  const compare = jest.fn(() => ({ accepted: false, conflict: true, overlap: 0 }));
+  const capture = started({ validateOverlap: false, compare });
+  expect(capture.frames).toHaveLength(2);
+  const next = wallFrame(0.16, 800, { wallZ: -2.35, yaw: 0.6 });
+  expect(capture.consider(next)).toMatchObject({ accepted: true, committed: [next], reason: "connected" });
+  expect(capture.frames).toHaveLength(3);
+  expect(compare).not.toHaveBeenCalled();
+  expect(capture.snapshot()).toMatchObject({ validationMode: "xr-tracking", state: "tracking", pendingCount: 0 });
+  // Retention is not proof of repeated depth agreement.
+  expect(confirmedViewRatio(next, capture.frames)).toBe(0);
+});
+
+test("XR-tracked capture keeps startup translation and viewpoint spacing", () => {
+  const capture = new AdaptiveCapture({ validateOverlap: false });
+  for (let i = 0; i < 12; i++) capture.consider(wallFrame(0, 100 + i * 200));
+  expect(capture.frames).toHaveLength(0);
+  capture.consider(wallFrame(0.08, 2600));
+  expect(capture.frames).toHaveLength(2);
+  expect(capture.consider(wallFrame(0.09, 3000)).committed).toHaveLength(0);
+  expect(capture.frames).toHaveLength(2);
+});
+
+test("XR-tracked capture resumes on the first valid tracked view and ignores capture gaps", () => {
+  const compare = jest.fn(() => ({ accepted: false, conflict: false, overlap: 0 }));
+  const capture = started({ validateOverlap: false, compare });
+  capture.failure("tracking-lost", 600);
+  capture.failure("sparse-depth", 800);
+  expect(capture.frames).toHaveLength(2);
+  expect(capture.consider(wallFrame(0.16, 1000, { wallZ: -2.15 })).accepted).toBe(true);
+  expect(capture.state).toBe("tracking");
+  expect(capture.consider(wallFrame(0.24, 5000)).accepted).toBe(true);
+  expect(capture.frames).toHaveLength(4);
+  expect(capture.events.recoveries).toBe(1);
+  expect(compare).not.toHaveBeenCalled();
+});
+
+test("XR-tracked capture skips a sudden camera jump and retries the next steady view", () => {
+  const capture = started({ validateOverlap: false });
+  expect(capture.consider(wallFrame(0.9, 800)).accepted).toBe(false);
+  expect(capture.frames).toHaveLength(2);
+  expect(capture.state).toBe("recovering");
+  expect(capture.consider(wallFrame(0.98, 1200)).accepted).toBe(true);
+  expect(capture.frames).toHaveLength(3);
+});
+
+test("XR-tracked capture never resumes after a coordinate reset", () => {
+  const capture = started({ validateOverlap: false });
+  capture.failure("tracking-reset", 600);
+  capture.failure("tracking-lost", 800);
+  expect(capture.consider(wallFrame(0.16, 1000)).accepted).toBe(false);
+  expect(capture.frames).toHaveLength(2);
+});
+
+test("XR-tracked capture retains the view limit without evicting captured sections", () => {
+  const capture = started({ validateOverlap: false, maximumFrames: 3 });
+  capture.consider(wallFrame(0.16, 800));
+  const saved = capture.frames.slice();
+  expect(capture.consider(wallFrame(0.24, 1200)).reason).toBe("capacity");
+  expect(capture.frames).toEqual(saved);
+  expect(capture.snapshot()).toMatchObject({ capacityReached: true, frameCount: 3, connected: true });
+});
+
+test("XR-tracked depth refresh does not rerun live overlap checks", () => {
+  const compare = jest.fn(() => ({ accepted: false, conflict: true, overlap: 0 }));
+  const capture = started({ validateOverlap: false, compare });
+  const refreshed = wallFrame(0, 800, { wallZ: -2.15 });
+  expect(capture.replace(capture.frames[0], refreshed)).toBe(true);
+  expect(capture.frames[0]).toBe(refreshed);
+  expect(compare).not.toHaveBeenCalled();
+});
+
+test("reconstruction rejects a bad depth layer retained by XR-tracked acquisition", () => {
+  const capture = started({ validateOverlap: false });
+  capture.consider(wallFrame(0.16, 800, { wallZ: -2.35 }));
+  capture.consider(wallFrame(0.24, 1200));
+  capture.consider(wallFrame(0.32, 1600));
+  capture.snapshot();
+  expect(capture.frames).toHaveLength(5);
+  const result = fuseRgbdKeyframes(capture.frames, scanFusionOptions({ stats: { depthType: "smooth" } }, "surface", { maxDimension: 48 }));
+  expect(result.mesh).toBeTruthy();
+  expect(result.diagnostics.alignment.rejectedFrameIds).toContain(2);
+  expect(result.diagnostics.fusedFrameIds).not.toContain(2);
+  expect(result.diagnostics.fusedFrameIds).toHaveLength(4);
+});
 
 test("bootstrap requires independent, agreeing views and stationary frames do not confirm coverage", () => {
   const capture = new AdaptiveCapture();

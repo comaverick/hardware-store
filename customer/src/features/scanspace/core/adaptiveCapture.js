@@ -2,7 +2,7 @@ import { depthPosition, filterDepth, gridIndex, projectWorld, sampleProjectiveDe
 import { fastMotionShare } from "./captureExperience";
 import { MIN_SURFACE_CAMERA_BASELINE_METERS } from "./readiness";
 
-export const ADAPTIVE_CAPTURE_VERSION = 2;
+export const ADAPTIVE_CAPTURE_VERSION = 3;
 export const MIN_REGION_OBSERVATIONS = 12;
 export const MIN_REGION_CONFIRMATION = 0.55;
 const OVERLAP_GRACE_MS = 900;
@@ -245,10 +245,11 @@ export function connectedCoverage(frames) {
 }
 
 export class AdaptiveCapture {
-  constructor({ maximumFrames = 60, maximumPending = 6, compare = captureOverlap } = {}) {
+  constructor({ maximumFrames = 60, maximumPending = 6, compare = captureOverlap, validateOverlap = true } = {}) {
     this.maximumFrames = maximumFrames;
     this.maximumPending = maximumPending;
     this.compare = compare;
+    this.validateOverlap = validateOverlap;
     this.frames = [];
     this.pending = [];
     this.links = new Map();
@@ -296,6 +297,7 @@ export class AdaptiveCapture {
     // across those skips; tracking loss/reset, a jump or stale evidence clears it.
     if (recoveryFailures.has(reason)) this.recover(reason, timestamp);
     if (reason === "tracking-reset") {
+      this.trackingReset = true;
       this.events.pendingResetDrops += this.pending.length;
       this.pending = [];
     }
@@ -435,6 +437,7 @@ export class AdaptiveCapture {
     this.lastComparisons = [];
     const time = frame.timestamp;
     this.expire(time);
+    if (!this.validateOverlap) return this.considerTracked(frame, profile);
     if (this.state !== "recovering" && this.lastReliableAt != null &&
         time - this.lastReliableAt > RECOVERY_EVIDENCE_MS)
       this.recover("capture-gap", time);
@@ -526,11 +529,52 @@ export class AdaptiveCapture {
     this.reason = "connected";
     return { accepted: true, committed: this.frames.filter(value => !before.has(value)), reason: "connected", match: match.best };
   }
+  considerTracked(frame, profile) {
+    // RoomScanner already requires a real tracked pose and usable, steady depth.
+    // Keep that native trajectory while acquiring new areas; final reconstruction
+    // independently validates geometric overlap. These links describe capture
+    // continuity, not proof that the depth measurements agree.
+    this.lastMatch = null;
+    const time = frame.timestamp;
+    const jumped = this.lastObserved && distance(camera(frame), camera(this.lastObserved)) > 0.5;
+    this.lastSeen = time;
+    this.lastObserved = frame;
+    if (this.trackingReset) return { accepted: false, committed: [], reason: "tracking-reset" };
+    if (jumped && this.frames.length) {
+      this.recover("camera-jump", time);
+      return { accepted: false, committed: [], reason: "confirming-recovery" };
+    }
+    if (!this.frames.length) {
+      const seed = this.pending.find(value => distance(camera(frame), camera(value)) >= 0.04);
+      if (!seed) { this.buffer(frame); return { accepted: false, committed: [], reason: "starting" }; }
+      this.commit(seed, []);
+      this.commit(frame, [seed.captureId]);
+      this.pending = [];
+      this.state = "tracking";
+      this.reason = "connected";
+      this.lastReliableAt = time;
+      this.clearRecoveryEvidence();
+      return { accepted: true, committed: [seed, frame], reason: "connected" };
+    }
+    const last = this.frames[this.frames.length - 1];
+    const novel = distance(camera(last), camera(frame)) >= profile.spacing || angle(last, frame) >= profile.turn;
+    if (novel && !this.commit(frame, [last.captureId])) {
+      this.reason = "capacity";
+      return { accepted: false, committed: [], reason: "capacity" };
+    }
+    this.state = "tracking";
+    this.reason = "connected";
+    this.uncertainSince = null;
+    this.lastReliableAt = time;
+    this.clearRecoveryEvidence();
+    return { accepted: true, committed: novel ? [frame] : [], reason: "connected" };
+  }
   replace(previous, candidate) {
     const neighbors = this.links.get(previous.captureId);
     if (!neighbors?.size) return false;
-    // A depth refresh must keep every existing connection valid.
-    if ([...neighbors].some(id => !this.compare(candidate, this.frames.find(frame => frame.captureId === id)).accepted)) return false;
+    // Strict capture preserves measured edges. XR-tracked refreshes have already
+    // passed the scanner's nearby-pose and depth-quality checks.
+    if (this.validateOverlap && [...neighbors].some(id => !this.compare(candidate, this.frames.find(frame => frame.captureId === id)).accepted)) return false;
     candidate.captureId = previous.captureId;
     this.frames[this.frames.indexOf(previous)] = candidate;
     this.coverageDirty = true;
@@ -543,6 +587,7 @@ export class AdaptiveCapture {
     }
     this.frames.forEach(frame => { frame.captureLinks = [...(this.links.get(frame.captureId) || [])]; });
     return { version: ADAPTIVE_CAPTURE_VERSION, state: this.state, reason: this.reason,
+      validationMode: this.validateOverlap ? "depth-overlap" : "xr-tracking",
       connected: this.frames.length >= 2 && graphConnected(this.frames, this.links),
       frameCount: this.frames.length, pendingCount: this.pending.length,
       recoveryEvidenceCount: this.recoveryEvidence.length,

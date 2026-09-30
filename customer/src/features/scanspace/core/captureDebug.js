@@ -16,6 +16,7 @@ const RUNTIME_FIELDS = [
   "poseMedianResidual", "poseUpperResidual", "gateLinearSpeed", "gateAngularSpeed",
   "maxLinearSpeed", "maxAngularSpeed",
   "recoveryEvidenceCount", "recoveryEvidenceAgeMs", "depthProjectionDelta", "depthTransformDelta",
+  "captureValidationMode",
 ];
 const CAPTURE_FIELDS = ["state", "recoveryEvidenceCount", "recoveryEvidenceAgeMs",
   "gateLinearSpeed", "gateAngularSpeed", "maxLinearSpeed", "maxAngularSpeed",

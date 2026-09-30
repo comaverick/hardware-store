@@ -209,6 +209,7 @@ function rawStats(stats) {
       ...Object.fromEntries(numeric.map(name => [name, Math.max(0, finite(adaptive[name]))])),
       state: ["starting", "tracking", "checking", "recovering"].includes(adaptive.state) ? adaptive.state : "starting",
       reason: String(adaptive.reason || "").slice(0, 80), connected: adaptive.connected === true,
+      validationMode: adaptive.validationMode === "xr-tracking" ? "xr-tracking" : "depth-overlap",
       capacityReached: adaptive.capacityReached === true,
       coverage: { observed: Math.max(0, finite(adaptive.coverage?.observed)),
         confirmed: Math.max(0, finite(adaptive.coverage?.confirmed)),

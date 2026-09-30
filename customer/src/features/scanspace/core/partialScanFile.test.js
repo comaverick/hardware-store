@@ -166,6 +166,16 @@ test("adaptive capture connections and quality survive export without provisiona
   expect(restored.captureQuality.captureAudit).toEqual(scan.captureQuality.captureAudit);
 });
 
+test.each(["xr-tracking", "depth-overlap"])("capture validation mode %s survives raw export and import", validationMode => {
+  const scan = rawScan();
+  scan.rawCapture.stats.adaptiveCapture = {
+    version: 3, state: "tracking", reason: "connected", connected: true,
+    validationMode, frameCount: 3,
+  };
+  const restored = parsePartialScan(serializePartialScan(scan));
+  expect(restored.rawCapture.stats.adaptiveCapture).toMatchObject({ version: 3, validationMode });
+});
+
 test("planar reconstruction diagnostics survive export and import", () => {
   const scan = measuredScan();
   scan.captureQuality = { algorithmVersion: 36, planarConsolidation: { version: 1, removedOverlapArea: 0.9, planes: [{ normal: [0, 0, 1], offset: -2, retainedArea: 2.5 }] } };

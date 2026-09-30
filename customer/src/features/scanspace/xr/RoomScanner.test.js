@@ -513,7 +513,7 @@ test.each(["hit-test", "planes", "preview", "recovery-marker", "render"])(
   },
 );
 
-test("a transient pose error withholds geometry and uses the existing recovery checks", () => {
+test("a transient pose error withholds geometry and resumes on valid tracking", () => {
   const { scanner, frame } = captureHarness();
   const saved = scanner.keyframes.slice();
   const reads = frame.getDepthInformation.mock.calls.length;
@@ -525,7 +525,7 @@ test("a transient pose error withholds geometry and uses the existing recovery c
   expect(scanner.stats.tracking).toBe(false);
   expect(frame.getDepthInformation).toHaveBeenCalledTimes(reads);
   scanner.frame(1800, frame);
-  expect(scanner.capture.state).toBe("recovering");
+  expect(scanner.capture.state).toBe("tracking");
   scanner.frame(2200, frame);
   expect(scanner.capture.state).toBe("tracking");
   expect(scanner.keyframes.map(value => value.captureId)).toEqual(saved.map(value => value.captureId));
@@ -642,7 +642,7 @@ test("cleanup completes once even when individual resources fail", () => {
   expect(scanner.hitSource).toBeNull();
 });
 
-test("emulated tracking withholds geometry and automatically confirms recovery in two observations", () => {
+test("emulated tracking withholds geometry and the first valid view resumes capture", () => {
   const { scanner, frame, move, setEmulated } = captureHarness();
   expect(scanner.keyframes).toHaveLength(2);
   const reads = frame.getDepthInformation.mock.calls.length;
@@ -657,7 +657,7 @@ test("emulated tracking withholds geometry and automatically confirms recovery i
   setEmulated(false);
   move(0.1);
   scanner.frame(1800, frame);
-  expect(scanner.stats.adaptiveCapture.state).toBe("recovering");
+  expect(scanner.stats.adaptiveCapture.state).toBe("tracking");
   scanner.frame(2200, frame);
   expect(scanner.stats.adaptiveCapture.state).toBe("tracking");
   expect(scanner.stats.adaptiveCapture.connected).toBe(true);
@@ -741,13 +741,13 @@ test("three brief motion skips preserve the saved map and resume without recover
   expect(scanner.stats.captureDiagnostics.attempts).toBe(6);
 });
 
-test("a soft skip between reliable recovery observations does not restart reconnection", () => {
+test("a motion skip after tracking returns does not restart reconnection", () => {
   const { scanner, frame, view, setEmulated } = captureHarness();
   setEmulated(true);
   scanner.frame(1300, frame);
   setEmulated(false);
   scanner.frame(1600, frame);
-  expect(scanner.stats.frameQuality).toBe("confirming-recovery");
+  expect(scanner.stats.frameQuality).toBe("connected");
   const pose = scanner.keyframePose(view);
   scanner.recordCameraMotion(pose, 1700);
   scanner.recordCameraMotion({ ...pose, position: { ...pose.position, x: 0.15 } }, 1720);
@@ -760,32 +760,34 @@ test("a soft skip between reliable recovery observations does not restart reconn
   expect(scanner.stats.captureDiagnostics.prompts.reconnect).toBe(0);
 });
 
-test("a conflicting depth read between valid recovery views does not stop new views saving", () => {
+test("changing depth measurements do not block tracked views before reconstruction", () => {
   const { scanner, frame, move, setDepth, setEmulated } = captureHarness();
   setEmulated(true);
   scanner.frame(1300, frame);
   setEmulated(false);
   move(0.1);
   scanner.frame(1600, frame);
-  expect(scanner.stats.frameQuality).toBe("confirming-recovery");
+  expect(scanner.stats.frameQuality).toBe("connected");
   setDepth(2.35);
-  scanner.frame(2000, frame);
-  expect(scanner.stats.frameQuality).toBe("alignment-conflict");
-  expect(scanner.keyframes).toHaveLength(2);
-  setDepth(2);
   move(0.16);
-  scanner.frame(2400, frame);
+  scanner.frame(2000, frame);
   expect(scanner.stats.frameQuality).toBe("connected");
   expect(scanner.keyframes).toHaveLength(3);
-  expect(scanner.stats.adaptiveCapture).toMatchObject({ connected: true, state: "tracking" });
-  expect(scanner.keyframes.every(saved => Math.abs(saved.depths[0] - 2) < 0.001)).toBe(true);
-  expect(scanner.stats.captureDiagnostics.decisions["alignment-conflict"]).toBe(1);
+  expect(scanner.keyframes[2].depths[0]).toBeCloseTo(2.35);
+  setDepth(2);
+  move(0.24);
+  scanner.frame(2400, frame);
+  expect(scanner.stats.frameQuality).toBe("connected");
+  expect(scanner.keyframes).toHaveLength(4);
+  expect(scanner.stats.adaptiveCapture).toMatchObject({ connected: true, state: "tracking", validationMode: "xr-tracking" });
+  expect(scanner.stats.captureDiagnostics.decisions["alignment-conflict"]).toBe(0);
   expect(scanner.stats.errors).toEqual([]);
   expect(scanner.paused).toBe(false);
 });
 
-test("runtime diagnostics retain the comparison and recovery evidence for each rejected view", () => {
+test("strict-mode runtime diagnostics retain comparisons and recovery evidence", () => {
   const { scanner, frame, move, setDepth } = captureHarness();
+  scanner.capture.validateOverlap = true;
   scanner.runtimeDiagnostics = new CaptureRuntimeDiagnostics();
   setDepth(2.35);
   scanner.frame(1400, frame);
@@ -904,27 +906,40 @@ test("repeated depth read errors are distinguished from missing sensor frames", 
   expect(scanner.keyframes).toHaveLength(2);
 });
 
-test.each([
-  ["narrow", { compared: 24, agreeing: 22, tiles: 4, support: 0.09,
-    agreement: 0.92, median: 0.01, upper: 0.02, freeSpaceRatio: 0 }],
-  ["near-threshold", { compared: 150, agreeing: 60, tiles: 9, support: 0.24,
-    agreement: 0.46, median: 0.058, upper: 0.098, freeSpaceRatio: 0.04 }],
-])("a corroborated %s bridge adds views to the same saved scan", (_kind, measured) => {
-  const { scanner, frame, move } = captureHarness();
-  scanner.capture.compare = (left, right) => ({
-    accepted: left.timestamp > 1000 && right.timestamp > 1000,
-    conflict: false, overlap: measured.support, forward: measured, backward: measured,
+test("turning toward another area saves immediately without a bridge or overlap recheck", () => {
+  const { scanner, frame, view, move, setDepth } = captureHarness();
+  scanner.runtimeDiagnostics = new CaptureRuntimeDiagnostics();
+  scanner.capture.compare = jest.fn(() => { throw new Error("live overlap must not run"); });
+  move(0.16);
+  view.transform.matrix = new Matrix4().makeRotationY(0.6).setPosition(0.16, 1.6, 0).elements;
+  view.transform.orientation = { x: 0, y: Math.sin(0.3), z: 0, w: Math.cos(0.3) };
+  setDepth(2.35);
+  scanner.frame(2400, frame);
+  expect(scanner.keyframes).toHaveLength(3);
+  expect(scanner.stats.frameQuality).toBe("connected");
+  expect(scanner.stats.adaptiveCapture.connected).toBe(true);
+  expect(scanner.stats.fusionKeyframes).toBe(3);
+  expect(scanner.capture.compare).not.toHaveBeenCalled();
+  const runtime = scanner.runtimeDiagnostics.snapshot();
+  expect(runtime.state.captureValidationMode).toBe("xr-tracking");
+  expect(runtime.events.filter(event => event.type === "capture").at(-1)).toMatchObject({
+    reason: "connected", accepted: true, committed: 1, state: "tracking", comparisons: [],
   });
+});
+
+test.each([0, NaN, 0.3, 9])("unusable depth (%s) still withholds geometry", depth => {
+  const { scanner, frame, move, setDepth } = captureHarness();
+  const saved = scanner.keyframes.slice();
+  setDepth(depth);
   move(0.16);
   scanner.frame(1400, frame);
-  expect(scanner.keyframes).toHaveLength(2);
-  expect(scanner.stats.frameQuality).toBe("confirming-bridge");
-  move(0.23);
+  expect(scanner.keyframes).toEqual(saved);
+  expect(scanner.stats.acceptedDepthFrames).toBe(1);
+  expect(scanner.stats.captureDiagnostics.recent.at(-1).accepted).toBe(false);
+  setDepth(2);
   scanner.frame(1800, frame);
-  expect(scanner.keyframes).toHaveLength(4);
-  expect(scanner.stats.adaptiveCapture.connected).toBe(true);
-  expect(scanner.stats.fusionKeyframes).toBe(4);
-  expect(scanner.stats.captureDiagnostics.decisions["confirming-bridge"]).toBe(1);
+  expect(scanner.keyframes).toHaveLength(3);
+  expect(scanner.stats.frameQuality).toBe("connected");
 });
 
 test("preview maintenance batches redundant frame removals but final result is exact", () => {
@@ -975,15 +990,15 @@ test("the amber target is reserved for sustained reconnection, not routine cover
   expect(scanner.recoveryMarker.visible).toBe(false);
 });
 
-test("a shifted depth layer is withheld and does not increment accepted capture counts", () => {
+test("a stationary depth change does not force live overlap recovery or add a redundant view", () => {
   const { scanner, frame, setDepth } = captureHarness();
   const accepted = scanner.stats.acceptedDepthFrames;
   setDepth(2.25);
   scanner.frame(1500, frame);
   expect(scanner.keyframes).toHaveLength(2);
-  expect(scanner.stats.acceptedDepthFrames).toBe(accepted);
-  expect(scanner.stats.rejectedDepthFrames).toBeGreaterThan(0);
-  expect(scanner.stats.adaptiveCapture.state).toBe("recovering");
+  expect(scanner.stats.acceptedDepthFrames).toBe(accepted + 1);
+  expect(scanner.stats.adaptiveCapture.state).toBe("tracking");
+  expect(scanner.stats.captureDiagnostics.recent.at(-1)).toMatchObject({ accepted: true, committed: 0 });
 });
 
 test("faster depth sampling does not perform synchronous RGB readback every frame", () => {
