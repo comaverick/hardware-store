@@ -199,7 +199,8 @@ function rawStats(stats) {
   const adaptive = stats?.adaptiveCapture;
   if (adaptive && typeof adaptive === "object") {
     const numeric = ["version", "frameCount", "pendingCount", "recoveries", "promoted", "expired", "removed", "capacityStops",
-      "pendingAgeDrops", "pendingCapacityDrops", "pendingRedundantDrops", "pendingConflictDrops", "pendingResetDrops"];
+      "pendingAgeDrops", "pendingCapacityDrops", "pendingRedundantDrops", "pendingConflictDrops", "pendingResetDrops",
+      "shortcutLinks", "seedRecheckCount", "seedRepairs", "seedDiscardedFrames", "localConflictBypasses"];
     const regions = (Array.isArray(adaptive.coverage?.regions) ? adaptive.coverage.regions : []).slice(0, 3)
       .filter(region => ["lower", "middle", "upper"].includes(region?.id)).map(region => ({
         id: region.id, observed: Math.max(0, finite(region.observed)), confirmed: Math.max(0, finite(region.confirmed)),

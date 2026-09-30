@@ -2,11 +2,12 @@ import { depthPosition, filterDepth, gridIndex, projectWorld, sampleProjectiveDe
 import { fastMotionShare } from "./captureExperience";
 import { MIN_SURFACE_CAMERA_BASELINE_METERS } from "./readiness";
 
-export const ADAPTIVE_CAPTURE_VERSION = 2;
+export const ADAPTIVE_CAPTURE_VERSION = 3;
 export const MIN_REGION_OBSERVATIONS = 12;
 export const MIN_REGION_CONFIRMATION = 0.55;
 const OVERLAP_GRACE_MS = 900;
 const RECOVERY_EVIDENCE_MS = 1800;
+const SEED_RECHECK_MIN_MS = 240;
 const PENDING_AGE_MS = 8000;
 const hardFailures = new Set(["tracking-lost", "tracking-reset", "camera-jump", "alignment-conflict"]);
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
@@ -116,6 +117,11 @@ export function adaptiveCaptureProfile({ depthType = "", width = 0, height = 0, 
     interval: Math.round(clamp(motionInterval, minimumInterval, Math.max(350, minimumInterval))),
     maxLinearSpeed: weak ? 0.25 : limited ? 0.35 : 0.45,
     maxAngularSpeed: weak ? 0.38 : limited ? 0.5 : 0.6,
+    // Normal hand sweeps may exceed the preferred speeds. They still need
+    // measured overlap; only fast motion is rejected before reading depth.
+    hardMaxLinearSpeed: weak ? 0.65 : limited ? 0.75 : 0.85,
+    hardMaxAngularSpeed: weak ? 0.9 : limited ? 1.1 : 1.2,
+    recoveryInterval: Math.round(clamp(processingMs * 1.5, 120, 600)),
     // Preview and coverage maintenance can delay the next attempt, but must
     // not make the measured depth grid coarser. Only geometry work controls it.
     sampleLongSide: geometryProcessingMs > 90 ? 64 : detail && geometryProcessingMs < 45 ? 128 : 96,
@@ -187,8 +193,8 @@ export function captureOverlap(left, right) {
     value.support >= 0.12 && value.agreement >= 0.6 && value.median <= 0.055 && value.upper <= 0.09;
   return {
     accepted: passes(forward) && passes(backward),
-    // A strong one-direction free-space contradiction must not be hidden by
-    // an occluded reverse projection or a matching recent drifted frame.
+    // Report a one-direction contradiction even when the reverse projection
+    // is occluded. The caller needs independent recent support to override it.
     conflict: [forward, backward].some(value => value.compared >= 65 && value.overlap > 0.55 && value.freeSpaceRatio > 0.65),
     overlap: Math.min(forward.support, backward.support),
     median: Math.max(forward.median, backward.median),
@@ -273,11 +279,13 @@ export class AdaptiveCapture {
     this.recoveryMatches = 0;
     this.pendingSupport = new WeakMap();
     this.pendingBridgeEdges = new WeakMap();
+    this.seedEvidence = [];
     this.coverageDirty = true;
     this.coverage = connectedCoverage([]);
     this.events = { recoveries: 0, promoted: 0, expired: 0, removed: 0, capacityStops: 0,
       pendingAgeDrops: 0, pendingCapacityDrops: 0, pendingRedundantDrops: 0,
-      pendingConflictDrops: 0, pendingResetDrops: 0, shortcutLinks: 0 };
+      pendingConflictDrops: 0, pendingResetDrops: 0, shortcutLinks: 0,
+      seedRepairs: 0, seedDiscardedFrames: 0, localConflictBypasses: 0 };
   }
   clearRecoveryEvidence() {
     this.recoveryMatches = 0;
@@ -286,6 +294,7 @@ export class AdaptiveCapture {
   }
   recover(reason, timestamp = this.lastSeen) {
     if (!this.frames.length) return;
+    if (reason !== "alignment-conflict") this.seedEvidence = [];
     if (this.state !== "recovering") {
       this.events.recoveries++;
       this.recoveryStartedAt = timestamp;
@@ -298,7 +307,10 @@ export class AdaptiveCapture {
     // Motion, sparse depth and sensor read failures describe this observation,
     // not a change of coordinate system. Keep recent validated recovery evidence
     // across those skips; a contradictory pose or stale evidence invalidates it.
-    if (hardFailures.has(reason)) this.recover(reason, timestamp);
+    if (hardFailures.has(reason)) {
+      this.seedEvidence = [];
+      this.recover(reason, timestamp);
+    }
     else if (this.lastRecoveryMatchAt != null && timestamp - this.lastRecoveryMatchAt > RECOVERY_EVIDENCE_MS)
       this.clearRecoveryEvidence();
     if (reason === "tracking-reset") {
@@ -308,6 +320,7 @@ export class AdaptiveCapture {
     if (this.state === "checking" && timestamp - this.uncertainSince >= OVERLAP_GRACE_MS)
       this.recover("overlap-lost", timestamp);
     this.lastSeen = timestamp;
+    this.seedEvidence = this.seedEvidence.filter(frame => timestamp - frame.timestamp <= RECOVERY_EVIDENCE_MS);
     this.expire(timestamp);
   }
   expire(timestamp) {
@@ -359,11 +372,64 @@ export class AdaptiveCapture {
   }
   matches(frame) {
     const results = this.references(frame).map(reference => ({ reference, result: this.compare(frame, reference) }));
-    const best = results.slice().sort((a, b) => b.result.overlap - a.result.overlap)[0];
-    return { edges: results.filter(value => value.result.accepted).map(value => value.reference.captureId),
+    const agreeing = results.filter(value => value.result.accepted && !value.result.conflict);
+    const conflicting = results.filter(value => value.result.conflict);
+    const recent = agreeing.filter(value => this.frames.slice(-3).includes(value.reference));
+    // An old observation cannot veto a stronger, independently positioned
+    // recent pair. Contradictions with a recent view still block admission.
+    const localConsensus = agreeing.length > conflicting.length && recent.some((a, index) =>
+      recent.slice(index + 1).some(b => distance(camera(a.reference), camera(b.reference)) >= 0.04 &&
+        this.links.get(a.reference.captureId)?.has(b.reference.captureId) &&
+        conflicting.every(value => value.reference.timestamp < Math.min(a.reference.timestamp, b.reference.timestamp))));
+    const best = (agreeing.length ? agreeing : results).slice().sort((a, b) => b.result.overlap - a.result.overlap)[0];
+    return { edges: agreeing.map(value => value.reference.captureId),
       bridgeEdges: results.filter(value => captureBridgeOverlap(value.result)).map(value => value.reference.captureId),
-      conflict: results.some(value => value.result.conflict),
+      conflict: conflicting.length > 0 && !localConsensus,
+      conflictingReferences: conflicting.map(value => value.reference),
+      localConsensus: conflicting.length > 0 && localConsensus,
       best: best?.result, bestReference: best?.reference };
+  }
+  recheckStartingPair(frame, match) {
+    // Only a scan stuck at its original two views can replace its seed. Never
+    // discard an established map or join a disconnected section on a timeout.
+    if (this.frames.length !== 2 || this.maximumFrames < 3 || this.maximumPending < 3 || this.events.seedRepairs ||
+        match.edges.length || match.conflictingReferences.length !== 2) {
+      this.seedEvidence = [];
+      return false;
+    }
+    const strong = result => result.accepted && !result.conflict && [result.forward, result.backward].every(value =>
+      value && value.compared >= 48 && value.agreeing >= 42 && value.tiles >= 6 && value.support >= 0.25 &&
+      value.agreement >= 0.8 && value.median <= 0.04 && value.upper <= 0.065 && value.freeSpaceRatio <= 0.1);
+    this.events.pendingConflictDrops += this.pending.length;
+    this.pending = [];
+    this.seedEvidence = this.seedEvidence.filter(value => frame.timestamp - value.timestamp <= RECOVERY_EVIDENCE_MS);
+    if (this.seedEvidence.some(value => !strong(this.compare(frame, value)))) this.seedEvidence = [];
+    if (this.seedEvidence.length < 3 && this.seedEvidence.every(value => distance(camera(frame), camera(value)) >= 0.04))
+      this.seedEvidence.push(frame);
+    else if (this.seedEvidence.length === 3 && this.seedEvidence.slice(0, 2)
+      .every(value => distance(camera(frame), camera(value)) >= 0.04)) this.seedEvidence[2] = frame;
+    this.reason = "rechecking-start";
+    if (this.seedEvidence.length < 3 || this.seedEvidence[2].timestamp - this.seedEvidence[0].timestamp < SEED_RECHECK_MIN_MS)
+      return false;
+    const evidence = this.seedEvidence;
+    // All three pairs must agree, not just a chain that drifts between layers.
+    if (!strong(this.compare(evidence[0], evidence[1]))) return false;
+    const discarded = this.frames.length;
+    this.frames = [];
+    this.links.clear();
+    evidence.forEach((value, index) => this.commit(value, evidence.slice(0, index).map(other => other.captureId)));
+    this.pending = [];
+    this.seedEvidence = [];
+    this.events.seedRepairs++;
+    this.events.seedDiscardedFrames += discarded;
+    this.state = "tracking";
+    this.reason = "connected";
+    this.uncertainSince = null;
+    this.lastReliableAt = frame.timestamp;
+    this.lastMatch = this.compare(frame, evidence[0]);
+    this.lastReference = evidence[0];
+    this.clearRecoveryEvidence();
+    return true;
   }
   reconnectPendingBridge(frame, timestamp) {
     // A single small coincidental patch must never enter the saved scan. Two
@@ -493,8 +559,12 @@ export class AdaptiveCapture {
     this.lastReference = match.bestReference;
     if (match.conflict) {
       this.recover("alignment-conflict", time);
+      if (this.recheckStartingPair(frame, match))
+        return { accepted: true, committed: this.frames.slice(), reason: "connected", reseeded: true, match: this.lastMatch };
       return { accepted: false, committed: [], reason: this.reason };
     }
+    this.seedEvidence = [];
+    if (match.localConsensus) this.events.localConflictBypasses++;
     if (!match.edges.length) {
       // A single uncertain depth read is not evidence that the previous good
       // recovery view was wrong. Keep it briefly; the next good view must still
@@ -580,11 +650,12 @@ export class AdaptiveCapture {
     }
     this.frames.forEach(frame => { frame.captureLinks = [...(this.links.get(frame.captureId) || [])]; });
     const bridge = this.pending.find(value => this.pendingBridgeEdges.get(value)?.length);
-    const anchor = !this.frames.length ? this.pending[0] : bridge;
+    const anchor = !this.frames.length ? this.pending[0] : this.seedEvidence[0] || bridge;
     const recoveryBaseline = anchor && this.lastObserved ? distance(camera(anchor), camera(this.lastObserved)) : 0;
     return { version: ADAPTIVE_CAPTURE_VERSION, state: this.state, reason: this.reason,
       connected: this.frames.length >= 2 && graphConnected(this.frames, this.links),
-      frameCount: this.frames.length, pendingCount: this.pending.length,
+      frameCount: this.frames.length, pendingCount: this.pending.length + this.seedEvidence.length,
+      seedRecheckCount: this.seedEvidence.length,
       capacityReached: !!this.capacityReached, coverage: this.coverage,
       recoveryBaseline, needsTranslation: !!anchor && recoveryBaseline < 0.04, ...this.events };
   }

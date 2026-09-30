@@ -45,7 +45,8 @@ export function captureProgressSummary(stats = {}) {
   );
   const frames = Math.max(0, Number(stats.fusionKeyframes) || 0);
   const frameLimit = Math.max(0, Number(stats.fusionKeyframeLimit) || 0);
-  const verifiedTotal = Math.max(frames, Number(stats.captureDiagnostics?.committedFrames) || 0);
+  const verifiedTotal = Math.max(frames, (Number(stats.captureDiagnostics?.committedFrames) || 0) -
+    (Number(adaptive.seedDiscardedFrames) || 0));
   const weak = normalized.find(region => region.state === "weak");
   const building = normalized.find(region => region.state === "building");
   const observed = normalized.some(region => region.observed > 0);

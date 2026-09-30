@@ -743,6 +743,56 @@ test("a shifted depth layer is withheld and does not increment accepted capture 
   expect(scanner.stats.adaptiveCapture.state).toBe("recovering");
 });
 
+test("a normal moving sweep saves agreeing depth without reading a blurred camera image", () => {
+  const { scanner, frame, view, move } = captureHarness();
+  scanner.binding = {};
+  view.camera = { width: 360, height: 720 };
+  scanner.colorReader = { read: jest.fn() };
+  move(0.20);
+  scanner.captureDepthFrame(1200, frame, view);
+  expect(scanner.stats.gateLinearSpeed).toBeCloseTo(0.6);
+  expect(scanner.stats.frameQuality).toBe("connected");
+  expect(scanner.stats.movingTooFast).toBe(false);
+  expect(scanner.keyframes).toHaveLength(3);
+  expect(scanner.colorReader.read).not.toHaveBeenCalled();
+});
+
+test("starting-pair repair resumes in a short continuous sweep and clears obsolete preview and texture", () => {
+  const { scanner, frame, view, move, setDepth } = captureHarness();
+  const original = scanner.keyframes.slice();
+  scanner.textureKeyframes = [{ timestamp: 1000, colorImage: new Uint8Array(4) }];
+  const rebuild = jest.spyOn(scanner, "rebuildPreviewCloud");
+  setDepth(2.25);
+  move(0.14);
+  scanner.captureDepthFrame(1300, frame, view);
+  expect(scanner.stats.frameQuality).toBe("rechecking-start");
+  move(0.20);
+  scanner.captureDepthFrame(1450, frame, view);
+  expect(scanner.keyframes).toEqual(original);
+  move(0.26);
+  scanner.captureDepthFrame(1600, frame, view);
+  expect(scanner.keyframes).toHaveLength(3);
+  expect(scanner.stats.adaptiveCapture).toMatchObject({ state: "tracking", connected: true, seedRepairs: 1 });
+  expect(scanner.textureKeyframes).toHaveLength(0);
+  expect(rebuild).toHaveBeenCalledTimes(1);
+  expect(scanner.previewNeedsRebuild).toBe(false);
+  expect(scanner.cloud.values().every(point => point.z < -2.1)).toBe(true);
+  expect(scanner.paused).toBe(false);
+});
+
+test("connection checks retry sooner than normal capture while respecting processing cost", () => {
+  const { scanner, frame, setDepth } = captureHarness();
+  setDepth(2.25);
+  scanner.frame(1400, frame);
+  expect(scanner.capture.state).toBe("recovering");
+  scanner.captureProcessingMs = 60;
+  const reads = frame.getDepthInformation.mock.calls.length;
+  scanner.frame(1520, frame);
+  expect(frame.getDepthInformation).toHaveBeenCalledTimes(reads + 1);
+  expect(scanner.stats.captureIntervalMs).toBe(120);
+  expect(scanner.keyframes).toHaveLength(2);
+});
+
 test("faster depth sampling does not perform synchronous RGB readback every frame", () => {
   const { scanner, frame, view } = captureHarness();
   scanner.binding = {};

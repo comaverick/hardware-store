@@ -99,8 +99,23 @@ test("bridge confirmation and conflicting depth have distinct guidance", () => {
     label: "Checking this connection" });
   experience.recordFrame({ timestamp: 3400, reason: "alignment-conflict", state: "recovering" });
   expect(experience.update(stats, 3400)).toMatchObject({ code: "stalled-alignment",
-    label: "Depth views disagree" });
+    label: "Checking depth alignment" });
   expect(experience.snapshot().decisions["confirming-bridge"]).toBe(1);
+});
+
+test("start rechecking invites a continuous sweep and escalates a persistent conflict after four seconds", () => {
+  const experience = new CaptureExperience();
+  const stats = { ...good(), fusionKeyframes: 2, currentViewChecked: false, frameQuality: "rechecking-start",
+    adaptiveCapture: { state: "recovering", connected: true } };
+  experience.recordFrame({ timestamp: 0, reason: "connected", accepted: true, committed: 2, state: "tracking" });
+  experience.recordFrame({ timestamp: 400, reason: "rechecking-start", state: "recovering" });
+  expect(experience.update(stats, 400)).toMatchObject({ code: "seed-recheck", tone: "active",
+    hint: expect.stringMatching(/keep sweeping sideways/i) });
+  experience.recordFrame({ timestamp: 2100, reason: "rechecking-start", state: "recovering" });
+  expect(experience.update(stats, 2100).code).toBe("stalled-start");
+  experience.recordFrame({ timestamp: 4100, reason: "rechecking-start", state: "recovering" });
+  expect(experience.update(stats, 4100)).toMatchObject({ code: "stalled-reposition", label: "Try a wider view" });
+  expect(experience.snapshot().decisions["rechecking-start"]).toBe(3);
 });
 
 test("a long spell of accepted but redundant views asks for a small sideways step", () => {

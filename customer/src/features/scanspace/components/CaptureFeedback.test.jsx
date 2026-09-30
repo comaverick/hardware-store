@@ -109,6 +109,16 @@ test("a true view-capacity stop is distinguished from a retained count of 60", (
   expect(screen.queryByText(/reached its safe view capacity/i)).not.toBeInTheDocument();
 });
 
+test("replaced starting views do not inflate saved progress", () => {
+  render(<CaptureProgress stats={{ fusionKeyframes: 3, currentViewChecked: true,
+    captureDiagnostics: { committedFrames: 5 },
+    adaptiveCapture: { connected: true, state: "tracking", seedDiscardedFrames: 2 },
+  }} />);
+  expect(screen.getByText("3")).toBeInTheDocument();
+  expect(screen.queryByText("5")).not.toBeInTheDocument();
+  expect(screen.queryByText(/views kept for review/)).not.toBeInTheDocument();
+});
+
 test("failed review offers both another pass and an explicit partial save", () => {
   const continueScan = jest.fn(), save = jest.fn();
   render(<CaptureAuditNotice audit={{ issues: ["Upper surfaces need another overlapping pass."] }} onContinue={continueScan} onSave={save} />);

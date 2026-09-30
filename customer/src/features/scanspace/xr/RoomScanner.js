@@ -663,13 +663,13 @@ export class RoomScanner {
         Math.max(motion.linearSpeed, motion.textureLinearSpeed || 0);
       this.stats.gateAngularSpeed = liveMotion?.depthAngularSpeed ??
         Math.max(motion.angularSpeed, motion.textureAngularSpeed || 0);
-      this.stats.maxLinearSpeed = this.captureProfile.maxLinearSpeed;
-      this.stats.maxAngularSpeed = this.captureProfile.maxAngularSpeed;
+      this.stats.maxLinearSpeed = this.captureProfile.hardMaxLinearSpeed;
+      this.stats.maxAngularSpeed = this.captureProfile.hardMaxAngularSpeed;
       this.stats.linearSpeed = motion.linearSpeed;
       this.stats.angularSpeed = motion.angularSpeed;
       const motionQuality = depthFrameQuality({ validSamples: 1, totalSamples: 1,
         linearSpeed: this.stats.gateLinearSpeed, angularSpeed: this.stats.gateAngularSpeed,
-        maxLinearSpeed: this.captureProfile.maxLinearSpeed, maxAngularSpeed: this.captureProfile.maxAngularSpeed });
+        maxLinearSpeed: this.captureProfile.hardMaxLinearSpeed, maxAngularSpeed: this.captureProfile.hardMaxAngularSpeed });
       if (!motionQuality.accepted) {
         // XR depth/camera handles cannot leave this callback. Reject motion
         // cheaply before thousands of depth reads or synchronous RGB readback.
@@ -691,7 +691,7 @@ export class RoomScanner {
       const obstructionRatio = framePoints.length ? obstructionPointCount / framePoints.length : 0;
       const quality = depthFrameQuality({ validSamples: framePoints.length, totalSamples: columns * rows,
         obstructionRatio, linearSpeed: this.stats.gateLinearSpeed, angularSpeed: this.stats.gateAngularSpeed,
-        maxLinearSpeed: this.captureProfile.maxLinearSpeed, maxAngularSpeed: this.captureProfile.maxAngularSpeed });
+        maxLinearSpeed: this.captureProfile.hardMaxLinearSpeed, maxAngularSpeed: this.captureProfile.hardMaxAngularSpeed });
       this.stats.frameQuality = quality.reason;
       this.stats.validDepthRatio = quality.validRatio;
       this.stats.movingTooFast = false;
@@ -795,8 +795,16 @@ export class RoomScanner {
         } else {
           this.stats.acceptedDepthFrames++;
           this.keyframes = this.capture.frames;
+          if (decision.reseeded) {
+            // Photos and splats from the contradicted seed must disappear
+            // immediately, rather than surviving a retention batch rebuild.
+            this.textureKeyframes = [];
+            this.stats.textureKeyframes = 0;
+            this.keyframePositions = [];
+            this.stats.cameraBaseline = this.stats.cameraTravel = 0;
+          }
           if (decision.committed.length) {
-            this.recordSavedPreview(previousFrames, decision.committed);
+            this.recordSavedPreview(previousFrames, decision.committed, { forceRebuild: decision.reseeded });
             this.recordCommittedViews(decision.committed);
             this.lastMeshPose = keyframePose;
           }
@@ -936,14 +944,16 @@ export class RoomScanner {
         // processing and quality gates resume on the first valid depth frame.
         const cheapDepthRetry = ["depth-missing", "depth-read-error", "xr-frame-stalled"]
           .includes(this.stats.depthFailureKind);
+        const checkingConnection = ["starting", "checking", "recovering"].includes(this.capture.state);
         const retryInterval = this.depthFailureSince != null && cheapDepthRetry
-          ? Math.min(profile.interval, DEPTH_RETRY_INTERVAL_MS) : profile.interval;
+          ? Math.min(profile.interval, DEPTH_RETRY_INTERVAL_MS)
+          : checkingConnection ? Math.min(profile.interval, profile.recoveryInterval) : profile.interval;
         const settledRetryInterval = Math.min(profile.interval,
           Math.max(120, Math.ceil(this.captureProcessingMs * 2) || 120));
         const settledAfterMotion = this.stats.frameQuality === "moving-too-fast" &&
           hasRecentMotionSupport(this.cameraMotion) &&
-          this.cameraMotion?.depthLinearSpeed <= profile.maxLinearSpeed &&
-          this.cameraMotion?.depthAngularSpeed <= profile.maxAngularSpeed &&
+          this.cameraMotion?.depthLinearSpeed <= profile.hardMaxLinearSpeed &&
+          this.cameraMotion?.depthAngularSpeed <= profile.hardMaxAngularSpeed &&
           elapsedSinceCapture >= settledRetryInterval;
         this.stats.captureIntervalMs = settledAfterMotion ? settledRetryInterval : retryInterval;
         if (!this.paused && view && (elapsedSinceCapture >= retryInterval || settledAfterMotion)) {
@@ -1003,7 +1013,7 @@ export class RoomScanner {
       state: this.capture.state,
       gateLinearSpeed: depthAvailable ? this.stats.gateLinearSpeed : 0,
       gateAngularSpeed: depthAvailable ? this.stats.gateAngularSpeed : 0,
-      maxLinearSpeed: this.captureProfile.maxLinearSpeed, maxAngularSpeed: this.captureProfile.maxAngularSpeed,
+      maxLinearSpeed: this.stats.maxLinearSpeed, maxAngularSpeed: this.stats.maxAngularSpeed,
       sampledLinearSpeed: depthAvailable ? this.stats.linearSpeed : 0,
       sampledAngularSpeed: depthAvailable ? this.stats.angularSpeed : 0,
       validDepthRatio: depthAvailable ? this.stats.validDepthRatio : 0,
@@ -1630,7 +1640,7 @@ export class RoomScanner {
       point => capturePointObserved(frame, [point.x, point.y, point.z]));
     this.previewDirty = true;
   }
-  recordSavedPreview(previousFrames, committed) {
+  recordSavedPreview(previousFrames, committed, { forceRebuild = false } = {}) {
     const removed = previousFrames.some(saved => !this.keyframes.includes(saved));
     if (removed) {
       this.liveSurfaces = [];
@@ -1643,7 +1653,7 @@ export class RoomScanner {
     // Retention removes low-novelty views. Keep their verified splats in the
     // live preview briefly, then batch the expensive exact rebuild. result()
     // always rebuilds from retained views before returning final geometry.
-    if (removed && this.previewDiscardedCount >= PREVIEW_REBUILD_AFTER_REMOVALS)
+    if (forceRebuild || (removed && this.previewDiscardedCount >= PREVIEW_REBUILD_AFTER_REMOVALS))
       this.rebuildPreviewCloud();
     else committed.forEach(saved => this.addSavedPreview(saved, saved.captureId));
   }

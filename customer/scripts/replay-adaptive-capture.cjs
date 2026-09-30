@@ -23,7 +23,7 @@ if (!process.argv[2]) {
       depthType: frame.depthType, width: frame.nativeDepthWidth, height: frame.nativeDepthHeight,
     }));
     const state = capture.snapshot();
-    assert(capture.frames.length <= 60 && capture.pending.length <= 6, "Capture memory limits exceeded");
+    assert(capture.frames.length <= 60 && state.pendingCount <= 6, "Capture memory limits exceeded");
     assert(!capture.frames.length || state.connected, "A disconnected view entered the saved graph");
     return { index, timestamp: frame.timestamp, reason: decision.reason,
       committed: decision.committed.length, retained: state.frameCount, pending: state.pendingCount,
@@ -35,7 +35,8 @@ if (!process.argv[2]) {
   capture.frames.forEach(frame => frame.captureLinks.forEach(id => {
     if (frame.captureId >= id) return;
     const neighbor = capture.frames.find(other => other.captureId === id);
-    assert(neighbor && captureOverlap(frame, neighbor).accepted, "A retained connection failed independent revalidation");
+    const agreement = neighbor && captureOverlap(frame, neighbor);
+    assert(agreement?.accepted && !agreement.conflict, "A retained connection failed independent revalidation");
     checkedConnections++;
   }));
   const times = decisions.map(row => row.elapsedMs).sort((a, b) => a - b);
@@ -44,6 +45,8 @@ if (!process.argv[2]) {
     inputFrames: raw.keyframes.length, retainedFrames: final.frameCount, checkedConnections,
     connected: final.connected, state: final.state, provisionalFrames: final.pendingCount,
     recoveries: final.recoveries, promoted: final.promoted, expired: final.expired,
+    seedRepairs: final.seedRepairs, seedDiscardedFrames: final.seedDiscardedFrames,
+    localConflictBypasses: final.localConflictBypasses,
     pendingDrops: { age: final.pendingAgeDrops, capacity: final.pendingCapacityDrops,
       redundant: final.pendingRedundantDrops, conflict: final.pendingConflictDrops, reset: final.pendingResetDrops },
     confirmedObservedArea: final.coverage.ratio,

@@ -3,16 +3,17 @@ import { MIN_SURFACE_CAMERA_BASELINE_METERS, MIN_SURFACE_FUSION_KEYFRAMES } from
 const WARNING_DELAY_MS = 1800;
 const PROMPT_COOLDOWN_MS = 4500;
 const COMPLETION_HOLD_MS = 4000;
-const SAVED_VIEW_STALL_MS = 3000;
+const SAVED_VIEW_STALL_MS = 2000;
+const REPOSITION_AFTER_MS = 4000;
 const CURRENT_ATTEMPT_MS = 1200;
 const MAX_RECENT_DECISIONS = 48;
 const states = ["starting", "tracking", "checking", "recovering", "tracking-lost", "paused"];
 const reasons = ["connected", "starting", "moving-too-fast", "sparse-depth", "near-field-obstruction",
   "depth-error", "depth-missing", "invalid-depth", "checking-overlap", "overlap-lost",
-  "alignment-conflict", "confirming-recovery", "confirming-bridge", "capacity", "unknown"];
+  "alignment-conflict", "rechecking-start", "confirming-recovery", "confirming-bridge", "capacity", "unknown"];
 const prompts = ["motion", "depth", "depth-retrying", "depth-stalled", "tracking", "reconnect", "reset", "unsupported", "capacity",
   "stalled-motion", "stalled-depth", "stalled-obstruction", "stalled-bridge", "stalled-alignment", "stalled-overlap",
-  "stalled-recovery", "stalled-position", "stalled-translation", "stalled-reposition"];
+  "stalled-recovery", "stalled-position", "stalled-translation", "stalled-reposition", "stalled-start"];
 const measurements = ["gateLinearSpeed", "gateAngularSpeed", "maxLinearSpeed", "maxAngularSpeed",
   "sampledLinearSpeed", "sampledAngularSpeed", "validDepthRatio", "overlap", "medianResidual",
   "upperResidual", "captureIntervalMs", "processingMs", "colorReadMs", "depthSamplingMs", "depthPreparationMs",
@@ -34,7 +35,7 @@ function stalledViewFeedback(latest, stats, stalledMs) {
   const reason = latest.reason;
   const warning = { tone: "warning", immediate: true, stalled: true };
   if (reason === "moving-too-fast") return { ...warning, code: "stalled-motion",
-    label: "Slow down to save a view", hint: "Sweep more slowly; ScanSpace will save a view automatically when it is steady." };
+    label: "Slow your sweep slightly", hint: "Keep moving smoothly across the surface; views save automatically." };
   if (reason === "sparse-depth") return { ...warning, code: "stalled-depth",
     label: "Depth is patchy", hint: "Step back slightly and aim at a well-lit, non-reflective surface." };
   if (reason === "near-field-obstruction") return { ...warning, code: "stalled-obstruction",
@@ -42,13 +43,15 @@ function stalledViewFeedback(latest, stats, stalledMs) {
   if (["starting", "confirming-bridge", "checking-overlap", "overlap-lost"].includes(reason) &&
       stats.adaptiveCapture?.needsTranslation) return { ...warning, code: "stalled-translation",
     label: "Add a sideways view", hint: "Take a small sideways step while keeping the same shared edge in view." };
-  if (["checking-overlap", "overlap-lost", "confirming-bridge", "confirming-recovery"].includes(reason) && stalledMs >= 10000)
+  if (["checking-overlap", "overlap-lost", "confirming-bridge", "confirming-recovery", "alignment-conflict", "rechecking-start"].includes(reason) && stalledMs >= REPOSITION_AFTER_MS)
     return { ...warning, code: "stalled-reposition", label: "Try a wider view",
       hint: "Step back slightly to include more of the saved area, then take a small sideways step." };
   if (reason === "confirming-bridge") return { ...warning, code: "stalled-bridge",
     label: "Checking this connection", hint: "Keep the same shared edge in view and take a small sideways step." };
   if (reason === "alignment-conflict") return { ...warning, code: "stalled-alignment",
-    label: "Depth views disagree", hint: "Keep some saved area visible and move slowly while alignment is checked." };
+    label: "Checking depth alignment", hint: "Sweep sideways with some saved area visible; capture keeps checking." };
+  if (reason === "rechecking-start") return { ...warning, code: "stalled-start",
+    label: "Checking first views", hint: "Keep sweeping sideways across the same area so the starting views can be checked." };
   if (reason === "overlap-lost" && latest.overlap >= 0.18)
     return { ...warning, code: "stalled-alignment", label: "Aligning this view",
       hint: "Keep the shared edge visible and take a small sideways step to check alignment." };
@@ -89,8 +92,10 @@ export function captureFeedbackCandidate(stats) {
   if (capture?.capacityReached) return { code: "capacity", tone: "warning", immediate: true,
     label: "This section is captured", hint: "Review and save this section before starting another." };
   if (stats.captureStall) return stats.captureStall;
+  if (stats.frameQuality === "rechecking-start") return { code: "seed-recheck", tone: "active",
+    label: "Checking first views", hint: "Keep sweeping sideways across the same area; capture continues automatically." };
   if (stats.movingTooFast) return { code: "motion", tone: "warning", label: "Move a little more slowly",
-    hint: "Slow your sweep; capture resumes automatically when the view is steady." };
+    hint: "Keep a smooth sideways sweep; capture resumes automatically." };
   if (capture?.state === "recovering") {
     if (["confirming-recovery", "confirming-bridge"].includes(stats.frameQuality)) return scanning();
     return { code: "reconnect", tone: "warning", label: "Reconnecting scan",
