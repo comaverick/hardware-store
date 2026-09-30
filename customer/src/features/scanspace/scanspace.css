@@ -1783,13 +1783,6 @@
   font-size: 9px;
 }
 .ss-capture-overlap strong { color: #e9f2ed; }
-.ss-capture-next {
-  margin: 7px 0 0;
-  color: #eef5f1;
-  font-size: 11px;
-  line-height: 1.4;
-}
-.ss-capture-next strong { color: #83f2cb; }
 .is-scanning .ss-scan-bottom {
   width: auto;
   max-width: 720px;

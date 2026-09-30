@@ -379,6 +379,9 @@ test("a materially better stationary depth revisit replaces one keyframe", () =>
     { width: 4, height: 4 },
     { linearSpeed: 0, angularSpeed: 0 },
   );
+  scanner.liveSurfaces = [{ kind: "wall", cells: ["0,0"] }];
+  scanner.stats.surfaceReady = true;
+  scanner.stats.checkedSurfaces = 1;
   const replaced = scanner.refreshNearbyDepthKeyframe(
     points(false),
     view,
@@ -393,6 +396,9 @@ test("a materially better stationary depth revisit replaces one keyframe", () =>
   expect(scanner.stats.depthRefreshes).toBe(1);
   expect(scanner.keyframes).toHaveLength(1);
   expect(scanner.keyframes[0].measuredDepthCount).toBeGreaterThan(0);
+  expect(scanner.liveSurfaces).toEqual([]);
+  expect(scanner.stats.surfaceReady).toBe(false);
+  expect(scanner.stats.checkedSurfaces).toBe(0);
 });
 
 test("keyframe retention preserves a bounded spatial path instead of dropping every other view", () => {
@@ -456,7 +462,7 @@ test("a transient depth read error is recorded without permanently pausing captu
 function captureHarness() {
   const scanner = new RoomScanner({ onUpdate: () => {} });
   scanner.session = { depthUsage: "cpu-optimized", depthType: "raw" };
-  scanner.renderer = { render: () => {} };
+  scanner.renderer = { render: () => {}, setAnimationLoop: () => {}, dispose: () => {} };
   scanner.updatePreview = () => {};
   const camera = new PerspectiveCamera(65, 1, 0.1, 20);
   const view = { projectionMatrix: camera.projectionMatrix.elements, transform: {
@@ -515,7 +521,7 @@ test("an out-and-back shake is rejected even when the sampled depth poses are id
   expect(event.sampledLinearSpeed).toBe(0);
   expect(event.gateLinearSpeed).toBeGreaterThan(event.maxLinearSpeed);
   expect(event.matched).toBe(false);
-  expect(scanner.stats.captureFeedback.code).toBe("confirmed");
+  expect(scanner.stats.captureFeedback.code).toBe("scanning");
 });
 
 test("a brief pose spike does not veto settled depth, but still protects color", () => {
@@ -749,6 +755,83 @@ test("faster depth sampling does not perform synchronous RGB readback every fram
   scanner.captureDepthFrame(1890, frame, view);
   expect(scanner.colorReader.read).toHaveBeenCalledTimes(2);
   expect(scanner.keyframes).toHaveLength(2);
+});
+
+test("a motion rejection avoids both the depth grid and camera readback without weakening the next gate", () => {
+  const { scanner, frame, view, move } = captureHarness();
+  const getDepthInMeters = jest.fn(() => 2), read = jest.fn();
+  frame.getDepthInformation.mockReturnValue({ width: 320, height: 240, getDepthInMeters });
+  scanner.binding = {};
+  view.camera = { width: 360, height: 720 };
+  scanner.colorReader = { read };
+  const validRatio = scanner.stats.validDepthRatio;
+  move(0.6);
+  scanner.captureDepthFrame(1100, frame, view);
+  expect(scanner.stats.frameQuality).toBe("moving-too-fast");
+  expect(getDepthInMeters).not.toHaveBeenCalled();
+  expect(read).not.toHaveBeenCalled();
+  expect(scanner.stats.validDepthRatio).toBe(validRatio);
+  expect(scanner.stats.depthSamplingSkips).toBe(1);
+  expect(scanner.keyframes).toHaveLength(2);
+  expect(scanner.stats.captureDiagnostics.recent.at(-1)).toMatchObject({ colorReadMs: 0, depthSamplingMs: 0 });
+});
+
+test("patchy depth is rejected before RGB readback", () => {
+  const { scanner, frame, view } = captureHarness();
+  frame.getDepthInformation.mockReturnValue({ width: 320, height: 240, getDepthInMeters: () => 0 });
+  scanner.binding = {};
+  view.camera = { width: 360, height: 720 };
+  scanner.colorReader = { read: jest.fn() };
+  scanner.captureDepthFrame(1500, frame, view);
+  expect(scanner.stats.frameQuality).toBe("sparse-depth");
+  expect(scanner.colorReader.read).not.toHaveBeenCalled();
+  expect(scanner.keyframes).toHaveLength(2);
+});
+
+test("a sharp stationary texture uses a slower refresh while novel views can get color sooner", () => {
+  const { scanner, view } = captureHarness();
+  scanner.lastColorPose = scanner.keyframePose(view);
+  scanner.lastColorReadAt = 1000;
+  scanner.stats.colorFocus = 10;
+  expect(scanner.shouldReadColor({}, scanner.keyframePose(view), 1500)).toBe(false);
+  expect(scanner.shouldReadColor({}, scanner.keyframePose(view), 2800)).toBe(true);
+  const novel = { ...scanner.keyframePose(view), position: { x: 0.24, y: 1.6, z: 0 } };
+  expect(scanner.shouldReadColor({}, novel, 1500)).toBe(true);
+  expect(scanner.shouldReadColor({ linearSpeed: 0.3, angularSpeed: 0.1 }, novel, 1500)).toBe(false);
+  expect(scanner.shouldReadColor({ linearSpeed: 0.3, angularSpeed: 0.1 }, novel, 2000)).toBe(true);
+});
+
+test("worker analysis never promotes provisional geometry and discards results for removed views", () => {
+  const { scanner } = captureHarness();
+  const worker = { postMessage: jest.fn(), terminate: jest.fn() };
+  scanner.startCaptureAnalysis(worker);
+  scanner.updateAdaptiveStats(3000);
+  expect(worker.postMessage).toHaveBeenCalledTimes(1);
+  const coverage = scanner.stats.adaptiveCapture.coverage;
+  const saved = scanner.keyframes[0];
+  scanner.keyframes = scanner.keyframes.filter(frame => frame !== saved);
+  worker.onmessage({ data: { type: "analysis", revision: 1,
+    result: { coverage: { observed: 9999, confirmed: 9999 }, surfaces: [] } } });
+  expect(scanner.stats.adaptiveCapture.coverage).toBe(coverage);
+  scanner.cleanup();
+  expect(worker.terminate).toHaveBeenCalledTimes(1);
+});
+
+test("an unchanged preview does not rebuild the saved point buffers", () => {
+  const { scanner, frame, view, move } = captureHarness();
+  scanner.positions = new Float32Array(36000);
+  scanner.colors = new Float32Array(36000);
+  scanner.pointGeometry = { attributes: { position: {}, color: {} }, setDrawRange: jest.fn() };
+  scanner.updatePreview = RoomScanner.prototype.updatePreview.bind(scanner);
+  const reads = jest.spyOn(scanner.cloud, "values");
+  scanner.updatePreview();
+  scanner.updatePreview();
+  expect(reads).toHaveBeenCalledTimes(1);
+  move(0.16);
+  scanner.captureDepthFrame(1700, frame, view);
+  scanner.updatePreview();
+  expect(reads).toHaveBeenCalledTimes(2);
+  expect(scanner.pointGeometry.setDrawRange).toHaveBeenCalledTimes(2);
 });
 
 test("nearby overlapping views with a shifted surface are rejected live", () => {

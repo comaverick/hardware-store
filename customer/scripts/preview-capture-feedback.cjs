@@ -71,7 +71,7 @@ function load(file) {
 }
 
 async function fixture(name) {
-  const recovering = name === "recovering", checking = name === "checking", moving = name === "motion";
+  const recovering = ["recovering", "bridge", "reposition"].includes(name), checking = name === "checking", moving = name === "motion";
   activeStats = {
     tracking: true, depthActive: true, depthCurrent: true, depthState: "active", floorY: 0,
     floorAutoDetected: true, fusionKeyframes: 12, cameraBaseline: 0.5, stablePointCount: 1600,
@@ -80,14 +80,24 @@ async function fixture(name) {
     currentConfirmedRatio: recovering || checking || moving ? 0 : 0.72, connectedSurfaceCoverage: 65,
     movingTooFast: moving, frameQuality: moving ? "moving-too-fast" : recovering ? "overlap-lost" : "connected",
     features: [], errors: [], colorActive: true, captureProfile: "careful",
-    recoveryDirection: "Hold still and turn slowly left toward your last scanned area.",
+    recoveryDirection: "Aim lower until the saved edge is visible.",
+    surfaceReady: name === "surface", surfaceKind: name === "surface" ? "wall" : null,
     adaptiveCapture: { connected: true, state: recovering ? "recovering" : checking ? "checking" : "tracking", pendingCount: recovering ? 4 : 0,
+      needsTranslation: name === "bridge",
       coverage: { ratio: 0.65, regions: [
         { id: "lower", observed: 100, confirmed: 70, ratio: 0.7 },
         { id: "middle", observed: 160, confirmed: 140, ratio: 0.875 },
         { id: "upper", observed: 80, confirmed: 16, ratio: 0.2 },
       ] } },
   };
+  if (["bridge", "reposition"].includes(name)) {
+    const { CaptureExperience } = load(path.join(rootDirectory, "src/features/scanspace/core/captureExperience.js"));
+    const experience = new CaptureExperience(), timestamp = name === "bridge" ? 3500 : 11000;
+    experience.recordFrame({ timestamp: 0, reason: "connected", accepted: true, committed: 12, state: "tracking" });
+    experience.recordFrame({ timestamp, reason: name === "bridge" ? "confirming-bridge" : "overlap-lost", state: "recovering" });
+    activeStats.captureFeedback = experience.update(activeStats, timestamp);
+    activeStats.captureStall = experience.captureStall;
+  }
   const root = createRoot(document.getElementById("root"));
   const Panel = load(path.join(rootDirectory, "src/features/scanspace/components/ScannerPanel.jsx")).default;
   await React.act(() => root.render(React.createElement(Panel, {
@@ -107,7 +117,7 @@ async function fixture(name) {
 
 (async () => {
   const pages = new Map();
-  for (const name of ["start", "tracking", "checking", "motion", "recovering", "review"]) pages.set(`/${name}`, await fixture(name));
+  for (const name of ["start", "tracking", "checking", "motion", "recovering", "bridge", "reposition", "surface", "review"]) pages.set(`/${name}`, await fixture(name));
   const cssPath = path.join(rootDirectory, "src/features/scanspace/scanspace.css");
   const server = http.createServer((request, response) => {
     const url = new URL(request.url, "http://127.0.0.1");

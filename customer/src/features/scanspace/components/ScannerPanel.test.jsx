@@ -141,7 +141,7 @@ test("a stalled scan shows the same actionable reason in progress and live statu
   await startPanel();
   expect(screen.getByText("No new view saved")).toBeInTheDocument();
   expect(screen.getByRole("status")).toHaveTextContent("Not enough overlap");
-  expect(screen.getAllByText(/turn back toward the last captured area/i)).toHaveLength(2);
+  expect(screen.getAllByText(/turn back toward the last captured area/i)).toHaveLength(1);
 });
 
 test("a stopped depth feed keeps review available and changes the recovery action", async () => {

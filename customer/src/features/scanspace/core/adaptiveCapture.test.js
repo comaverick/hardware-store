@@ -1,7 +1,7 @@
 import { Matrix4, PerspectiveCamera } from "three";
 import { createRgbdKeyframe } from "./fusion";
 import { unprojectDepth } from "./depth";
-import { AdaptiveCapture, adaptiveCaptureProfile, auditCapture, captureBridgeOverlap, captureOverlap, confirmedViewRatio, connectedCoverage } from "./adaptiveCapture";
+import { AdaptiveCapture, adaptiveCaptureProfile, auditCapture, captureBridgeOverlap, captureOverlap, confirmedViewCoverage, confirmedViewRatio, connectedCoverage } from "./adaptiveCapture";
 
 function wallFrame(x, timestamp, { yaw = 0, wallZ = -2, upperWallZ = null, sparse = false, visible = null } = {}) {
   const camera = new PerspectiveCamera(65, 1, 0.1, 20);
@@ -113,6 +113,27 @@ test("two displaced, agreeing views reconnect a narrow bridge into one saved sca
   expect(capture.snapshot().connected).toBe(true);
   expect(capture.frames).toHaveLength(4);
   expect(capture.pending).toHaveLength(0);
+});
+
+test("tiny sideways steps preserve the narrow bridge anchor until it can be corroborated", () => {
+  const capture = started();
+  const anchor = wallFrame(0.08, 650, { yaw: 1.1 });
+  capture.consider(anchor);
+  expect(capture.snapshot().needsTranslation).toBe(true);
+  for (let i = 1; i <= 9; i++) capture.consider(wallFrame(0.08 + i * 0.006, 650 + i * 120, { yaw: 1.1 }));
+  expect(capture.frames).toContain(anchor);
+  expect(capture.frames.length).toBeGreaterThanOrEqual(4);
+  expect(capture.snapshot()).toMatchObject({ connected: true, needsTranslation: false });
+});
+
+test("measured-view feedback keeps missing depth separate from confirmed measurements", () => {
+  const first = wallFrame(0, 100, { visible: (_u, v) => v < 0.35 });
+  const second = wallFrame(0.08, 400, { visible: (_u, v) => v < 0.35 });
+  const coverage = confirmedViewCoverage(second, [first, second]);
+  expect(coverage.ratio).toBeLessThan(0.4);
+  expect(coverage.measuredRatio).toBeGreaterThan(0.85);
+  expect(coverage.measured).toBeLessThan(coverage.sampled);
+  expect(confirmedViewCoverage(second, [first, wallFrame(0, 700)]).measuredRatio).toBe(0);
 });
 
 test("a narrow bridge cannot promote a second view from a shifted depth layer", () => {
@@ -305,6 +326,22 @@ test("capacity protects an irreplaceable connecting view instead of severing a c
   expect(auditCapture({ fusionKeyframes: 10, adaptiveCapture: capture.snapshot() }).issues.join(" ")).toMatch(/capacity/);
 });
 
+test("a freshly validated shortcut can compact a connecting view without severing the map", () => {
+  let recheck = false;
+  const compare = (a, b) => {
+    const x = Math.min(a.camera[0], b.camera[0]), y = Math.max(a.camera[0], b.camera[0]);
+    return { accepted: y - x < 0.11 || (recheck && x === 0 && y < 0.17), conflict: false, overlap: 0.8 };
+  };
+  const capture = started({ maximumFrames: 3, compare });
+  capture.consider(wallFrame(0.16, 700));
+  recheck = true;
+  expect(capture.consider(wallFrame(0.24, 1000)).accepted).toBe(true);
+  expect(capture.snapshot()).toMatchObject({ connected: true, capacityReached: false, shortcutLinks: 1 });
+  expect(capture.frames).toHaveLength(3);
+  for (const frame of capture.frames) for (const id of frame.captureLinks)
+    expect(compare(frame, capture.frames.find(other => other.captureId === id)).accepted).toBe(true);
+});
+
 test("adaptive timing follows motion, depth quality, detail and actual processing cost", () => {
   const still = adaptiveCaptureProfile({ depthType: "raw", width: 320, height: 240 });
   const moving = adaptiveCaptureProfile({ depthType: "raw", width: 320, height: 240, linearSpeed: 0.3 });
@@ -319,6 +356,14 @@ test("adaptive timing follows motion, depth quality, detail and actual processin
   const previewBusy = adaptiveCaptureProfile({ processingMs: 700, geometryProcessingMs: 20 });
   expect(previewBusy.interval).toBe(600);
   expect(previewBusy.sampleLongSide).toBe(96);
+});
+
+test("repeat-observed planes reduce duplicates while detail and weak depth keep dense spacing", () => {
+  const base = { depthType: "raw", width: 320, height: 240, surfaceReady: true };
+  expect(adaptiveCaptureProfile(base)).toMatchObject({ name: "surface", spacing: 0.12 });
+  expect(adaptiveCaptureProfile({ ...base, edgeRatio: 0.2 }).spacing).toBe(0.045);
+  expect(adaptiveCaptureProfile({ ...base, validRatio: 0.3 }).spacing).toBe(0.07);
+  expect(adaptiveCaptureProfile(base).maxLinearSpeed).toBe(adaptiveCaptureProfile({ ...base, surfaceReady: false }).maxLinearSpeed);
 });
 
 test("live coverage can use a recent snapshot while saved views still update immediately", () => {

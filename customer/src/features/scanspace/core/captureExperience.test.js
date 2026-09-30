@@ -85,7 +85,7 @@ test("measured shared depth reports alignment instead of blaming overlap", () =>
   experience.recordFrame({ timestamp: 3200, reason: "overlap-lost", state: "recovering",
     overlap: 0.27, medianResidual: 0.058, upperResidual: 0.095 });
   expect(experience.update(stats, 3200)).toMatchObject({ code: "stalled-alignment",
-    label: "Aligning this view", hint: expect.stringMatching(/keep trying/i) });
+    label: "Aligning this view", hint: expect.stringMatching(/sideways step/i) });
 });
 
 test("bridge confirmation and conflicting depth have distinct guidance", () => {
@@ -160,6 +160,37 @@ test("diagnostics distinguish gate peaks, useful commits, recovery time and paus
   expect(stats.recent[0]).toMatchObject({ gateLinearSpeed: 1.2, sampledLinearSpeed: 0, maxLinearSpeed: 0.35 });
   stats.decisions.connected = 999;
   expect(experience.snapshot().decisions.connected).toBe(1);
+});
+
+test("a narrow connection asks for translation and a prolonged overlap stall changes the action", () => {
+  const experience = new CaptureExperience();
+  const stats = { ...good(), currentViewChecked: false, currentConfirmedRatio: 0,
+    adaptiveCapture: { state: "recovering", connected: true, needsTranslation: true } };
+  experience.recordFrame({ timestamp: 0, reason: "connected", accepted: true, committed: 2, state: "tracking" });
+  experience.recordFrame({ timestamp: 3200, reason: "confirming-bridge", state: "recovering" });
+  expect(experience.update(stats, 3200)).toMatchObject({ code: "stalled-translation",
+    hint: expect.stringMatching(/sideways step.*shared edge/i) });
+  experience.recordFrame({ timestamp: 11500, reason: "overlap-lost", state: "recovering" });
+  expect(experience.update({ ...stats, adaptiveCapture: { ...stats.adaptiveCapture, needsTranslation: false } }, 11500))
+    .toMatchObject({ code: "stalled-reposition", hint: expect.stringMatching(/step back.*sideways step/i) });
+  expect(experience.snapshot().prompts["stalled-translation"]).toBe(1);
+  expect(experience.snapshot().prompts["stalled-reposition"]).toBe(1);
+});
+
+test("saved-view geometry drives guidance without requiring all missing raw-depth pixels to fill", () => {
+  expect(captureFeedback({ ...good(), surfaceReady: true, surfaceKind: "wall" })).toMatchObject({
+    code: "surface-confirmed", label: "Wall section captured" });
+  expect(captureFeedback({ ...good(), currentConfirmedRatio: 0.3, currentMeasuredConfirmedRatio: 0.94,
+    validDepthRatio: 0.3 })).toMatchObject({ code: "confirmed", label: "This view is checked" });
+  expect(captureFeedback({ ...good(), currentViewChecked: false, surfaceReady: true })).toMatchObject({ code: "scanning" });
+  expect(captureFeedback({ ...good(), surfaceReady: true, cameraBaseline: 0.12 })).toMatchObject({ code: "baseline" });
+});
+
+test("a completed-view message clears when the next area is unconfirmed", () => {
+  const experience = new CaptureExperience();
+  expect(experience.update({ ...good(), currentConfirmedRatio: 0.9 }, 0).code).toBe("confirmed");
+  expect(experience.update({ ...good(), currentViewChecked: false,
+    adaptiveCapture: { state: "checking", connected: true } }, 500).code).toBe("scanning");
 });
 
 test("raw diagnostics are bounded and exclude images, positions and arbitrary keys", () => {

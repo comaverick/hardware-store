@@ -7,9 +7,9 @@ test("coverage distinguishes unseen space from observed surface confirmation", (
     { id: "middle", observed: 100, ratio: 0.7 },
     { id: "upper", observed: 40, ratio: 0.2 },
   ] }} />);
-  expect(screen.getByText("Not scanned")).toBeInTheDocument();
-  expect(screen.getByText("Covered")).toBeInTheDocument();
-  expect(screen.getByText("Another pass")).toBeInTheDocument();
+  expect(screen.getByText("Not seen")).toBeInTheDocument();
+  expect(screen.getByText("Checked")).toBeInTheDocument();
+  expect(screen.getByText("Partial")).toBeInTheDocument();
   expect(screen.getByRole("progressbar", { name: "Upper surfaces confirmed" })).toHaveAttribute("value", "20");
 });
 
@@ -28,9 +28,10 @@ test("partial capture readiness depends on observed overlap, not a room sweep or
     } },
   }} />);
   expect(screen.queryByText("58%")).not.toBeInTheDocument();
-  expect(screen.getByText("70%")).toBeInTheDocument();
+  expect(screen.queryByText("70%")).not.toBeInTheDocument();
+  expect(screen.getByRole("progressbar", { name: "Walls and objects confirmed" })).toHaveAttribute("value", "70");
   expect(screen.getByText("Ready to review")).toBeInTheDocument();
-  expect(screen.getByText(/selected area has overlapping views/i)).toBeInTheDocument();
+  expect(screen.queryByText(/another overlapping pass/i)).not.toBeInTheDocument();
 });
 
 test("scan progress still accepts complete coverage across every height", () => {
@@ -44,7 +45,7 @@ test("scan progress still accepts complete coverage across every height", () => 
     } },
   }} />);
   expect(screen.getByText("Ready to review")).toBeInTheDocument();
-  expect(screen.getByText(/selected area has overlapping views/i)).toBeInTheDocument();
+  expect(screen.queryByText(/another overlapping pass/i)).not.toBeInTheDocument();
 });
 
 test("old motion rejections do not mask current capture progress", () => {
@@ -60,25 +61,26 @@ test("old motion rejections do not mask current capture progress", () => {
   expect(screen.queryByText(/many attempted views were rejected/i)).not.toBeInTheDocument();
 });
 
-test("a stalled scan displays the current action and clears the checking label", () => {
+test("progress reports a stall without duplicating the primary instruction", () => {
   render(<CaptureProgress stats={{ fusionKeyframes: 4, currentViewChecked: false,
     captureStall: { stalled: true, code: "stalled-overlap",
       hint: "Turn back until part of the last captured area is visible, then continue slowly." },
     adaptiveCapture: { state: "checking", connected: true, coverage: { ratio: .6 } },
   }} />);
   expect(screen.getByText("No new view saved")).toBeInTheDocument();
-  expect(screen.getByText(/turn back until part of the last captured area/i)).toBeInTheDocument();
+  expect(screen.queryByText(/turn back until part of the last captured area/i)).not.toBeInTheDocument();
   expect(screen.queryByText("Checking new view")).not.toBeInTheDocument();
 });
 
-test("a narrow camera baseline prompts a sideways view", () => {
+test("passive progress does not call a narrow baseline ready or add competing guidance", () => {
   render(<CaptureProgress stats={{ fusionKeyframes: 8, cameraBaseline: .12,
     adaptiveCapture: { connected: true, coverage: {
       regions: [{ id: "middle", observed: 100, ratio: .8 }],
     } },
   }} />);
   expect(screen.getByText("Capture saved")).toBeInTheDocument();
-  expect(screen.getByText(/sideways step/i)).toBeInTheDocument();
+  expect(screen.queryByText(/sideways step/i)).not.toBeInTheDocument();
+  expect(screen.queryByText("Ready to review")).not.toBeInTheDocument();
 });
 
 test("a depth outage replaces overlap guidance and explains the retained-view count", () => {
@@ -89,10 +91,11 @@ test("a depth outage replaces overlap guidance and explains the retained-view co
       regions: [{ id: "middle", observed: 100, ratio: .3 }],
     } },
   }} />);
-  expect(screen.getByText("Retained depth views")).toBeInTheDocument();
+  expect(screen.getByText("Saved views")).toBeInTheDocument();
   expect(screen.getByText("Depth stopped")).toBeInTheDocument();
-  expect(screen.getByText(/72 verified in this scan · 60 kept/i)).toBeInTheDocument();
-  expect(screen.getByText(/Review your saved scan now/i)).toBeInTheDocument();
+  expect(screen.getByText("72")).toBeInTheDocument();
+  expect(screen.getByText(/60 views kept for review/i)).toBeInTheDocument();
+  expect(screen.queryByText(/Review your saved scan now/i)).not.toBeInTheDocument();
   expect(screen.queryByText(/another overlapping pass/i)).not.toBeInTheDocument();
 });
 
@@ -103,7 +106,7 @@ test("a true view-capacity stop is distinguished from a retained count of 60", (
     } },
   }} />);
   expect(screen.getByText("Section captured")).toBeInTheDocument();
-  expect(screen.getByText(/reached its safe view capacity/i)).toBeInTheDocument();
+  expect(screen.queryByText(/reached its safe view capacity/i)).not.toBeInTheDocument();
 });
 
 test("failed review offers both another pass and an explicit partial save", () => {

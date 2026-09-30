@@ -47,14 +47,15 @@ export function capturePointObserved(frame, point) {
   return depth > 0 && Math.abs(depth - p.depth) <= depthTolerance(depth);
 }
 
-export function confirmedViewRatio(frame, savedFrames, maximumSamples = 480) {
+export function confirmedViewCoverage(frame, savedFrames, maximumSamples = 480) {
   const view = prepareCaptureFrame(frame);
   const references = savedFrames.map(saved => ({ frame: saved, camera: camera(saved) }));
   const stride = Math.max(1, Math.ceil(view.filteredDepth.length / maximumSamples));
-  let sampled = 0, confirmed = 0;
+  let sampled = 0, measured = 0, confirmed = 0;
   for (let index = 0; index < view.filteredDepth.length; index += stride) {
     sampled++;
     if (!view.measuredMask[index]) continue;
+    measured++;
     const point = view.positions.subarray(index * 3, index * 3 + 3), observers = [];
     for (const reference of references) {
       if (!capturePointObserved(reference.frame, point)) continue;
@@ -67,7 +68,12 @@ export function confirmedViewRatio(frame, savedFrames, maximumSamples = 480) {
   }
   // Missing depth stays in the denominator. A stationary live view is not an
   // additional saved viewpoint, even when it contains a clearer measurement.
-  return confirmed / Math.max(1, sampled);
+  return { ratio: confirmed / Math.max(1, sampled),
+    measuredRatio: confirmed / Math.max(1, measured), measured, confirmed, sampled };
+}
+
+export function confirmedViewRatio(frame, savedFrames, maximumSamples = 480) {
+  return confirmedViewCoverage(frame, savedFrames, maximumSamples).ratio;
 }
 
 export function captureDetail(frame) {
@@ -93,16 +99,19 @@ export function captureDetail(frame) {
 
 export function adaptiveCaptureProfile({ depthType = "", width = 0, height = 0, validRatio = 1,
   noise = 0, edgeRatio = 0, processingMs = 0, geometryProcessingMs = processingMs,
-  linearSpeed = 0, angularSpeed = 0 } = {}) {
+  linearSpeed = 0, angularSpeed = 0, surfaceReady = false } = {}) {
   const limited = depthType !== "raw" || (width * height > 0 && width * height < 20000);
   const weak = validRatio < 0.45 || noise > 0.012;
   const detail = edgeRatio > 0.09;
-  const spacing = detail ? 0.045 : limited ? 0.055 : 0.07;
-  const turn = detail ? 0.075 : 0.11;
+  // A measured, repeat-observed plane needs fewer duplicate views. New areas,
+  // noisy depth and object edges keep the original spacing and validation.
+  const settledSurface = surfaceReady && !weak && !detail;
+  const spacing = settledSurface ? 0.12 : detail ? 0.045 : limited ? 0.055 : 0.07;
+  const turn = settledSurface ? 0.16 : detail ? 0.075 : 0.11;
   const motionInterval = Math.min(spacing / Math.max(0.001, linearSpeed), turn / Math.max(0.001, angularSpeed)) * 700;
   const minimumInterval = clamp(processingMs * 3, 120, 600);
   return {
-    name: detail ? "detail" : limited || weak ? "careful" : "standard",
+    name: detail ? "detail" : settledSurface ? "surface" : limited || weak ? "careful" : "standard",
     spacing, turn,
     interval: Math.round(clamp(motionInterval, minimumInterval, Math.max(350, minimumInterval))),
     maxLinearSpeed: weak ? 0.25 : limited ? 0.35 : 0.45,
@@ -116,6 +125,7 @@ export function adaptiveCaptureProfile({ depthType = "", width = 0, height = 0, 
 function directionalAgreement(first, second, maximumSamples = 280) {
   const errors = [], tiles = new Set();
   let samples = 0, compared = 0, agreeing = 0, freeSpace = 0;
+  let sharedPoint = null, nearestCenter = Infinity;
   const stride = Math.max(1, Math.ceil(first.filteredDepth.length / maximumSamples));
   for (let index = 0; index < first.filteredDepth.length; index += stride) {
     if (!first.measuredMask[index]) continue;
@@ -135,11 +145,17 @@ function directionalAgreement(first, second, maximumSamples = 280) {
     if (Math.abs(difference) <= tolerance) {
       agreeing++;
       tiles.add(`${Math.floor(p.u * 4)},${Math.floor(p.v * 4)}`);
+      const centerDistance = Math.hypot((index % first.columns + 0.5) / first.columns - 0.5,
+        (Math.floor(index / first.columns) + 0.5) / first.rows - 0.5);
+      if (centerDistance < nearestCenter) {
+        nearestCenter = centerDistance;
+        sharedPoint = Array.from(first.positions.subarray(index * 3, index * 3 + 3));
+      }
     }
   }
   errors.sort((a, b) => a - b);
   return {
-    samples, compared, agreeing, tiles: tiles.size,
+    samples, compared, agreeing, tiles: tiles.size, sharedPoint,
     overlap: compared / Math.max(1, samples),
     support: agreeing / Math.max(1, samples),
     agreement: agreeing / Math.max(1, errors.length),
@@ -258,9 +274,10 @@ export class AdaptiveCapture {
     this.pendingSupport = new WeakMap();
     this.pendingBridgeEdges = new WeakMap();
     this.coverageDirty = true;
+    this.coverage = connectedCoverage([]);
     this.events = { recoveries: 0, promoted: 0, expired: 0, removed: 0, capacityStops: 0,
       pendingAgeDrops: 0, pendingCapacityDrops: 0, pendingRedundantDrops: 0,
-      pendingConflictDrops: 0, pendingResetDrops: 0 };
+      pendingConflictDrops: 0, pendingResetDrops: 0, shortcutLinks: 0 };
   }
   clearRecoveryEvidence() {
     this.recoveryMatches = 0;
@@ -303,7 +320,10 @@ export class AdaptiveCapture {
   buffer(frame, support = 0) {
     // Keep the starting pose fixed until there is enough translation. Replacing
     // it on each tiny step makes slow continuous movement look stationary forever.
-    const anchor = this.frames.length ? null : this.pending[0];
+    // Preserve a narrow bridge's starting pose too. Replacing it on every tiny
+    // step used to prevent a continuous slow sweep from ever reaching 4 cm.
+    const anchor = !this.frames.length ? this.pending[0] : this.pending
+      .find(value => this.pendingBridgeEdges.get(value)?.length);
     const near = this.pending.findIndex(value => value !== anchor &&
       distance(camera(value), camera(frame)) < 0.025 && angle(value, frame) < 0.04);
     const quality = value => (value.measuredDepthCount ?? value.validCount ?? 0) / Math.max(1, value.depths.length);
@@ -339,10 +359,11 @@ export class AdaptiveCapture {
   }
   matches(frame) {
     const results = this.references(frame).map(reference => ({ reference, result: this.compare(frame, reference) }));
+    const best = results.slice().sort((a, b) => b.result.overlap - a.result.overlap)[0];
     return { edges: results.filter(value => value.result.accepted).map(value => value.reference.captureId),
       bridgeEdges: results.filter(value => captureBridgeOverlap(value.result)).map(value => value.reference.captureId),
       conflict: results.some(value => value.result.conflict),
-      best: results.sort((a, b) => b.result.overlap - a.result.overlap)[0]?.result };
+      best: best?.result, bestReference: best?.reference };
   }
   reconnectPendingBridge(frame, timestamp) {
     // A single small coincidental patch must never enter the saved scan. Two
@@ -392,6 +413,30 @@ export class AdaptiveCapture {
     for (const neighbors of this.links.values()) neighbors.delete(frame.captureId);
     this.frames = this.frames.filter(value => value !== frame);
   }
+  connectNeighborsWithout(frame) {
+    if (graphConnected(this.frames, this.links, frame.captureId)) return true;
+    const neighbors = [...(this.links.get(frame.captureId) || [])]
+      .map(id => this.frames.find(value => value.captureId === id)).filter(Boolean);
+    // Only measured, bidirectional agreement can replace a connecting view.
+    // Keep the search bounded; an irreplaceable chain still stops safely.
+    if (neighbors.length > 8) return false;
+    const additions = [];
+    for (let i = 0; i < neighbors.length; i++) for (let j = i + 1; j < neighbors.length; j++) {
+      const a = neighbors[i], b = neighbors[j];
+      if (this.links.get(a.captureId)?.has(b.captureId)) continue;
+      const result = this.compare(a, b);
+      if (!result.accepted || result.conflict) continue;
+      this.links.get(a.captureId).add(b.captureId);
+      this.links.get(b.captureId).add(a.captureId);
+      additions.push([a.captureId, b.captureId]);
+      if (graphConnected(this.frames, this.links, frame.captureId)) {
+        this.events.shortcutLinks += additions.length;
+        return true;
+      }
+    }
+    additions.forEach(([a, b]) => { this.links.get(a).delete(b); this.links.get(b).delete(a); });
+    return false;
+  }
   commit(frame, edges) {
     this.frames.push(frame);
     this.links.set(frame.captureId, new Set(edges));
@@ -403,7 +448,10 @@ export class AdaptiveCapture {
             .map(other => distance(camera(value), camera(other)) + angle(value, other) * 0.3));
           return novelty(a) - novelty(b);
         });
-      const removable = candidates.find(value => graphConnected(this.frames, this.links, value.captureId));
+      // Search the most redundant views first. Spatially distinct wall/ceiling
+      // views retain priority over dense repeats along the same sweep.
+      const removable = candidates.find(value => graphConnected(this.frames, this.links, value.captureId)) ||
+        candidates.slice(0, 4).find(value => this.connectNeighborsWithout(value));
       if (!removable) {
         this.remove(frame);
         this.capacityReached = true;
@@ -442,6 +490,7 @@ export class AdaptiveCapture {
     const before = new Set(this.frames);
     const match = this.matches(frame);
     this.lastMatch = match.best;
+    this.lastReference = match.bestReference;
     if (match.conflict) {
       this.recover("alignment-conflict", time);
       return { accepted: false, committed: [], reason: this.reason };
@@ -530,10 +579,14 @@ export class AdaptiveCapture {
       this.coverageDirty = false;
     }
     this.frames.forEach(frame => { frame.captureLinks = [...(this.links.get(frame.captureId) || [])]; });
+    const bridge = this.pending.find(value => this.pendingBridgeEdges.get(value)?.length);
+    const anchor = !this.frames.length ? this.pending[0] : bridge;
+    const recoveryBaseline = anchor && this.lastObserved ? distance(camera(anchor), camera(this.lastObserved)) : 0;
     return { version: ADAPTIVE_CAPTURE_VERSION, state: this.state, reason: this.reason,
       connected: this.frames.length >= 2 && graphConnected(this.frames, this.links),
       frameCount: this.frames.length, pendingCount: this.pending.length,
-      capacityReached: !!this.capacityReached, coverage: this.coverage, ...this.events };
+      capacityReached: !!this.capacityReached, coverage: this.coverage,
+      recoveryBaseline, needsTranslation: !!anchor && recoveryBaseline < 0.04, ...this.events };
   }
 }
 

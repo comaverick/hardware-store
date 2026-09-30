@@ -427,7 +427,7 @@ export default function ScannerPanel({
           <>
             {!partial && <CaptureProgress stats={stats} />}
             <div className="ss-scan-bottom">
-              {!partial && <div className={`ss-scanning-target is-${targetState.tone}`} role="status" aria-live="polite" aria-atomic="true">
+              {!partial && <div className={`ss-scanning-target is-${targetState.tone}`} id="ss-capture-guidance" role="status" aria-live="polite" aria-atomic="true">
                 <i aria-hidden="true" />
                 <span><strong>{targetState.label}</strong><small>{targetState.hint}</small></span>
               </div>}
@@ -457,7 +457,7 @@ export default function ScannerPanel({
                   </button>
                   <button
                     className="ss-primary"
-                    aria-describedby="ss-capture-next"
+                    aria-describedby="ss-capture-guidance"
                     disabled={busy || stats.originChanged || !hasReconstructableCapture}
                     onClick={finishScan}
                   >
@@ -522,6 +522,20 @@ export default function ScannerPanel({
               captureProfile: stats.captureProfile || "careful",
               captureIntervalMs: stats.captureIntervalMs || 0,
               captureProcessingMs: stats.captureProcessingMs || 0,
+              captureAnalysisMode: stats.captureAnalysisMode || "inline",
+              analysisProcessingMs: stats.analysisProcessingMs || 0,
+              previewProcessingMs: Math.round(stats.previewProcessingMs || 0),
+              depthSamplingMs: Math.round(stats.depthSamplingMs || 0),
+              depthPreparationMs: Math.round(stats.depthPreparationMs || 0),
+              overlapProcessingMs: Math.round(stats.overlapProcessingMs || 0),
+              confirmationProcessingMs: Math.round(stats.confirmationProcessingMs || 0),
+              colorReadMs: Math.round(stats.colorReadMs || 0),
+              depthSamplingSkips: stats.depthSamplingSkips || 0,
+              checkedSurfaces: stats.checkedSurfaces || 0,
+              surfaceReady: !!stats.surfaceReady,
+              recoveryBaselineCm: Math.round((stats.adaptiveCapture?.recoveryBaseline || 0) * 100),
+              shortcutLinks: stats.adaptiveCapture?.shortcutLinks || 0,
+              observedSurfaceOverlap: `${stats.connectedSurfaceCoverage || 0}%`,
               provisionalViews: stats.adaptiveCapture?.pendingCount || 0,
               reconnectedViews: stats.adaptiveCapture?.promoted || 0,
               recoveryEvents: stats.adaptiveCapture?.recoveries || 0,
