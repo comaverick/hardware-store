@@ -1,5 +1,5 @@
 import { snapshotDepthCapture, restoreDepthCapture, CaptureRuntimeDiagnostics,
-  captureDebugEnabled, installCaptureRuntimeDebug } from "./captureDebug";
+  captureDebugEnabled, captureDebugDownloadOnEnd, installCaptureRuntimeDebug } from "./captureDebug";
 import { createRgbdKeyframe } from "./fusion";
 
 const readBlob = (blob) => new Promise((resolve, reject) => {
@@ -83,6 +83,44 @@ describe("runtime diagnostics", () => {
       fusionKeyframes: 0, xrFrames: 12, depthReads: 4, nativeDepthActive: false,
       depthFailureKind: "depth-missing",
     });
+  });
+
+  test("automatic download requires its explicit debug mode", () => {
+    expect(captureDebugDownloadOnEnd()).toBe(false);
+    window.history.replaceState({}, "", "/?scanspaceDebug=1");
+    expect(captureDebugEnabled()).toBe(true);
+    expect(captureDebugDownloadOnEnd()).toBe(false);
+    window.history.replaceState({}, "", "/?scanspaceDebug=download");
+    expect(captureDebugEnabled()).toBe(true);
+    expect(captureDebugDownloadOnEnd()).toBe(true);
+    window.history.replaceState({}, "", "/?scanspaceDebug=unexpected");
+    expect(captureDebugEnabled()).toBe(false);
+    expect(captureDebugDownloadOnEnd()).toBe(false);
+  });
+
+  test("capture events retain bounded comparison evidence without camera data or mutable references", () => {
+    const diagnostics = new CaptureRuntimeDiagnostics();
+    const direction = { samples: 120, compared: 110, agreeing: 70, tiles: 8,
+      overlap: 0.9, support: 0.58, agreement: 0.64, median: 0.05, upper: Infinity, freeSpaceRatio: 0.01 };
+    const comparisons = Array.from({ length: 20 }, (_, index) => ({
+      referenceId: index, accepted: false, conflict: index === 0,
+      overlap: 0.58, median: 0.05, upper: Infinity,
+      forward: { ...direction, positions: [1, 2, 3] }, backward: { ...direction },
+      colorImage: [255],
+    }));
+    diagnostics.record("capture", 1000, { reason: "alignment-conflict", accepted: false,
+      state: "recovering", recoveryEvidenceCount: 1, recoveryEvidenceAgeMs: 400,
+      gateLinearSpeed: 0.15, comparisons, positions: [1, 2, 3] });
+    const snapshot = diagnostics.snapshot();
+    expect(snapshot.events[0]).toMatchObject({ reason: "alignment-conflict", state: "recovering",
+      recoveryEvidenceCount: 1, recoveryEvidenceAgeMs: 400, gateLinearSpeed: 0.15 });
+    expect(snapshot.events[0].comparisons).toHaveLength(10);
+    expect(snapshot.events[0].comparisons[0]).toMatchObject({ referenceId: 0, conflict: true,
+      forward: { compared: 110, median: 0.05, upper: null } });
+    expect(JSON.stringify(snapshot)).not.toMatch(/positions|colorImage/);
+    comparisons[0].forward.compared = 999;
+    snapshot.events[0].comparisons[0].forward.compared = 777;
+    expect(diagnostics.snapshot().events[0].comparisons[0].forward.compared).toBe(110);
   });
 
   test("stay bounded and exclude camera data", () => {

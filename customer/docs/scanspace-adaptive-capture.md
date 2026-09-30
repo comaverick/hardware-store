@@ -13,13 +13,15 @@ export or guarantee a closed mesh of unseen object faces.
 - A motion/quality skip is not a tracking failure. Brief skips leave the saved
   map and recent recovery evidence intact. A new non-conflicting overlap miss
   starts a 900 ms checking grace period; the view stays provisional throughout.
-  Tracking loss, a camera jump, or contradictory geometry clears recovery
-  evidence immediately. An XR reference-space reset still requires a new scan.
-- Recovery keeps reading the sensor. It needs two reliable observations at
-  least 120 ms apart, within 1.8 seconds, agreeing with both the saved map and
-  each other. A soft skip between them does not reset confirmation, but stale
-  evidence, another overlap miss, or a hard tracking/geometry failure does.
-  Existing bidirectional support and residual limits are unchanged.
+  Tracking loss and a camera jump clear recovery evidence immediately. Conflicting
+  depth is rejected without erasing other recent, map-validated observations.
+  An XR reference-space reset still requires a new scan.
+- Recovery keeps reading the sensor and retains at most three map-validated
+  observations for 1.8 seconds. It still needs two agreeing observations at
+  least 120 ms apart, both matching the saved map and each other. A noisy read
+  or a different valid patch between them cannot continually restart confirmation.
+  Expired observations and hard tracking failures cannot vote. Existing
+  bidirectional support, conflict vetoes, and residual limits are unchanged.
 - Unconnected observations stay out of the saved surface and confirmed preview.
   At most six are held for eight seconds, with no extra sensor-frame history.
   Redundant views are discarded first, and capacity eviction protects the most

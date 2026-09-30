@@ -1,10 +1,10 @@
 // Review diagnostics stay in memory until the user downloads them.
 // Snapshot before worker transfer detaches the live typed arrays. Camera photos
 // are omitted to bound memory; per-point RGB is sufficient for geometry replay.
-export function captureDebugEnabled() {
-  return typeof window !== "undefined" &&
-    new URLSearchParams(window.location.search).get("scanspaceDebug") === "1";
-}
+const captureDebugMode = () => typeof window === "undefined" ? null :
+  new URLSearchParams(window.location.search).get("scanspaceDebug");
+export const captureDebugEnabled = () => ["1", "download"].includes(captureDebugMode());
+export const captureDebugDownloadOnEnd = () => captureDebugMode() === "download";
 
 const RUNTIME_FIELDS = [
   "closed", "paused", "originChanged", "tracking", "nativeDepthActive", "sessionVisibility",
@@ -15,9 +15,23 @@ const RUNTIME_FIELDS = [
   "captureProcessingMs", "geometryProcessingMs", "colorReadMs", "poseOverlapRatio",
   "poseMedianResidual", "poseUpperResidual", "gateLinearSpeed", "gateAngularSpeed",
   "maxLinearSpeed", "maxAngularSpeed",
+  "recoveryEvidenceCount", "recoveryEvidenceAgeMs", "depthProjectionDelta", "depthTransformDelta",
 ];
+const CAPTURE_FIELDS = ["state", "recoveryEvidenceCount", "recoveryEvidenceAgeMs",
+  "gateLinearSpeed", "gateAngularSpeed", "maxLinearSpeed", "maxAngularSpeed",
+  "validDepthRatio", "captureIntervalMs", "depthProjectionDelta", "depthTransformDelta"];
+const DIRECTION_FIELDS = ["samples", "compared", "agreeing", "tiles", "overlap", "support",
+  "agreement", "median", "upper", "freeSpaceRatio"];
 const diagnosticValue = (value) => typeof value === "string" ? value.slice(0, 240) :
   typeof value === "boolean" ? value : Number.isFinite(value) ? value : null;
+const diagnosticNumber = value => Number.isFinite(value) ? Math.max(0, Math.min(1e12, value)) : null;
+const directionSnapshot = value => Object.fromEntries(DIRECTION_FIELDS.map(key => [key, diagnosticNumber(value?.[key])]));
+const comparisonSnapshots = values => (Array.isArray(values) ? values : []).slice(0, 10)
+  .filter(value => value && typeof value === "object").map(value => ({
+    referenceId: diagnosticNumber(value.referenceId), accepted: value.accepted === true, conflict: value.conflict === true,
+    overlap: diagnosticNumber(value.overlap), median: diagnosticNumber(value.median), upper: diagnosticNumber(value.upper),
+    forward: directionSnapshot(value.forward), backward: directionSnapshot(value.backward),
+  }));
 
 // Opt-in local runtime evidence, including failures before any geometry is
 // saved. Never retain XR objects, images, positions, or an unbounded history.
@@ -41,26 +55,36 @@ export class CaptureRuntimeDiagnostics {
     const event = { type, elapsedMs: Math.max(0, timestamp - this.startedAt) };
     for (const key of ["reason", "stage", "name", "message", "accepted", "committed"])
       if (details[key] !== undefined) event[key] = diagnosticValue(details[key]);
+    if (type === "capture") {
+      for (const key of CAPTURE_FIELDS)
+        if (details[key] !== undefined) event[key] = diagnosticValue(details[key]);
+      event.comparisons = comparisonSnapshots(details.comparisons);
+    }
     this.events.push(event);
     if (this.events.length > 48) this.events.shift();
   }
   snapshot() {
     return { version: 1, kind: "scanspace-runtime", buildId: this.buildId,
       browser: this.browser, features: this.features.slice(), state: { ...this.state },
-      errorCount: this.errorCount, events: this.events.map(event => ({ ...event })) };
+      errorCount: this.errorCount, events: this.events.map(event => ({ ...event,
+        ...(event.comparisons && { comparisons: event.comparisons.map(value => ({ ...value,
+          forward: { ...value.forward }, backward: { ...value.backward } })) }),
+      })) };
   }
 }
 
 export function installCaptureRuntimeDebug(diagnostics) {
   // This handle retains only diagnostics, so cancellation can release the
   // scanner's GPU/geometry while the last failure remains available to inspect.
-  window.scanspaceDebug = {
+  const handle = {
     snapshot: () => diagnostics.snapshot(),
     download: () => downloadCaptureBlob(
       new Blob([JSON.stringify(diagnostics.snapshot())], { type: "application/json" }),
       `cdx-scanspace-runtime-${Date.now()}.json`,
     ),
   };
+  window.scanspaceDebug = handle;
+  return handle;
 }
 
 export function snapshotDepthCapture(raw) {

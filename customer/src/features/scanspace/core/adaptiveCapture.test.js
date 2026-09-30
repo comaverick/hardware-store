@@ -179,6 +179,102 @@ test("one uncertain depth read does not restart a verified recovery sequence", (
   expect(capture.snapshot().connected).toBe(true);
 });
 
+test("alternating aligned and conflicting depth cannot trap capture at two saved views", () => {
+  const capture = started();
+  const rejected = [];
+  for (let cycle = 0; cycle < 2; cycle++) {
+    const start = 650 + cycle * 1000;
+    const x = 0.1 + cycle * 0.1;
+    const firstBad = wallFrame(x, start, { wallZ: -2.35 });
+    expect(capture.consider(firstBad).reason).toBe("alignment-conflict");
+    expect(capture.consider(wallFrame(x, start + 250)).reason).toBe("confirming-recovery");
+    const secondBad = wallFrame(x + 0.02, start + 500, { wallZ: -2.35 });
+    expect(capture.consider(secondBad).reason).toBe("alignment-conflict");
+    expect(capture.consider(wallFrame(x + 0.06, start + 750)).accepted).toBe(true);
+    rejected.push(firstBad, secondBad);
+  }
+  expect(capture.frames).toHaveLength(4);
+  for (const frame of rejected) {
+    expect(capture.frames).not.toContain(frame);
+    expect(capture.pending).not.toContain(frame);
+  }
+  expect(capture.snapshot()).toMatchObject({ connected: true, state: "tracking" });
+});
+
+test("a conflicting saved reference still vetoes the candidate when another reference agrees", () => {
+  const compare = (left, right) => ({
+    accepted: left.timestamp !== 1000 || right.timestamp !== 100,
+    conflict: left.timestamp === 1000 && right.timestamp === 100,
+    overlap: 0.8,
+  });
+  const capture = started({ compare });
+  capture.failure("tracking-lost", 600);
+  expect(capture.consider(wallFrame(0.1, 800)).reason).toBe("confirming-recovery");
+  const rejected = wallFrame(0.12, 1000);
+  expect(capture.consider(rejected).reason).toBe("alignment-conflict");
+  expect(capture.frames).not.toContain(rejected);
+  expect(capture.consider(wallFrame(0.16, 1200)).accepted).toBe(true);
+  expect(capture.snapshot().connected).toBe(true);
+});
+
+test("recovery can corroborate an earlier view across a different valid saved patch", () => {
+  const compare = (left, right) => ({
+    accepted: left.timestamp <= 400 || right.timestamp <= 400 ||
+      Math.abs(left.camera[0] - right.camera[0]) < 0.05,
+    conflict: false, overlap: 0.8,
+  });
+  const capture = started({ compare });
+  capture.failure("tracking-lost", 600);
+  expect(capture.consider(wallFrame(0.1, 800)).accepted).toBe(false);
+  const differentPatch = wallFrame(0.2, 1100);
+  expect(capture.consider(differentPatch).accepted).toBe(false);
+  expect(capture.frames).toHaveLength(2);
+  expect(capture.consider(wallFrame(0.12, 1400)).accepted).toBe(true);
+  expect(capture.frames).not.toContain(differentPatch);
+  expect(capture.snapshot()).toMatchObject({ connected: true, state: "tracking" });
+});
+
+test("recovery history stays bounded and stale observations cannot confirm a later view", () => {
+  const compare = (left, right) => ({
+    accepted: left.timestamp <= 400 || right.timestamp <= 400 ||
+      Math.abs(left.camera[0] - right.camera[0]) < 0.01,
+    conflict: false, overlap: 0.8,
+  });
+  const capture = started({ compare });
+  capture.failure("tracking-lost", 600);
+  for (let index = 0; index < 9; index++) {
+    expect(capture.consider(wallFrame(0.1 + index * 0.06, 800 + index * 200)).accepted).toBe(false);
+    expect(capture.snapshot({ refreshCoverage: false }).recoveryEvidenceCount).toBeLessThanOrEqual(3);
+    expect(capture.frames).toHaveLength(2);
+  }
+  capture.failure("sparse-depth", 4201);
+  expect(capture.snapshot().recoveryEvidenceCount).toBe(0);
+  expect(capture.consider(wallFrame(0.58, 4500)).reason).toBe("confirming-recovery");
+  expect(capture.consider(wallFrame(0.58, 4750)).accepted).toBe(true);
+});
+
+test("persistent conflicting depth expires recovery evidence and still needs a fresh agreeing pair", () => {
+  const capture = started();
+  capture.failure("tracking-lost", 600);
+  capture.consider(wallFrame(0.1, 800));
+  for (const time of [1000, 1400, 1800, 2300, 2700]) {
+    expect(capture.consider(wallFrame(0.12, time, { wallZ: -2.35 })).reason).toBe("alignment-conflict");
+    expect(capture.frames).toHaveLength(2);
+  }
+  expect(capture.consider(wallFrame(0.16, 3000)).reason).toBe("confirming-recovery");
+  expect(capture.consider(wallFrame(0.22, 3250)).accepted).toBe(true);
+  expect(capture.snapshot().connected).toBe(true);
+});
+
+test("an alignment-conflict report withholds its observation without clearing recent validated recovery", () => {
+  const capture = started();
+  capture.failure("tracking-lost", 600);
+  capture.consider(wallFrame(0.1, 800));
+  capture.failure("alignment-conflict", 1000);
+  expect(capture.frames).toHaveLength(2);
+  expect(capture.consider(wallFrame(0.16, 1200)).accepted).toBe(true);
+});
+
 test("three motion rejections do not turn a connected scan into an amber recovery loop", () => {
   const capture = started();
   for (const timestamp of [600, 800, 1000]) capture.failure("moving-too-fast", timestamp);
@@ -189,7 +285,7 @@ test("three motion rejections do not turn a connected scan into an amber recover
   expect(capture.snapshot().connected).toBe(true);
 });
 
-test.each(["tracking-lost", "tracking-reset", "alignment-conflict", "camera-jump"])(
+test.each(["tracking-lost", "tracking-reset", "camera-jump"])(
   "%s clears the previous successful recovery observation", reason => {
     const capture = started();
     capture.failure("tracking-lost", 600);

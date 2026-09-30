@@ -14,7 +14,7 @@ import {
 import { createCameraColorReader } from "./cameraColor";
 import { AdaptiveCapture, adaptiveCaptureProfile, captureDetail, capturePointObserved, confirmedViewRatio, prepareCaptureFrame } from "../core/adaptiveCapture";
 import { CaptureExperience } from "../core/captureExperience";
-import { captureDebugEnabled, CaptureRuntimeDiagnostics, installCaptureRuntimeDebug } from "../core/captureDebug";
+import { captureDebugEnabled, captureDebugDownloadOnEnd, CaptureRuntimeDiagnostics, installCaptureRuntimeDebug } from "../core/captureDebug";
 
 function coverageSplatTexture() {
   const canvas = document.createElement("canvas");
@@ -49,6 +49,16 @@ const DEPTH_STALLED_MS = 10000;
 const DEPTH_RETRY_INTERVAL_MS = 250;
 const DEPTH_RESUME_INTERVAL_MS = 1000;
 const XR_FRAME_WATCHDOG_MS = 2000;
+
+function matrixDifference(reported, current) {
+  if (reported?.length !== 16 || current?.length !== 16) return null;
+  let maximum = 0;
+  for (let index = 0; index < 16; index++) {
+    if (!Number.isFinite(reported[index]) || !Number.isFinite(current[index])) return null;
+    maximum = Math.max(maximum, Math.abs(reported[index] - current[index]));
+  }
+  return maximum;
+}
 
 function poseMotion(previous, pose, timestamp) {
   if (!previous || timestamp <= previous.timestamp)
@@ -404,7 +414,8 @@ export class RoomScanner {
     if (captureDebugEnabled()) {
       this.runtimeDiagnostics = new CaptureRuntimeDiagnostics();
       this.updateRuntimeDiagnostics();
-      installCaptureRuntimeDebug(this.runtimeDiagnostics);
+      this.runtimeDebugHandle = installCaptureRuntimeDebug(this.runtimeDiagnostics);
+      this.runtimeDebugDownloadOnEnd = captureDebugDownloadOnEnd();
     }
   }
   publish(time = this.lastFrameAt ?? performance.now()) {
@@ -600,7 +611,11 @@ export class RoomScanner {
     } catch (error) {
       this.recordCaptureError(error, "Runtime state unavailable");
     }
-    this.runtimeDiagnostics.update({ ...this.stats, closed: this.closed, paused: this.paused });
+    const evidence = this.capture.recoveryEvidence;
+    this.runtimeDiagnostics.update({ ...this.stats, closed: this.closed, paused: this.paused,
+      recoveryEvidenceCount: evidence.length,
+      recoveryEvidenceAgeMs: evidence.length ? (this.lastFrameAt ?? this.capture.lastSeen) - evidence[0].timestamp : 0,
+    });
     this.stats.runtimeDiagnostics = this.runtimeDiagnostics.snapshot();
   }
   updateDepthRecovery(time) {
@@ -674,6 +689,10 @@ export class RoomScanner {
     let geometryStarted = null;
     let geometryElapsed = null;
     let depth = null;
+    if (this.runtimeDiagnostics) {
+      this.stats.depthProjectionDelta = null;
+      this.stats.depthTransformDelta = null;
+    }
     try {
       this.resumeInactiveDepth(time);
       const depthUsage = this.session?.depthUsage || this.stats.depthUsage;
@@ -718,6 +737,18 @@ export class RoomScanner {
     this.stats.depthUsage = this.session.depthUsage || "Unavailable";
     this.stats.dimensions = `${depth.width} × ${depth.height}`;
     this.nativeDepthSize = { width: depth.width, height: depth.height };
+    // Record optional native geometry only in debug mode. A browser getter
+    // failure must not interrupt the working view-aligned acquisition path.
+    if (this.runtimeDiagnostics) {
+      try {
+        const reportedView = depth.view;
+        this.stats.depthProjectionDelta = matrixDifference(depth.projectionMatrix || reportedView?.projectionMatrix, view.projectionMatrix);
+        this.stats.depthTransformDelta = matrixDifference(depth.transform?.matrix || reportedView?.transform?.matrix, view.transform.matrix);
+      } catch (error) {
+        this.runtimeDiagnostics.record("error", time, { stage: "Depth geometry diagnostics",
+          name: error?.name || "Error", message: error?.message || String(error) });
+      }
+    }
     try {
       const keyframePose = this.keyframePose(view);
       const motion = this.measureFrameMotion(keyframePose, time);
@@ -1101,9 +1132,19 @@ export class RoomScanner {
     this.stats.frameQuality = reason;
     this.stats.currentViewChecked = accepted;
     this.lastViewDecisionAt = time;
-    this.runtimeDiagnostics?.record("capture", time, { reason, accepted, committed });
     if (!accepted) this.stats.currentConfirmedRatio = 0;
     const depthAvailable = !["depth-error", "depth-missing", "invalid-depth"].includes(reason);
+    this.runtimeDiagnostics?.record("capture", time, { reason, accepted, committed, state: this.capture.state,
+      recoveryEvidenceCount: this.capture.recoveryEvidence.length,
+      recoveryEvidenceAgeMs: this.capture.recoveryEvidence.length ? time - this.capture.recoveryEvidence[0].timestamp : 0,
+      gateLinearSpeed: depthAvailable ? this.stats.gateLinearSpeed : null,
+      gateAngularSpeed: depthAvailable ? this.stats.gateAngularSpeed : null,
+      maxLinearSpeed: this.captureProfile.maxLinearSpeed, maxAngularSpeed: this.captureProfile.maxAngularSpeed,
+      validDepthRatio: depthAvailable ? this.stats.validDepthRatio : null,
+      captureIntervalMs: this.stats.captureIntervalMs,
+      depthProjectionDelta: this.stats.depthProjectionDelta, depthTransformDelta: this.stats.depthTransformDelta,
+      comparisons: matched ? this.capture.lastComparisons : [],
+    });
     this.experience.recordFrame({ timestamp: time, reason, accepted, committed, matched,
       state: this.capture.state,
       gateLinearSpeed: depthAvailable ? this.stats.gateLinearSpeed : 0,
@@ -1782,6 +1823,9 @@ export class RoomScanner {
     this.hit = null;
     this.runtimeDiagnostics?.record("session-end", performance.now());
     this.updateRuntimeDiagnostics();
+    release(() => {
+      if (this.runtimeDebugDownloadOnEnd) this.runtimeDebugHandle?.download();
+    });
     release(() => this.onEnd?.());
   }
 }

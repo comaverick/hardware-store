@@ -62,6 +62,38 @@ test("renderer disposal follows Three.js session-end handling", async () => {
   expect(window.clearInterval).toHaveBeenCalledWith(99);
 });
 
+test.each(["1", "download"])("debug mode %s downloads only when requested, using this scanner's handle", async mode => {
+  scanner.cleanup();
+  window.history.replaceState({}, "", `/?scanspaceDebug=${mode}`);
+  scanner = new RoomScanner({ canvas: document.createElement("canvas"),
+    overlay: document.createElement("div"), onUpdate: jest.fn(), onEnd: jest.fn() });
+  const snapshots = [];
+  const ownDownload = jest.fn(() => snapshots.push(scanner.runtimeDebugHandle.snapshot()));
+  scanner.runtimeDebugHandle.download = ownDownload;
+  const otherDownload = jest.fn();
+  window.scanspaceDebug = { download: otherDownload };
+  await scanner.start();
+  await scanner.stop();
+  scanner.cleanup();
+  expect(ownDownload).toHaveBeenCalledTimes(mode === "download" ? 1 : 0);
+  if (mode === "download") expect(snapshots[0].state.closed).toBe(true);
+  expect(otherDownload).not.toHaveBeenCalled();
+  expect(scanner.onEnd).toHaveBeenCalledTimes(1);
+});
+
+test("a diagnostic download failure still finishes cleanup and notifies once", async () => {
+  scanner.cleanup();
+  window.history.replaceState({}, "", "/?scanspaceDebug=download");
+  scanner = new RoomScanner({ canvas: document.createElement("canvas"),
+    overlay: document.createElement("div"), onUpdate: jest.fn(), onEnd: jest.fn() });
+  scanner.runtimeDebugHandle.download = jest.fn(() => { throw new Error("download failed"); });
+  await scanner.start();
+  await scanner.stop();
+  expect(renderer.dispose).toHaveBeenCalledTimes(1);
+  expect(scanner.onEnd).toHaveBeenCalledTimes(1);
+  expect(scanner.closed).toBe(true);
+});
+
 test("stop still cleans up if the session resolves without an end event", async () => {
   await scanner.start();
   session.end.mockResolvedValue(undefined);

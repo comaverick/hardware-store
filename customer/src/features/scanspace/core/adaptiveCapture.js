@@ -7,8 +7,9 @@ export const MIN_REGION_OBSERVATIONS = 12;
 export const MIN_REGION_CONFIRMATION = 0.55;
 const OVERLAP_GRACE_MS = 900;
 const RECOVERY_EVIDENCE_MS = 1800;
+const MAX_RECOVERY_OBSERVATIONS = 3;
 const PENDING_AGE_MS = 8000;
-const hardFailures = new Set(["tracking-lost", "tracking-reset", "camera-jump", "alignment-conflict"]);
+const recoveryFailures = new Set(["tracking-lost", "tracking-reset", "camera-jump", "alignment-conflict"]);
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const distance = (a, b) => Math.hypot(...a.map((value, axis) => value - b[axis]));
 const camera = (frame) => Array.from(frame.camera || frame.transformMatrix.slice(12, 15));
@@ -255,6 +256,8 @@ export class AdaptiveCapture {
     this.state = "starting";
     this.reason = "starting";
     this.recoveryMatches = 0;
+    this.recoveryEvidence = [];
+    this.lastComparisons = [];
     this.pendingSupport = new WeakMap();
     this.pendingBridgeEdges = new WeakMap();
     this.coverageDirty = true;
@@ -264,8 +267,14 @@ export class AdaptiveCapture {
   }
   clearRecoveryEvidence() {
     this.recoveryMatches = 0;
-    this.recoveryEvidence = null;
+    this.recoveryEvidence = [];
     this.lastRecoveryMatchAt = null;
+  }
+  expireRecoveryEvidence(timestamp) {
+    this.recoveryEvidence = this.recoveryEvidence.filter(frame =>
+      timestamp >= frame.timestamp && timestamp - frame.timestamp <= RECOVERY_EVIDENCE_MS);
+    this.recoveryMatches = this.recoveryEvidence.length ? 1 : 0;
+    this.lastRecoveryMatchAt = this.recoveryEvidence[this.recoveryEvidence.length - 1]?.timestamp ?? null;
   }
   recover(reason, timestamp = this.lastSeen) {
     if (!this.frames.length) return;
@@ -275,15 +284,17 @@ export class AdaptiveCapture {
     }
     this.state = "recovering";
     this.reason = reason;
-    this.clearRecoveryEvidence();
+    // Conflicting depth rejects this observation, but does not prove that
+    // earlier map-validated observations changed coordinate systems. They
+    // remain usable briefly; the next view must still match one AND the map.
+    if (reason === "alignment-conflict") this.expireRecoveryEvidence(timestamp);
+    else this.clearRecoveryEvidence();
   }
   failure(reason, timestamp) {
     // Motion, sparse depth and sensor read failures describe this observation,
     // not a change of coordinate system. Keep recent validated recovery evidence
-    // across those skips; a contradictory pose or stale evidence invalidates it.
-    if (hardFailures.has(reason)) this.recover(reason, timestamp);
-    else if (this.lastRecoveryMatchAt != null && timestamp - this.lastRecoveryMatchAt > RECOVERY_EVIDENCE_MS)
-      this.clearRecoveryEvidence();
+    // across those skips; tracking loss/reset, a jump or stale evidence clears it.
+    if (recoveryFailures.has(reason)) this.recover(reason, timestamp);
     if (reason === "tracking-reset") {
       this.events.pendingResetDrops += this.pending.length;
       this.pending = [];
@@ -294,6 +305,7 @@ export class AdaptiveCapture {
     this.expire(timestamp);
   }
   expire(timestamp) {
+    this.expireRecoveryEvidence(timestamp);
     const kept = this.pending.filter(frame => timestamp - frame.timestamp <= PENDING_AGE_MS);
     const removed = this.pending.length - kept.length;
     this.events.expired += removed;
@@ -342,6 +354,7 @@ export class AdaptiveCapture {
     return { edges: results.filter(value => value.result.accepted).map(value => value.reference.captureId),
       bridgeEdges: results.filter(value => captureBridgeOverlap(value.result)).map(value => value.reference.captureId),
       conflict: results.some(value => value.result.conflict),
+      comparisons: results.map(({ reference, result }) => ({ referenceId: reference.captureId, ...result })),
       best: results.sort((a, b) => b.result.overlap - a.result.overlap)[0]?.result };
   }
   reconnectPendingBridge(frame, timestamp) {
@@ -419,6 +432,7 @@ export class AdaptiveCapture {
   }
   consider(frame, profile = adaptiveCaptureProfile()) {
     frame.captureId = ++this.sequence;
+    this.lastComparisons = [];
     const time = frame.timestamp;
     this.expire(time);
     if (this.state !== "recovering" && this.lastReliableAt != null &&
@@ -442,16 +456,12 @@ export class AdaptiveCapture {
     const before = new Set(this.frames);
     const match = this.matches(frame);
     this.lastMatch = match.best;
+    this.lastComparisons = match.comparisons;
     if (match.conflict) {
       this.recover("alignment-conflict", time);
       return { accepted: false, committed: [], reason: this.reason };
     }
     if (!match.edges.length) {
-      // A single uncertain depth read is not evidence that the previous good
-      // recovery view was wrong. Keep it briefly; the next good view must still
-      // agree with that exact observation before recovery can complete.
-      if (this.lastRecoveryMatchAt != null && time - this.lastRecoveryMatchAt > RECOVERY_EVIDENCE_MS)
-        this.clearRecoveryEvidence();
       if (this.state === "tracking") {
         this.state = "checking";
         this.uncertainSince = time;
@@ -470,20 +480,22 @@ export class AdaptiveCapture {
     }
     this.lastReliableAt = time;
     if (this.state === "recovering") {
-      // Both observations must agree with the saved map AND each other. Mere
-      // motion skips can separate them; drift, different patches and stale
-      // confirmations cannot be combined into a successful recovery.
-      const evidence = this.recoveryEvidence;
-      const continuity = evidence && this.compare(frame, evidence);
-      if (!evidence || time - evidence.timestamp > RECOVERY_EVIDENCE_MS ||
-          !continuity.accepted || continuity.conflict) {
-        this.recoveryEvidence = frame;
+      // Both observations must agree with the saved map AND each other. Keep
+      // a bounded window so alternating patches do not discard the only good
+      // confirmation. Expired views and hard tracking failures cannot vote.
+      const evidence = this.recoveryEvidence.find(observation => {
+        if (time - observation.timestamp < 120) return false;
+        const continuity = this.compare(frame, observation);
+        return continuity.accepted && !continuity.conflict;
+      });
+      if (!evidence) {
+        this.recoveryEvidence.push(frame);
+        if (this.recoveryEvidence.length > MAX_RECOVERY_OBSERVATIONS) this.recoveryEvidence.shift();
         this.lastRecoveryMatchAt = time;
         this.recoveryMatches = 1;
-      } else if (time - evidence.timestamp >= 120) {
-        this.recoveryMatches = 2;
+        return { accepted: false, committed: [], reason: "confirming-recovery" };
       }
-      if (this.recoveryMatches < 2) return { accepted: false, committed: [], reason: "confirming-recovery" };
+      this.recoveryMatches = 2;
     }
     this.state = "tracking";
     this.uncertainSince = null;
@@ -533,6 +545,8 @@ export class AdaptiveCapture {
     return { version: ADAPTIVE_CAPTURE_VERSION, state: this.state, reason: this.reason,
       connected: this.frames.length >= 2 && graphConnected(this.frames, this.links),
       frameCount: this.frames.length, pendingCount: this.pending.length,
+      recoveryEvidenceCount: this.recoveryEvidence.length,
+      recoveryEvidenceAgeMs: this.recoveryEvidence.length ? this.lastSeen - this.recoveryEvidence[0].timestamp : 0,
       capacityReached: !!this.capacityReached, coverage: this.coverage, ...this.events };
   }
 }

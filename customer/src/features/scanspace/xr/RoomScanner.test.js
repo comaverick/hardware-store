@@ -1,4 +1,5 @@
 import { PerspectiveCamera, Matrix4 } from "three";
+import { CaptureRuntimeDiagnostics } from "../core/captureDebug";
 import {
   coveragePreviewSize,
   DEPTH_TYPE_PREFERENCE,
@@ -757,6 +758,89 @@ test("a soft skip between reliable recovery observations does not restart reconn
   expect(scanner.stats.adaptiveCapture.state).toBe("tracking");
   expect(scanner.stats.adaptiveCapture.recoveries).toBe(1);
   expect(scanner.stats.captureDiagnostics.prompts.reconnect).toBe(0);
+});
+
+test("a conflicting depth read between valid recovery views does not stop new views saving", () => {
+  const { scanner, frame, move, setDepth, setEmulated } = captureHarness();
+  setEmulated(true);
+  scanner.frame(1300, frame);
+  setEmulated(false);
+  move(0.1);
+  scanner.frame(1600, frame);
+  expect(scanner.stats.frameQuality).toBe("confirming-recovery");
+  setDepth(2.35);
+  scanner.frame(2000, frame);
+  expect(scanner.stats.frameQuality).toBe("alignment-conflict");
+  expect(scanner.keyframes).toHaveLength(2);
+  setDepth(2);
+  move(0.16);
+  scanner.frame(2400, frame);
+  expect(scanner.stats.frameQuality).toBe("connected");
+  expect(scanner.keyframes).toHaveLength(3);
+  expect(scanner.stats.adaptiveCapture).toMatchObject({ connected: true, state: "tracking" });
+  expect(scanner.keyframes.every(saved => Math.abs(saved.depths[0] - 2) < 0.001)).toBe(true);
+  expect(scanner.stats.captureDiagnostics.decisions["alignment-conflict"]).toBe(1);
+  expect(scanner.stats.errors).toEqual([]);
+  expect(scanner.paused).toBe(false);
+});
+
+test("runtime diagnostics retain the comparison and recovery evidence for each rejected view", () => {
+  const { scanner, frame, move, setDepth } = captureHarness();
+  scanner.runtimeDiagnostics = new CaptureRuntimeDiagnostics();
+  setDepth(2.35);
+  scanner.frame(1400, frame);
+  setDepth(2);
+  move(0.1);
+  scanner.frame(1800, frame);
+  setDepth(2.35);
+  scanner.frame(2200, frame);
+  const events = scanner.runtimeDiagnostics.snapshot().events.filter(event => event.type === "capture");
+  expect(events).toHaveLength(3);
+  expect(events[2]).toMatchObject({ reason: "alignment-conflict", recoveryEvidenceCount: 1,
+    recoveryEvidenceAgeMs: 400, state: "recovering" });
+  expect(events[2].comparisons).toHaveLength(2);
+  expect(events[2].comparisons.some(comparison => comparison.conflict &&
+    (comparison.forward.freeSpaceRatio > 0.65 || comparison.backward.freeSpaceRatio > 0.65))).toBe(true);
+  expect(events[2].comparisons.every(comparison => Number.isInteger(comparison.referenceId))).toBe(true);
+  setDepth(2);
+  move(0.16);
+  scanner.frame(2600, frame);
+  expect(scanner.stats.frameQuality).toBe("connected");
+  expect(scanner.keyframes).toHaveLength(3);
+});
+
+test("native depth geometry differences are diagnostic only and do not change capture projection", () => {
+  const { scanner, frame, view, move } = captureHarness();
+  scanner.runtimeDiagnostics = new CaptureRuntimeDiagnostics();
+  move(0.16);
+  const depthProjection = view.projectionMatrix.slice();
+  depthProjection[0] += 0.2;
+  const depthTransform = view.transform.matrix.slice();
+  depthTransform[12] += 0.03;
+  frame.getDepthInformation.mockReturnValue({ width: 320, height: 240,
+    projectionMatrix: depthProjection, transform: { matrix: depthTransform }, getDepthInMeters: () => 2 });
+  scanner.frame(1400, frame);
+  const state = scanner.runtimeDiagnostics.snapshot().state;
+  expect(state.depthProjectionDelta).toBeCloseTo(0.2);
+  expect(state.depthTransformDelta).toBeCloseTo(0.03);
+  expect(scanner.keyframes).toHaveLength(3);
+  expect(Array.from(scanner.keyframes[2].projectionMatrix)).toEqual(Array.from(new Float32Array(view.projectionMatrix)));
+  expect(scanner.stats.errors).toEqual([]);
+});
+
+test("unavailable optional depth geometry diagnostics do not interrupt valid capture", () => {
+  const { scanner, frame, move } = captureHarness();
+  scanner.runtimeDiagnostics = new CaptureRuntimeDiagnostics();
+  move(0.16);
+  frame.getDepthInformation.mockReturnValue({ width: 320, height: 240, getDepthInMeters: () => 2,
+    get projectionMatrix() { throw new Error("optional geometry unavailable"); } });
+  scanner.frame(1400, frame);
+  expect(scanner.keyframes).toHaveLength(3);
+  expect(scanner.stats.frameQuality).toBe("connected");
+  expect(scanner.stats.errors).toEqual([]);
+  expect(scanner.runtimeDiagnostics.snapshot().events).toContainEqual(expect.objectContaining({
+    type: "error", stage: "Depth geometry diagnostics", message: "optional geometry unavailable",
+  }));
 });
 
 test("missing depth is counted cumulatively even after sensor acquisition resumes", () => {
