@@ -1,6 +1,21 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { CaptureAuditNotice, CaptureCoverage, CaptureProgress } from "./CaptureFeedback";
 
+test("continuous progress counts captured views without claiming checked coverage", () => {
+  render(<CaptureProgress stats={{ captureMode: "continuous", capturedKeyframes: 12, capturedViews: 12,
+    fusionKeyframes: 2, currentViewChecked: false, adaptiveCapture: {
+      mode: "continuous", state: "tracking", connected: true, pendingCount: 10,
+      coverage: { regions: [{ id: "middle", observed: 100, ratio: 0.3 }] },
+    },
+  }} />);
+  expect(screen.getByText("Captured views")).toBeInTheDocument();
+  expect(screen.getByText("12")).toBeInTheDocument();
+  expect(screen.getByText("Capturing")).toBeInTheDocument();
+  expect(screen.getByText(/Blue: captured.*Green: checked/)).toBeInTheDocument();
+  expect(screen.queryByText("Ready to review")).not.toBeInTheDocument();
+  expect(screen.getByRole("progressbar", { name: "Walls and objects confirmed" })).toHaveAttribute("value", "30");
+});
+
 test("coverage distinguishes unseen space from observed surface confirmation", () => {
   render(<CaptureCoverage coverage={{ regions: [
     { id: "lower", observed: 0, ratio: 0 },

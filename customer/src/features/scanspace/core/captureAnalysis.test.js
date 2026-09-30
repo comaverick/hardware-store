@@ -114,3 +114,29 @@ test("a refreshed depth view is resent even when its capture ID is unchanged", (
   expect(target.postMessage.mock.calls[1][0].changed.map(frame => frame.captureId)).toEqual([2]);
   controller.close();
 });
+
+test("background connections reuse comparisons and release replaced geometry", () => {
+  const compare = jest.fn(() => ({ accepted: true, conflict: false }));
+  const store = new CaptureAnalysisStore(compare), frames = wallFrames();
+  const job = values => ({ ids: values.map(frame => frame.captureId), changed: values, floorY: 0 });
+  const first = store.analyze(job(frames));
+  expect(first.checkedIds).toHaveLength(3);
+  const calls = compare.mock.calls.length;
+  store.analyze(job(frames));
+  expect(compare).toHaveBeenCalledTimes(calls);
+  const original = frames[1];
+  frames[1] = planeFrame(2, 0.09);
+  store.analyze(job(frames));
+  expect(compare.mock.calls.length).toBeGreaterThan(calls);
+  expect([...store.comparisons.values()].some(entry => entry.left === original || entry.right === original)).toBe(false);
+  store.analyze(job(frames.slice(1)));
+  expect([...store.comparisons.values()].every(entry => [entry.left.captureId, entry.right.captureId]
+    .every(id => id !== 1))).toBe(true);
+});
+
+test("nearby repeated camera positions do not crowd out an independent comparison pose", () => {
+  const frames = [planeFrame(1, 0), ...Array.from({ length: 9 }, (_, index) => planeFrame(index + 2, 0.1))];
+  const result = new CaptureAnalysisStore().analyze({ ids: frames.map(frame => frame.captureId), changed: frames, floorY: 0 });
+  expect(result.checkedIds).toHaveLength(10);
+  expect(result.links[10]).toContain(1);
+});

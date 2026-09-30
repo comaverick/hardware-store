@@ -10,6 +10,7 @@ import { auditCapture } from "../core/adaptiveCapture";
 import { captureFeedback } from "../core/captureExperience";
 import { CaptureAuditNotice, CaptureProgress } from "./CaptureFeedback";
 import { createFusionWorker } from "../core/createFusionWorker";
+import { downloadPartialScan } from "../core/partialScanFile";
 const PartialScanScene = lazy(() => import("./PartialScanScene"));
 const SHOW_SCAN_DIAGNOSTICS = process.env.NODE_ENV === "development";
 
@@ -90,6 +91,7 @@ const captureQualitySummary = (stats, fusion = null) => ({
   untexturedEstimatedTriangles: fusion?.untexturedEstimatedTriangles || 0,
   topology: fusion?.topologyAfterRepair || null,
   recoveredCaptureGroups: fusion?.alignment?.componentRecovery || null,
+  captureRetention: fusion?.captureRetention || null,
   surfaceRepair: fusion?.surfaceRepair || null,
 });
 
@@ -118,8 +120,9 @@ export default function ScannerPanel({
     [partial, setPartial] = useState(null),
     [fusion, setFusion] = useState(null),
     [error, setError] = useState("");
-  const hasReconstructableCapture = (stats.fusionKeyframes || 0) >= 2 &&
-    stats.adaptiveCapture?.connected !== false;
+  const hasReconstructableCapture = stats.captureMode === "continuous"
+    ? (stats.capturedKeyframes || 0) >= 2
+    : (stats.fusionKeyframes || 0) >= 2 && stats.adaptiveCapture?.connected !== false;
   const targetState = captureFeedback(stats);
   useEffect(() => {
     if (!active || busy || partial || lastFeedbackCode.current === targetState.code) return;
@@ -170,8 +173,10 @@ export default function ScannerPanel({
   }
   function downloadDebugCapture() {
     const source = scanner.current;
-    if (!source?.keyframes?.length) return;
-    downloadDepthCapture(debugCapture.current || snapshotDepthCapture(source), source.stats.fusion);
+    const raw = partial?.result?.rawCapture || partial?.rawCapture ||
+      (source && { ...source, keyframes: source.capture?.frames || source.keyframes });
+    if (!raw?.keyframes?.length) return;
+    downloadDepthCapture(debugCapture.current || snapshotDepthCapture(raw), source?.stats.fusion);
   }
   async function buildFusedMesh(
     raw,
@@ -321,6 +326,7 @@ export default function ScannerPanel({
             fused.diagnostics?.reason ||
             "The measured surface did not pass multi-view quality checks.",
           pointCount: acceptedPoints.length,
+          capturedViewCount: raw.keyframes.length,
           coverage: raw.stats.coverage || 0,
           cameraBaseline: raw.stats.cameraBaseline || 0,
           rejectedDepthFrames: raw.stats.rejectedDepthFrames || 0,
@@ -397,7 +403,7 @@ export default function ScannerPanel({
               : active
                 ? stats.paused
                   ? "Scanning paused."
-                  : "Move slowly and overlap each pass."
+                  : "Sweep smoothly. Views save automatically while you move."
               : "Your scan stays on this phone during capture. Depth and captured colors depend on the capabilities granted by your browser."}
           </p>
         </div>
@@ -405,7 +411,7 @@ export default function ScannerPanel({
           <section className="ss-scan-guide" aria-labelledby="ss-scan-guide-title">
             <h3 id="ss-scan-guide-title">Before you start</h3>
             <ul>
-              <li><Camera aria-hidden="true" size={20} weight="bold" /><span><strong>Move slowly</strong><small>Keep one surface in view as you take a small sideways step.</small></span></li>
+              <li><Camera aria-hidden="true" size={20} weight="bold" /><span><strong>Move slowly</strong><small>Make one smooth sideways sweep. You can keep moving as views save.</small></span></li>
               <li><ArrowsLeftRight aria-hidden="true" size={20} weight="bold" /><span><strong>Overlap each pass</strong><small>Keep part of the previous area visible while you turn.</small></span></li>
               <li><SquaresFour aria-hidden="true" size={20} weight="bold" /><span><strong>Choose your area</strong><small>Two walls, a floor, and a ceiling are fine. Unscanned space will stay open.</small></span></li>
             </ul>
@@ -468,12 +474,17 @@ export default function ScannerPanel({
                 <section className="ss-partial-capture" role="status">
                   <strong>Scan processing paused</strong>
                   <p>
-                    ScanSpace kept {partial.pointCount.toLocaleString()} measured
-                    points. Processing stopped for the reason below; your
-                    capture was not discarded.
+                    ScanSpace kept {partial.capturedViewCount
+                      ? `${partial.capturedViewCount} captured views`
+                      : `${partial.pointCount.toLocaleString()} measured points`}.
+                    You can keep scanning or download the captured views.
                   </p>
                   <p className="ss-partial-reason">{partial.reason}</p>
                   <div className="ss-actions">
+                    {partial.rawCapture?.keyframes?.length > 0 && <button onClick={() => downloadPartialScan({
+                      name: "Captured scan", kind: "raw-capture", rawCapture: partial.rawCapture,
+                      pointCount: partial.pointCount, reason: partial.reason,
+                    })}>Download captured views</button>}
                     <button
                       disabled={busy || !active || stats.originChanged}
                       onClick={continueCapture}

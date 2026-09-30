@@ -44,6 +44,9 @@ export function captureProgressSummary(stats = {}) {
       : stats.connectedSurfaceCoverage,
   );
   const frames = Math.max(0, Number(stats.fusionKeyframes) || 0);
+  const continuous = stats.captureMode === "continuous" || adaptive.mode === "continuous";
+  const capturedFrames = Math.max(0, Number(stats.capturedKeyframes ?? adaptive.capturedCount) || 0);
+  const capturedTotal = Math.max(capturedFrames, Number(stats.capturedViews ?? adaptive.captured) || 0);
   const frameLimit = Math.max(0, Number(stats.fusionKeyframeLimit) || 0);
   const verifiedTotal = Math.max(frames, (Number(stats.captureDiagnostics?.committedFrames) || 0) -
     (Number(adaptive.seedDiscardedFrames) || 0));
@@ -57,13 +60,16 @@ export function captureProgressSummary(stats = {}) {
   const movingTooFast = stats.captureFeedback?.code === "motion";
   const shortBaseline = Number.isFinite(stats.cameraBaseline) && frames >= MIN_SURFACE_FUSION_KEYFRAMES &&
     stats.cameraBaseline < MIN_SURFACE_CAMERA_BASELINE_METERS;
-  const hasCapture = frames >= 2 && adaptive.connected !== false;
+  const hasCapture = continuous ? capturedFrames >= 2 : frames >= 2 && adaptive.connected !== false;
   const reviewReady = frames >= MIN_SURFACE_FUSION_KEYFRAMES &&
     adaptive.connected !== false && observed && !weak && !building &&
     !(adaptive.pendingCount || 0) && !stalled && !movingTooFast && !shortBaseline;
   const checking = adaptive.state === "checking" || stats.currentViewChecked === false;
   return {
     checking,
+    continuous,
+    capturedFrames,
+    capturedTotal,
     hasCapture,
     overlap,
     regions: normalized,
@@ -124,17 +130,24 @@ export function CaptureProgress({ stats }) {
   if (summary.capacityReached) stateLabel = "Section captured";
   if (summary.depthRetrying) stateLabel = "Retrying depth";
   if (summary.depthStalled) stateLabel = "Depth stopped";
+  if (summary.continuous && !summary.depthRetrying && !summary.depthStalled) {
+    stateLabel = summary.stalled ? "Waiting for a usable view" : summary.capturedFrames ? "Capturing" : "Getting started";
+    if (summary.reviewReady) stateLabel = "Ready to review";
+  }
   return (
     <section className="ss-capture-progress" aria-label="Scan progress">
       <div className="ss-capture-progress-head">
-        <p><span>Saved views</span><strong>{summary.verifiedTotal}</strong></p>
+        <p><span>{summary.continuous ? "Captured views" : "Saved views"}</span>
+          <strong>{summary.continuous ? summary.capturedTotal : summary.verifiedTotal}</strong></p>
         <span className={`ss-capture-state ${summary.reviewReady && !summary.depthStalled && !summary.depthRetrying ? "is-ready" : ""}`}>
           {stateLabel}
         </span>
       </div>
-      {summary.verifiedTotal > summary.frames &&
+      {!summary.continuous && summary.verifiedTotal > summary.frames &&
         <p className="ss-capture-retention">{summary.frames} views kept for review.</p>}
-      <p className="ss-capture-overlap">Checks apply to observed areas. Unseen gaps stay open.</p>
+      <p className={summary.continuous ? "ss-capture-legend" : "ss-capture-overlap"}>{summary.continuous
+        ? `${summary.capturedFrames} ${summary.capturedFrames === 1 ? "view" : "views"} kept for review · Blue: captured · Green: checked.`
+        : "Checks apply to observed areas. Unseen gaps stay open."}</p>
       <CaptureCoverage coverage={stats.adaptiveCapture?.coverage} />
     </section>
   );

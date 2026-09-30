@@ -231,7 +231,7 @@ function graphConnected(frames, links, omit = null) {
   return visited.size === ids.size;
 }
 
-export function connectedCoverage(frames) {
+export function connectedCoverage(frames, { includePoints = false } = {}) {
   const cells = new Map(), cellSize = 0.16;
   for (const frame of frames) {
     const view = prepareCaptureFrame(frame), observer = camera(frame), seen = new Set();
@@ -262,7 +262,13 @@ export function connectedCoverage(frames) {
   const confirmed = [...cells.values()].filter(cell => cell.confirmed).length;
   const weakest = regions.filter(region => region.observed >= MIN_REGION_OBSERVATIONS).sort((a, b) => a.ratio - b.ratio)[0];
   const target = weakest && [...cells.values()].find(cell => cell.region === weakest.id && !cell.confirmed)?.point;
-  return { observed: cells.size, confirmed, ratio: confirmed / Math.max(1, cells.size), regions, target: target || null };
+  const result = { observed: cells.size, confirmed, ratio: confirmed / Math.max(1, cells.size), regions, target: target || null };
+  if (includePoints) {
+    const points = [...cells.values()].filter(cell => cell.confirmed);
+    const stride = Math.max(1, Math.ceil(points.length / 6000));
+    result.preview = Float32Array.from(points.filter((_, index) => index % stride === 0).flatMap(cell => cell.point));
+  }
+  return result;
 }
 
 export class AdaptiveCapture {
@@ -663,13 +669,16 @@ export class AdaptiveCapture {
 
 export function auditCapture(stats, diagnostics = null) {
   const issues = [], capture = stats.adaptiveCapture;
+  const continuous = stats.captureMode === "continuous" || capture?.mode === "continuous";
+  const reviewed = continuous && diagnostics?.captureRetention;
   if (fastMotionShare(stats) >= 0.25)
     issues.push("Many attempted views were rejected for fast motion. Inspect the result for torn areas and repeat them slowly if possible.");
   if (Number.isFinite(stats.cameraBaseline) && stats.cameraBaseline < MIN_SURFACE_CAMERA_BASELINE_METERS)
     issues.push("Camera positions were too close together for strong depth overlap. Repeat the area from a small sideways step.");
-  if (capture && !capture.connected) issues.push("The saved views need a reliable connection.");
-  if (["recovering", "checking"].includes(capture?.state)) issues.push("The latest view could not be connected. Previously saved views are included.");
-  if (capture?.pendingCount) issues.push(`${capture.pendingCount} unconfirmed views were left out of this result.`);
+  if (capture && !capture.connected && !reviewed) issues.push("The saved views need a reliable connection.");
+  if (!continuous && ["recovering", "checking"].includes(capture?.state)) issues.push("The latest view could not be connected. Previously saved views are included.");
+  if (!continuous && capture?.pendingCount) issues.push(`${capture.pendingCount} unconfirmed views were left out of this result.`);
+  if (reviewed?.excludedFrameIds?.length) issues.push(`${reviewed.excludedFrameIds.length} captured views could not be used in this surface. They remain in the raw scan file.`);
   if (capture?.capacityReached) issues.push("This section reached its safe capacity. Save it as a partial scan before starting another section.");
   const coverage = capture?.coverage;
   const labels = { upper: "Upper surfaces", middle: "Walls and objects", lower: "Lower surfaces" };
@@ -677,7 +686,7 @@ export function auditCapture(stats, diagnostics = null) {
     if (region.observed >= MIN_REGION_OBSERVATIONS && region.ratio < MIN_REGION_CONFIRMATION)
       issues.push(`${labels[region.id]} have limited overlapping coverage.`);
   }
-  if ((stats.fusionKeyframes || 0) < 6) issues.push("A few more overlapping viewpoints will strengthen this surface.");
+  if ((reviewed?.finalValidatedFrames ?? stats.fusionKeyframes ?? 0) < 6) issues.push("A few more overlapping viewpoints will strengthen this surface.");
   if (diagnostics?.alignment?.disconnectedFrameIds?.length) issues.push("Some views failed the final alignment check.");
   const ambiguousEdges = diagnostics?.topologyAfterRepair?.nonManifoldEdges || 0;
   if (ambiguousEdges >= 200 && ambiguousEdges / Math.max(1, diagnostics?.triangles || 0) >= 0.01)

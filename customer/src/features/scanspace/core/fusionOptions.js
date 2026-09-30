@@ -39,6 +39,7 @@ export function scanFusionOptions(raw, completionMode = "surface", extra = {}) {
     // Keep all of the scanner's bounded depth path for a measured surface.
     maxKeyframes: completionMode === "surface" ? 60 : 40,
     depthType: raw?.stats?.depthType || raw?.depthType || "",
+    captureMode: raw?.stats?.captureMode || raw?.stats?.adaptiveCapture?.mode || "validated-live",
     ...extra,
   };
 }

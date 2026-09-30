@@ -91,6 +91,17 @@ async function fixture(name) {
         { id: "upper", observed: 80, confirmed: 16, ratio: 0.2 },
       ] } },
   };
+  if (name.startsWith("continuous")) {
+    Object.assign(activeStats, { captureMode: "continuous", capturedKeyframes: name === "continuous-start" ? 1 : 38,
+      capturedViews: name === "continuous-start" ? 1 : 42, fusionKeyframes: name === "continuous-start" ? 0 : 2, currentViewChecked: false,
+      frameQuality: "captured", movingTooFast: false });
+    activeStats.adaptiveCapture = { ...activeStats.adaptiveCapture, mode: "continuous", state: "tracking",
+      capturedCount: activeStats.capturedKeyframes, connected: name !== "continuous-start",
+      pendingCount: activeStats.capturedKeyframes - activeStats.fusionKeyframes,
+      coverage: name === "continuous-start" ? { ratio: 0, regions: [] }
+        : { ratio: .4, regions: [{ id: "middle", observed: 160, confirmed: 64, ratio: .4 }] } };
+    if (name === "continuous-depth") Object.assign(activeStats, { depthRecoveryState: "retrying", depthCurrent: false });
+  }
   if (["bridge", "reposition"].includes(name)) {
     const { CaptureExperience } = load(path.join(rootDirectory, "src/features/scanspace/core/captureExperience.js"));
     const experience = new CaptureExperience(), timestamp = name === "bridge" ? 2500 : 4500;
@@ -118,7 +129,7 @@ async function fixture(name) {
 
 (async () => {
   const pages = new Map();
-  for (const name of ["start", "tracking", "checking", "motion", "recovering", "seed-recheck", "bridge", "reposition", "surface", "review"]) pages.set(`/${name}`, await fixture(name));
+  for (const name of ["start", "tracking", "checking", "motion", "recovering", "seed-recheck", "bridge", "reposition", "surface", "review", "continuous", "continuous-start", "continuous-depth"]) pages.set(`/${name}`, await fixture(name));
   const cssPath = path.join(rootDirectory, "src/features/scanspace/scanspace.css");
   const server = http.createServer((request, response) => {
     const url = new URL(request.url, "http://127.0.0.1");

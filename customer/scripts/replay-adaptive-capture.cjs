@@ -7,7 +7,7 @@ const path = require("node:path");
 const assert = require("node:assert/strict");
 const { load } = require("./replay-scanspace.cjs");
 const { parsePartialScan } = load("src/features/scanspace/core/partialScanFile.js");
-const { AdaptiveCapture, adaptiveCaptureProfile, auditCapture, captureOverlap } = load("src/features/scanspace/core/adaptiveCapture.js");
+const { AdaptiveCapture, adaptiveCaptureProfile, auditCapture, captureBridgeOverlap, captureOverlap } = load("src/features/scanspace/core/adaptiveCapture.js");
 
 if (!process.argv[2]) {
   console.error("Usage: node scripts/replay-adaptive-capture.cjs <raw-scan.json> [--verbose]");
@@ -36,7 +36,8 @@ if (!process.argv[2]) {
     if (frame.captureId >= id) return;
     const neighbor = capture.frames.find(other => other.captureId === id);
     const agreement = neighbor && captureOverlap(frame, neighbor);
-    assert(agreement?.accepted && !agreement.conflict, "A retained connection failed independent revalidation");
+    assert(agreement && !agreement.conflict && (agreement.accepted || captureBridgeOverlap(agreement)),
+      "A retained connection failed independent revalidation");
     checkedConnections++;
   }));
   const times = decisions.map(row => row.elapsedMs).sort((a, b) => a - b);

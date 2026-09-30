@@ -1,5 +1,10 @@
 # Adaptive capture
 
+This document describes the earlier connected admission controller. Live
+scanning now uses [continuous capture](scanspace-continuous-capture.md), which
+retains usable observations independently of background alignment. The legacy
+controller remains available for diagnostic comparisons and regression tests.
+
 The live scanner keeps a bounded, connected graph of saved depth views. This
 improves **future captures**; it cannot recover measurements missing from an old
 export or guarantee a closed mesh of unseen object faces.

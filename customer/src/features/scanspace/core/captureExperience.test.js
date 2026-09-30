@@ -3,6 +3,46 @@ import { CaptureExperience, captureFeedback, sanitizeCaptureDiagnostics } from "
 const good = () => ({ tracking: true, depthCurrent: true, depthState: "active", currentViewChecked: true,
   fusionKeyframes: 12, adaptiveCapture: { state: "tracking", connected: true }, currentConfirmedRatio: 0.7 });
 
+test("continuous acquisition stays active while registration is unresolved for a long sweep", () => {
+  const experience = new CaptureExperience();
+  for (let id = 0; id < 80; id++) {
+    const timestamp = id * 300;
+    experience.recordFrame({ timestamp, reason: "captured", captured: 1, accepted: true, state: "tracking" });
+    const feedback = experience.update({ ...good(), captureMode: "continuous", capturedKeyframes: Math.min(60, id + 1),
+      currentViewChecked: false, fusionKeyframes: 2,
+      adaptiveCapture: { mode: "continuous", state: "recovering", connected: false, pendingCount: 10 },
+    }, timestamp);
+    expect(feedback.code).toBe("scanning");
+    expect(experience.captureStall).toBeNull();
+  }
+  expect(experience.snapshot()).toMatchObject({ capturedFrames: 80, committedFrames: 0, promptCount: 0 });
+});
+
+test("continuous acquisition still gives actionable feedback for a genuine motion or depth stop", () => {
+  const experience = new CaptureExperience();
+  const stats = { ...good(), captureMode: "continuous", capturedKeyframes: 4, movingTooFast: true };
+  experience.recordFrame({ timestamp: 0, reason: "captured", captured: 1, accepted: true, state: "tracking" });
+  experience.update(stats, 0);
+  experience.recordFrame({ timestamp: 2500, reason: "moving-too-fast", state: "tracking" });
+  expect(experience.update(stats, 2500).code).toBe("stalled-motion");
+  expect(experience.update({ ...stats, depthRecoveryState: "retrying" }, 2600).code).toBe("depth-retrying");
+  expect(experience.update({ ...stats, originChanged: true }, 2700).code).toBe("reset");
+});
+
+test("rotation without translation gets a gentle movement cue while acquisition stays active", () => {
+  expect(captureFeedback({ ...good(), captureMode: "continuous", capturedKeyframes: 5, cameraBaseline: .02 }))
+    .toMatchObject({ code: "baseline", tone: "active", label: "Move sideways as you scan" });
+  expect(captureFeedback({ ...good(), captureMode: "continuous", capturedKeyframes: 5, cameraBaseline: .1 }).code)
+    .toBe("scanning");
+});
+
+test("a depth outage preserves review guidance for captured views still waiting for alignment", () => {
+  const feedback = captureFeedback({ ...good(), captureMode: "continuous", capturedKeyframes: 12,
+    fusionKeyframes: 0, depthRecoveryState: "stalled" });
+  expect(feedback).toMatchObject({ code: "depth-stalled", hint: expect.stringContaining("Your captured views are safe") });
+  expect(feedback.hint).toMatch(/review them now/i);
+});
+
 test("a short shake is quiet; sustained motion gets one prompt that clears immediately", () => {
   const experience = new CaptureExperience(), stats = good();
   expect(experience.update(stats, 0).code).toBe("scanning");

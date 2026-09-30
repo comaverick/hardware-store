@@ -1782,6 +1782,12 @@
   color: #bacac2;
   font-size: 9px;
 }
+.ss-capture-legend {
+  margin: 5px 0 0;
+  color: #bacac2;
+  font-size: 9px;
+  line-height: 1.5;
+}
 .ss-capture-overlap strong { color: #e9f2ed; }
 .is-scanning .ss-scan-bottom {
   width: auto;
