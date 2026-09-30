@@ -9,6 +9,12 @@ import {
   selectTextureKeyframesForRetention,
 } from "./RoomScanner";
 
+// These replays supply their own XR timestamps. Host CPU load must not change
+// sampling cadence through measured processing time; profile tests cover that
+// adaptation separately with explicit processing costs.
+beforeEach(() => jest.spyOn(performance, "now").mockReturnValue(0));
+afterEach(() => jest.restoreAllMocks());
+
 test("raw depth is preferred before device-smoothed depth", () => {
   expect(DEPTH_TYPE_PREFERENCE).toEqual(["raw", "smooth"]);
 });
@@ -475,6 +481,165 @@ function captureHarness() {
   scanner.frame(1000, frame);
   return { scanner, frame, view, move, setEmulated: value => { emulated = value; }, setDepth: value => { depth = value; } };
 }
+
+test.each(["hit-test", "planes", "preview", "recovery-marker", "render"])(
+  "a transient %s error leaves depth acquisition running",
+  (stage) => {
+    const { scanner, frame } = captureHarness();
+    const saved = scanner.keyframes.slice();
+    const failure = new Error(`temporary ${stage} failure`);
+    if (stage === "planes") {
+      Object.defineProperty(frame, "detectedPlanes", {
+        get: jest.fn().mockImplementationOnce(() => { throw failure; })
+          .mockReturnValue(new Set()),
+      });
+    } else {
+      const [target, method] = stage === "hit-test" ? [frame, "getHitTestResults"] :
+        stage === "preview" ? [scanner, "updatePreview"] :
+        stage === "recovery-marker" ? [scanner, "updateRecoveryTarget"] :
+        [scanner.renderer, "render"];
+      jest.spyOn(target, method).mockImplementationOnce(() => { throw failure; });
+    }
+    scanner.frame(1400, frame);
+    const reads = frame.getDepthInformation.mock.calls.length;
+    scanner.frame(1800, frame);
+    scanner.frame(2200, frame);
+    expect(scanner.paused).toBe(false);
+    expect(frame.getDepthInformation.mock.calls.length).toBeGreaterThan(reads);
+    expect(scanner.keyframes.map(value => value.captureId)).toEqual(saved.map(value => value.captureId));
+    expect(scanner.stats.adaptiveCapture.connected).toBe(true);
+    expect(scanner.stats.errors.join(" ")).toContain(failure.message);
+  },
+);
+
+test("a transient pose error withholds geometry and uses the existing recovery checks", () => {
+  const { scanner, frame } = captureHarness();
+  const saved = scanner.keyframes.slice();
+  const reads = frame.getDepthInformation.mock.calls.length;
+  jest.spyOn(frame, "getViewerPose").mockImplementationOnce(() => {
+    throw new Error("temporary pose failure");
+  });
+  scanner.frame(1400, frame);
+  expect(scanner.paused).toBe(false);
+  expect(scanner.stats.tracking).toBe(false);
+  expect(frame.getDepthInformation).toHaveBeenCalledTimes(reads);
+  scanner.frame(1800, frame);
+  expect(scanner.capture.state).toBe("recovering");
+  scanner.frame(2200, frame);
+  expect(scanner.capture.state).toBe("tracking");
+  expect(scanner.keyframes.map(value => value.captureId)).toEqual(saved.map(value => value.captureId));
+});
+
+test.each([false, true])("render errors preserve deliberate pause and reset state (%s)", (reset) => {
+  const { scanner, frame } = captureHarness();
+  scanner.paused = true;
+  scanner.originChanged = reset;
+  const reads = frame.getDepthInformation.mock.calls.length;
+  jest.spyOn(scanner.renderer, "render").mockImplementationOnce(() => {
+    throw new Error("temporary render failure");
+  });
+  scanner.frame(1400, frame);
+  scanner.frame(1800, frame);
+  expect(scanner.paused).toBe(true);
+  expect(scanner.originChanged).toBe(reset);
+  expect(frame.getDepthInformation).toHaveBeenCalledTimes(reads);
+});
+
+test.each([false, true])("camera readback restores the XR target when it throws: %s", (throws) => {
+  const { scanner, frame, view } = captureHarness();
+  const target = { name: "active XR target" };
+  let activeTarget = target;
+  scanner.renderer = {
+    getContext: () => ({}), getRenderTarget: () => activeTarget,
+    getActiveCubeFace: () => 3, getActiveMipmapLevel: () => 1,
+    resetState: jest.fn(() => { activeTarget = null; }),
+    setRenderTarget: jest.fn((value) => { activeTarget = value; }),
+  };
+  scanner.binding = {};
+  view.camera = {};
+  scanner.colorReader = { read: () => {
+    if (throws) throw new Error("temporary color failure");
+    return null;
+  } };
+  scanner.captureDepthFrame(1400, frame, view);
+  expect(activeTarget).toBe(target);
+  expect(scanner.renderer.setRenderTarget).toHaveBeenCalledWith(target, 3, 1);
+  expect(scanner.stats.depthState).toBe("active");
+  expect(scanner.paused).toBe(false);
+  expect(scanner.keyframes).toHaveLength(2);
+});
+
+test("explicitly inactive native depth is resumed within acquisition", () => {
+  const { scanner, frame } = captureHarness();
+  scanner.session.depthActive = false;
+  scanner.session.resumeDepthSensing = jest.fn(() => { scanner.session.depthActive = true; });
+  frame.getDepthInformation.mockImplementation(() => scanner.session.depthActive
+    ? { width: 320, height: 240, getDepthInMeters: () => 2 } : null);
+  scanner.frame(1400, frame);
+  expect(scanner.session.resumeDepthSensing).toHaveBeenCalledTimes(1);
+  expect(scanner.stats.depthCurrent).toBe(true);
+  expect(scanner.keyframes).toHaveLength(2);
+});
+
+test.each([true, undefined])("null depth does not resume a session with depthActive=%s", (active) => {
+  const { scanner, frame } = captureHarness();
+  scanner.session.depthActive = active;
+  scanner.session.resumeDepthSensing = jest.fn();
+  frame.getDepthInformation.mockReturnValue(null);
+  scanner.frame(1400, frame);
+  scanner.frame(3500, frame);
+  expect(scanner.session.resumeDepthSensing).not.toHaveBeenCalled();
+  expect(scanner.stats.depthRecoveryState).toBe("retrying");
+  expect(scanner.keyframes).toHaveLength(2);
+});
+
+test("a failing depth resume is throttled while sensor reads continue", () => {
+  const { scanner, frame } = captureHarness();
+  scanner.session.depthActive = false;
+  scanner.session.resumeDepthSensing = jest.fn(() => { throw new Error("native resume unavailable"); });
+  frame.getDepthInformation.mockReturnValue(null);
+  const reads = frame.getDepthInformation.mock.calls.length;
+  for (const time of [1400, 1700, 2000, 2500]) scanner.frame(time, frame);
+  expect(scanner.session.resumeDepthSensing).toHaveBeenCalledTimes(2);
+  expect(frame.getDepthInformation.mock.calls.length).toBeGreaterThan(reads);
+  expect(scanner.paused).toBe(false);
+  expect(scanner.keyframes).toHaveLength(2);
+});
+
+test("an absent resume API and deliberate pause remain safe", () => {
+  const { scanner, frame } = captureHarness();
+  scanner.session.depthActive = false;
+  frame.getDepthInformation.mockReturnValue(null);
+  scanner.frame(1400, frame);
+  expect(scanner.paused).toBe(false);
+  scanner.session.resumeDepthSensing = jest.fn();
+  scanner.paused = true;
+  scanner.frame(1800, frame);
+  expect(scanner.session.resumeDepthSensing).not.toHaveBeenCalled();
+});
+
+test("cleanup completes once even when individual resources fail", () => {
+  const onEnd = jest.fn();
+  const scanner = new RoomScanner({ onUpdate: () => {}, onEnd });
+  scanner.hitSource = { cancel: jest.fn(() => { throw new Error("hit source already inactive"); }) };
+  const renderer = { setAnimationLoop: jest.fn(), dispose: jest.fn() };
+  const reader = { dispose: jest.fn(() => { throw new Error("color dispose failed"); }) };
+  const geometry = { dispose: jest.fn() };
+  const material = { dispose: jest.fn() };
+  scanner.renderer = renderer;
+  scanner.colorReader = reader;
+  scanner.scene = { traverse: (visit) => visit({ geometry, material: [material] }) };
+  expect(() => scanner.cleanup()).not.toThrow();
+  scanner.cleanup();
+  expect(renderer.setAnimationLoop).toHaveBeenCalledWith(null);
+  expect(renderer.dispose).toHaveBeenCalledTimes(1);
+  expect(geometry.dispose).toHaveBeenCalledTimes(1);
+  expect(material.dispose).toHaveBeenCalledTimes(1);
+  expect(onEnd).toHaveBeenCalledTimes(1);
+  expect(scanner.closed).toBe(true);
+  expect(scanner.renderer).toBeNull();
+  expect(scanner.hitSource).toBeNull();
+});
 
 test("emulated tracking withholds geometry and automatically confirms recovery in two observations", () => {
   const { scanner, frame, move, setEmulated } = captureHarness();

@@ -101,6 +101,7 @@ export default function ScannerPanel({
   const canvas = useRef(),
     overlay = useRef(),
     scanner = useRef(),
+    mounted = useRef(false),
     fusionWorker = useRef(),
     debugCapture = useRef(null),
     reviewing = useRef(false),
@@ -128,13 +129,16 @@ export default function ScannerPanel({
     if (targetState.tone === "warning") navigator.vibrate(45);
     if (targetState.tone === "complete") navigator.vibrate([20, 45, 20]);
   }, [active, busy, partial, targetState.code, targetState.tone]);
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
       fusionWorker.current?.terminate();
-      scanner.current?.stop();
-    },
-    [],
-  );
+      const source = scanner.current;
+      scanner.current = null;
+      source?.stop();
+    };
+  }, []);
   async function start() {
     debugCapture.current = null;
     setError("");
@@ -146,8 +150,11 @@ export default function ScannerPanel({
     const s = new RoomScanner({
       canvas: canvas.current,
       overlay: overlay.current,
-      onUpdate: setStats,
+      onUpdate: (nextStats) => {
+        if (mounted.current && scanner.current === s) setStats(nextStats);
+      },
       onEnd: () => {
+        if (!mounted.current || scanner.current !== s) return;
         setActive(false);
         if (!finished.current && !reviewing.current)
           setError("Scan ended before a result was built. Start the scan again.");
@@ -155,12 +162,13 @@ export default function ScannerPanel({
     });
     scanner.current = s;
     try {
-      await s.start();
+      const started = await s.start();
+      if (!mounted.current || scanner.current !== s || s.closed || started === false) return;
       setActive(true);
     } catch (e) {
-      setError(e.message);
+      if (mounted.current && scanner.current === s) setError(e.message);
     } finally {
-      setBusy(false);
+      if (mounted.current && scanner.current === s) setBusy(false);
     }
   }
   async function cancelScan() {

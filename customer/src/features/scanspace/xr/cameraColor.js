@@ -54,62 +54,100 @@ export function measureColorFrameQuality(
 }
 
 export function createCameraColorReader(gl, options = {}) {
+  const resources = new Map();
+  let disposed = false;
+  const allocate = (create, destroy, ...args) => {
+    const resource = gl[create](...args);
+    if (!resource) throw new Error("Camera copy resource unavailable.");
+    resources.set(resource, destroy);
+    return resource;
+  };
+  const release = (resource) => {
+    const destroy = resources.get(resource);
+    resources.delete(resource);
+    if (destroy) gl[destroy](resource);
+  };
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true;
+    let failure;
+    for (const resource of Array.from(resources.keys()).reverse()) {
+      try {
+        release(resource);
+      } catch (error) {
+        failure ||= error;
+      }
+    }
+    if (failure) throw failure;
+  };
   const compile = (type, source) => {
-    const s = gl.createShader(type);
+    const s = allocate("createShader", "deleteShader", type);
     gl.shaderSource(s, source);
     gl.compileShader(s);
     if (!gl.getShaderParameter(s, gl.COMPILE_STATUS))
       throw new Error("Camera copy shader failed.");
     return s;
   };
-  const vs = compile(
-    gl.VERTEX_SHADER,
-    "#version 300 es\nin vec2 position;out vec2 uv;void main(){uv=(position+1.0)*0.5;gl_Position=vec4(position,0.0,1.0);}",
-  );
-  const fs = compile(
-    gl.FRAGMENT_SHADER,
-    "#version 300 es\nprecision mediump float;uniform sampler2D image;in vec2 uv;out vec4 outColor;void main(){outColor=texture(image,uv);}",
-  );
-  const program = gl.createProgram();
-  gl.attachShader(program, vs);
-  gl.attachShader(program, fs);
-  gl.linkProgram(program);
-  gl.deleteShader(vs);
-  gl.deleteShader(fs);
-  if (!gl.getProgramParameter(program, gl.LINK_STATUS))
-    throw new Error("Camera copy program failed.");
-  const vao = gl.createVertexArray(),
-    buffer = gl.createBuffer();
-  gl.bindVertexArray(vao);
-  gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-  gl.bufferData(
-    gl.ARRAY_BUFFER,
-    new Float32Array([-1, -1, 3, -1, -1, 3]),
-    gl.STATIC_DRAW,
-  );
-  const location = gl.getAttribLocation(program, "position");
-  gl.enableVertexAttribArray(location);
-  gl.vertexAttribPointer(location, 2, gl.FLOAT, false, 0, 0);
-  gl.bindVertexArray(null);
-  const texture = gl.createTexture(),
-    framebuffer = gl.createFramebuffer();
+  let program, vao, buffer, texture, framebuffer;
+  try {
+    const vs = compile(
+      gl.VERTEX_SHADER,
+      "#version 300 es\nin vec2 position;out vec2 uv;void main(){uv=(position+1.0)*0.5;gl_Position=vec4(position,0.0,1.0);}",
+    );
+    const fs = compile(
+      gl.FRAGMENT_SHADER,
+      "#version 300 es\nprecision mediump float;uniform sampler2D image;in vec2 uv;out vec4 outColor;void main(){outColor=texture(image,uv);}",
+    );
+    program = allocate("createProgram", "deleteProgram");
+    gl.attachShader(program, vs);
+    gl.attachShader(program, fs);
+    gl.linkProgram(program);
+    release(vs);
+    release(fs);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS))
+      throw new Error("Camera copy program failed.");
+    vao = allocate("createVertexArray", "deleteVertexArray");
+    buffer = allocate("createBuffer", "deleteBuffer");
+    gl.bindVertexArray(vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.bufferData(
+      gl.ARRAY_BUFFER,
+      new Float32Array([-1, -1, 3, -1, -1, 3]),
+      gl.STATIC_DRAW,
+    );
+    const location = gl.getAttribLocation(program, "position");
+    gl.enableVertexAttribArray(location);
+    gl.vertexAttribPointer(location, 2, gl.FLOAT, false, 0, 0);
+    gl.bindVertexArray(null);
+    texture = allocate("createTexture", "deleteTexture");
+    framebuffer = allocate("createFramebuffer", "deleteFramebuffer");
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+    gl.framebufferTexture2D(
+      gl.FRAMEBUFFER,
+      gl.COLOR_ATTACHMENT0,
+      gl.TEXTURE_2D,
+      texture,
+      0,
+    );
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  } catch (error) {
+    try {
+      dispose();
+    } catch {
+      // Preserve the setup failure after attempting every resource release.
+    }
+    throw error;
+  }
   let width = 0,
     height = 0,
     pixels = null;
-  gl.bindTexture(gl.TEXTURE_2D, texture);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-  gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
-  gl.framebufferTexture2D(
-    gl.FRAMEBUFFER,
-    gl.COLOR_ATTACHMENT0,
-    gl.TEXTURE_2D,
-    texture,
-    0,
-  );
-  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   return {
     read(binding, camera) {
+      if (disposed) return null;
+      if (gl.isContextLost()) throw new Error("Camera copy context lost.");
       const external = binding.getCameraImage(camera);
       if (!external) return null;
       const sourceWidth = Number(camera.width) || 1;
@@ -163,6 +201,8 @@ export function createCameraColorReader(gl, options = {}) {
         );
       }
       gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+      if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE)
+        throw new Error("Camera copy framebuffer incomplete.");
       gl.viewport(0, 0, width, height);
       gl.disable(gl.SCISSOR_TEST);
       gl.disable(gl.DEPTH_TEST);
@@ -177,6 +217,8 @@ export function createCameraColorReader(gl, options = {}) {
       gl.drawArrays(gl.TRIANGLES, 0, 3);
       gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
       gl.bindVertexArray(null);
+      if (gl.getError() !== gl.NO_ERROR)
+        throw new Error("Camera copy readback failed.");
       const sample = (u, v) => {
         // WebXR normalized view coordinates are top-left based, while
         // readPixels returns the camera copy from the OpenGL bottom row.
@@ -213,12 +255,6 @@ export function createCameraColorReader(gl, options = {}) {
       });
       return sample;
     },
-    dispose() {
-      gl.deleteTexture(texture);
-      gl.deleteFramebuffer(framebuffer);
-      gl.deleteBuffer(buffer);
-      gl.deleteVertexArray(vao);
-      gl.deleteProgram(program);
-    },
+    dispose,
   };
 }

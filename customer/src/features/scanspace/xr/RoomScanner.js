@@ -14,6 +14,7 @@ import {
 import { createCameraColorReader } from "./cameraColor";
 import { AdaptiveCapture, adaptiveCaptureProfile, captureDetail, capturePointObserved, confirmedViewRatio, prepareCaptureFrame } from "../core/adaptiveCapture";
 import { CaptureExperience } from "../core/captureExperience";
+import { captureDebugEnabled, CaptureRuntimeDiagnostics, installCaptureRuntimeDebug } from "../core/captureDebug";
 
 function coverageSplatTexture() {
   const canvas = document.createElement("canvas");
@@ -46,6 +47,7 @@ const COVERAGE_REFRESH_MS = 1500;
 const DEPTH_RETRYING_MS = 2000;
 const DEPTH_STALLED_MS = 10000;
 const DEPTH_RETRY_INTERVAL_MS = 250;
+const DEPTH_RESUME_INTERVAL_MS = 1000;
 const XR_FRAME_WATCHDOG_MS = 2000;
 
 function poseMotion(previous, pose, timestamp) {
@@ -321,6 +323,8 @@ export class RoomScanner {
     this.paused = false;
     this.floorY = null;
     this.closed = false;
+    this.stopping = false;
+    this.sessionEnded = false;
     this.stats = {
       depthFrames: 0,
       pointCount: 0,
@@ -338,6 +342,11 @@ export class RoomScanner {
       depthFailureKind: "",
       depthFailureMs: 0,
       depthRecoveries: 0,
+      nativeDepthActive: null,
+      depthResumeAttempts: 0,
+      depthResumeErrors: 0,
+      depthReads: 0,
+      xrFrames: 0,
       originChanged: false,
       colorActive: false,
       tracking: false,
@@ -392,10 +401,16 @@ export class RoomScanner {
     this.geometryProcessingMs = 0;
     this.previewNeedsRebuild = false;
     this.previewDiscardedCount = 0;
+    if (captureDebugEnabled()) {
+      this.runtimeDiagnostics = new CaptureRuntimeDiagnostics();
+      this.updateRuntimeDiagnostics();
+      installCaptureRuntimeDebug(this.runtimeDiagnostics);
+    }
   }
   publish(time = this.lastFrameAt ?? performance.now()) {
     this.updateExperience(time);
-    this.onUpdate({
+    this.updateRuntimeDiagnostics();
+    this.onUpdate?.({
       ...this.stats,
       floorY: this.floorY,
       paused: this.paused,
@@ -403,9 +418,10 @@ export class RoomScanner {
     });
   }
   async start() {
+    if (this.closed || this.stopping) return false;
     try {
       // Called synchronously from a user click, before any asynchronous capability probe.
-      this.session = await navigator.xr.requestSession("immersive-ar", {
+      const session = await navigator.xr.requestSession("immersive-ar", {
         // A depth-less AR session cannot produce a ScanSpace scan. Require the
         // feature so unsupported sessions fail immediately instead of showing
         // "No reliable depth" forever after the camera opens.
@@ -427,11 +443,23 @@ export class RoomScanner {
         },
         domOverlay: { root: this.overlay },
       });
-      if (this.closed) {
-        await this.session.end();
-        return;
+      if (this.closed || this.stopping) {
+        try {
+          await session.end();
+        } catch (error) {
+          this.recordCaptureError(error, "Canceled camera session end failed");
+        }
+        return false;
       }
-      this.session.addEventListener("end", () => this.cleanup());
+      this.session = session;
+      this.onSessionEnd = () => {
+        this.sessionEnded = true;
+        // Three.js also listens to this event and must finish restoring its XR
+        // state before we dispose the renderer. Stop acquisition immediately.
+        Promise.resolve().then(() => this.cleanup());
+      };
+      session.addEventListener("end", this.onSessionEnd);
+      this.runtimeDiagnostics?.record("session-start", performance.now());
       // Without DOM overlay, provide a visible refusal instead of trapping the user in AR.
       if (!this.session.domOverlayState)
         throw new Error(
@@ -440,6 +468,7 @@ export class RoomScanner {
       this.stats.features = Array.from(this.session.enabledFeatures || []);
       this.stats.depthUsage = this.session.depthUsage || "Unavailable";
       this.stats.depthType = this.session.depthType || "Unavailable";
+      this.stats.format = this.session.depthDataFormat || "Unavailable";
       const depthEnabled = this.stats.features.includes("depth-sensing");
       if (!depthEnabled || this.session.depthUsage !== "cpu-optimized") {
         this.stats.depthState = "unavailable";
@@ -458,13 +487,19 @@ export class RoomScanner {
       this.renderer.xr.setReferenceSpaceType("local");
       this.renderer.setClearColor(0, 0);
       await this.renderer.xr.setSession(this.session);
+      if (!this.isSessionOpen()) return false;
+      let space;
       try {
-        this.space = await this.session.requestReferenceSpace("local-floor");
+        space = await session.requestReferenceSpace("local-floor");
       } catch {
-        this.space = await this.session.requestReferenceSpace("local");
+        if (!this.isSessionOpen()) return false;
+        space = await session.requestReferenceSpace("local");
       }
+      if (!this.isSessionOpen()) return false;
+      this.space = space;
       this.renderer.xr.setReferenceSpace(this.space);
-      this.space.addEventListener("reset", () => {
+      this.onSpaceReset = () => {
+        if (!this.isSessionOpen()) return;
         this.originChanged = true;
         this.paused = true;
         this.stats.originChanged = true;
@@ -476,11 +511,23 @@ export class RoomScanner {
           "Tracking origin changed. Start a new scan to avoid mixing coordinates.",
         );
         this.publish();
+      };
+      space.addEventListener("reset", this.onSpaceReset);
+      const viewer = await session.requestReferenceSpace("viewer");
+      if (!this.isSessionOpen()) return false;
+      this.viewer = viewer;
+      const hitSource = await session.requestHitTestSource({
+        space: viewer,
       });
-      this.viewer = await this.session.requestReferenceSpace("viewer");
-      this.hitSource = await this.session.requestHitTestSource({
-        space: this.viewer,
-      });
+      if (!this.isSessionOpen()) {
+        try {
+          hitSource.cancel();
+        } catch (error) {
+          this.recordCaptureError(error, "Canceled hit source cleanup failed");
+        }
+        return false;
+      }
+      this.hitSource = hitSource;
       this.scene = new THREE.Scene();
       this.camera = new THREE.PerspectiveCamera();
       this.pointGeometry = new THREE.BufferGeometry();
@@ -525,16 +572,36 @@ export class RoomScanner {
       this.lastFrameAt = performance.now();
       this.depthWatchdog = window.setInterval(() => this.depthWatchdogTick(performance.now()), 1000);
       this.publish();
+      return true;
     } catch (error) {
+      const canceled = this.closed || this.stopping || this.sessionEnded;
       await this.stop();
+      if (canceled) return false;
       throw error;
     }
+  }
+  isSessionOpen() {
+    return !!this.session && !this.closed && !this.stopping && !this.sessionEnded;
   }
   recordCaptureError(error, prefix = "Capture error") {
     const message = `${prefix}: ${error?.message || String(error)}`;
     this.stats.captureError = message;
     if (this.stats.errors[this.stats.errors.length - 1] !== message)
       this.stats.errors = [...this.stats.errors.slice(-4), message];
+    this.runtimeDiagnostics?.record("error", this.lastFrameAt ?? performance.now(), {
+      stage: prefix, name: error?.name || "Error", message: error?.message || String(error),
+    });
+  }
+  updateRuntimeDiagnostics() {
+    if (!this.runtimeDiagnostics) return;
+    try {
+      this.stats.sessionVisibility = this.session?.visibilityState || this.stats.sessionVisibility || "unknown";
+      this.stats.contextLost = this.renderer?.getContext?.()?.isContextLost?.() ?? null;
+    } catch (error) {
+      this.recordCaptureError(error, "Runtime state unavailable");
+    }
+    this.runtimeDiagnostics.update({ ...this.stats, closed: this.closed, paused: this.paused });
+    this.stats.runtimeDiagnostics = this.runtimeDiagnostics.snapshot();
   }
   updateDepthRecovery(time) {
     if (this.depthFailureSince == null) return;
@@ -555,6 +622,27 @@ export class RoomScanner {
     this.stats.depthFailureMs = 0;
     this.stats.depthRecoveryState = "active";
   }
+  resumeInactiveDepth(time) {
+    if (!this.session || this.closed || this.stopping || this.sessionEnded || this.paused || this.originChanged) return;
+    try {
+      const active = this.session.depthActive;
+      this.stats.nativeDepthActive = typeof active === "boolean" ? active : null;
+      // This method is called only during acquisition in the XR animation
+      // callback. A null depth sample alone is not evidence of paused sensing.
+      if (active !== false || typeof this.session.resumeDepthSensing !== "function" ||
+          time < (this.depthResumeRetryAt ?? -Infinity)) return;
+      this.depthResumeRetryAt = time + DEPTH_RESUME_INTERVAL_MS;
+      this.stats.depthResumeAttempts++;
+      this.runtimeDiagnostics?.record("depth-resume", time);
+      this.session.resumeDepthSensing();
+      const resumed = this.session.depthActive;
+      this.stats.nativeDepthActive = typeof resumed === "boolean" ? resumed : null;
+    } catch (error) {
+      this.depthResumeRetryAt = time + DEPTH_RESUME_INTERVAL_MS;
+      this.stats.depthResumeErrors++;
+      this.recordCaptureError(error, "Depth resume failed");
+    }
+  }
   depthWatchdogTick(time) {
     if (this.closed || !this.session || this.paused || this.originChanged || this.lastFrameAt == null) return;
     // The camera passthrough can remain visible even if XR animation callbacks
@@ -566,6 +654,7 @@ export class RoomScanner {
     this.stats.currentViewChecked = false;
     this.stats.currentConfirmedRatio = 0;
     this.noteDepthFailure("xr-frame-stalled", time, this.lastFrameAt);
+    this.runtimeDiagnostics?.record("watchdog", time, { reason: "xr-frame-stalled" });
     this.publish(time);
   }
   markDepthMiss(time) {
@@ -586,12 +675,15 @@ export class RoomScanner {
     let geometryElapsed = null;
     let depth = null;
     try {
+      this.resumeInactiveDepth(time);
       const depthUsage = this.session?.depthUsage || this.stats.depthUsage;
       if (
         depthUsage === "cpu-optimized" &&
         typeof frame.getDepthInformation === "function"
-      )
+      ) {
+        this.stats.depthReads++;
         depth = frame.getDepthInformation(view);
+      }
     } catch (error) {
       this.noteDepthFailure("depth-read-error", time);
       this.stats.rejectedDepthFrames++;
@@ -648,12 +740,22 @@ export class RoomScanner {
         view.camera &&
         time >= (this.colorRetryAt || 0) && time - (this.lastColorReadAt ?? -Infinity) >= 350
       ) {
+        const colorStarted = performance.now();
         try {
-          this.colorReader ??= createCameraColorReader(
-            this.renderer.getContext(),
-          );
-          this.lastColorReadAt = time;
-          colorAt = this.colorReader.read(this.binding, view.camera);
+          const renderer = this.renderer;
+          const target = renderer.getRenderTarget?.();
+          const cubeFace = renderer.getActiveCubeFace?.() || 0;
+          const mipLevel = renderer.getActiveMipmapLevel?.() || 0;
+          try {
+            this.colorReader ??= createCameraColorReader(renderer.getContext());
+            this.lastColorReadAt = time;
+            colorAt = this.colorReader.read(this.binding, view.camera);
+          } finally {
+            // resetState also clears Three.js's current render target. The XR
+            // manager selected it before this callback, so restore it here.
+            renderer.resetState();
+            if (target !== undefined) renderer.setRenderTarget(target, cubeFace, mipLevel);
+          }
           if (colorAt) {
             this.stats.colorActive = true;
             this.stats.colorSharpness = colorAt.sharpness || 0;
@@ -665,6 +767,8 @@ export class RoomScanner {
             this.colorFailures = 0;
           }
         } catch (error) {
+          colorAt = null;
+          this.stats.colorFrameReliable = false;
           this.colorFailures = (this.colorFailures || 0) + 1;
           // Camera textures are frame-scoped and can fail transiently during
           // tracking changes. Back off briefly, then recover automatically
@@ -673,7 +777,7 @@ export class RoomScanner {
             time + Math.min(2000, 250 * 2 ** (this.colorFailures - 1));
           this.recordCaptureError(error, "Captured color unavailable");
         } finally {
-          this.renderer.resetState();
+          this.stats.colorReadMs = Math.round(performance.now() - colorStarted);
         }
       }
       // Preserve a bounded grid for mid-range phones while matching the XR
@@ -865,10 +969,16 @@ export class RoomScanner {
     }
   }
   frame(time, frame) {
-    if (!frame || this.closed) return;
+    if (!frame || this.closed || this.stopping || this.sessionEnded) return;
     this.lastFrameAt = time;
+    this.stats.xrFrames++;
     try {
-      const pose = frame.getViewerPose(this.space);
+      let pose = null;
+      try {
+        pose = frame.getViewerPose(this.space);
+      } catch (error) {
+        this.recordCaptureError(error, "Camera pose unavailable");
+      }
       this.stats.tracking = !!pose && !pose.emulatedPosition;
       this.hit = null;
       if (pose && !pose.emulatedPosition) {
@@ -878,22 +988,26 @@ export class RoomScanner {
           x: pose.transform.position.x,
           z: pose.transform.position.z,
         };
-        const hit = frame
-          .getHitTestResults(this.hitSource)[0]
-          ?.getPose(this.space);
-        if (hit && hit.transform.matrix[5] > 0.85) {
-          this.hit = {
-            x: hit.transform.position.x,
-            y: hit.transform.position.y,
-            z: hit.transform.position.z,
-          };
-          // Prefer the lowest stable horizontal hit. This avoids asking the
-          // customer to calibrate a floor while naturally correcting a table
-          // or counter hit once the actual floor comes into view.
-          if (this.floorY === null || hit.transform.position.y < this.floorY) {
-            this.floorY = hit.transform.position.y;
-            this.stats.floorAutoDetected = true;
+        try {
+          const hit = frame
+            .getHitTestResults(this.hitSource)[0]
+            ?.getPose(this.space);
+          if (hit && hit.transform.matrix[5] > 0.85) {
+            this.hit = {
+              x: hit.transform.position.x,
+              y: hit.transform.position.y,
+              z: hit.transform.position.z,
+            };
+            // Prefer the lowest stable horizontal hit. This avoids asking the
+            // customer to calibrate a floor while naturally correcting a table
+            // or counter hit once the actual floor comes into view.
+            if (this.floorY === null || hit.transform.position.y < this.floorY) {
+              this.floorY = hit.transform.position.y;
+              this.stats.floorAutoDetected = true;
+            }
           }
+        } catch (error) {
+          this.recordCaptureError(error, "Hit test unavailable");
         }
         const profile = adaptiveCaptureProfile({ ...this.captureDetail,
           ...this.nativeDepthSize, validRatio: this.stats.depthFrames ? this.stats.validDepthRatio : 1,
@@ -919,13 +1033,18 @@ export class RoomScanner {
         if (!this.paused && view && (elapsedSinceCapture >= retryInterval || settledAfterMotion)) {
           this.lastCapture = time;
           this.captureDepthFrame(time, frame, view);
-          if (frame.detectedPlanes) {
-            for (const plane of this.planes.keys())
-              if (!frame.detectedPlanes.has(plane)) this.planes.delete(plane);
-            for (const plane of frame.detectedPlanes) {
-              this.planes.set(plane, { orientation: plane.orientation });
+          try {
+            const planes = frame.detectedPlanes;
+            if (planes) {
+              for (const plane of this.planes.keys())
+                if (!planes.has(plane)) this.planes.delete(plane);
+              for (const plane of planes) {
+                this.planes.set(plane, { orientation: plane.orientation });
+              }
+              this.stats.planes = this.planes.size;
             }
-            this.stats.planes = this.planes.size;
+          } catch (error) {
+            this.recordCaptureError(error, "Plane update unavailable");
           }
         }
       } else {
@@ -944,24 +1063,45 @@ export class RoomScanner {
         this.lastPublish = time;
         // Rebuilding the saved-point preview cannot restore missing live depth.
         // Leave the last verified overlay in place while retrying the sensor.
-        if (this.depthFailureSince == null || time - this.depthFailureSince < DEPTH_RETRYING_MS)
-          this.updatePreview();
+        if (this.depthFailureSince == null || time - this.depthFailureSince < DEPTH_RETRYING_MS) {
+          try {
+            this.updatePreview();
+          } catch (error) {
+            this.recordCaptureError(error, "Coverage preview unavailable");
+          }
+        }
         this.publish();
       }
-      if (pose && this.stats.tracking) this.updateRecoveryTarget(pose.views[0]);
-      else if (this.recoveryMarker) this.recoveryMarker.visible = false;
+      try {
+        if (pose && this.stats.tracking) this.updateRecoveryTarget(pose.views[0]);
+        else if (this.recoveryMarker) this.recoveryMarker.visible = false;
+      } catch (error) {
+        this.recordCaptureError(error, "Recovery marker unavailable");
+      }
       if (this.coverageMaterial) this.coverageMaterial.visible = this.stats.tracking && !this.originChanged;
-      this.renderer.render(this.scene, this.camera);
+      try {
+        this.renderer.render(this.scene, this.camera);
+      } catch (error) {
+        this.recordCaptureError(error, "Scan rendering unavailable");
+      }
     } catch (error) {
-      this.paused = true;
-      this.recordCaptureError(error, "Capture paused after an XR error");
-      this.publish();
+      // Keep the next callback alive. Only deliberate pause/review and an
+      // actual reference-space reset may permanently withhold acquisition.
+      this.stats.currentViewChecked = false;
+      this.stats.currentConfirmedRatio = 0;
+      this.recordCaptureError(error, "XR frame skipped");
+      try {
+        this.publish();
+      } catch (publishError) {
+        this.recordCaptureError(publishError, "Capture update unavailable");
+      }
     }
   }
   recordCaptureOutcome(time, { reason, accepted = false, committed = 0, matched = false }, started) {
     this.stats.frameQuality = reason;
     this.stats.currentViewChecked = accepted;
     this.lastViewDecisionAt = time;
+    this.runtimeDiagnostics?.record("capture", time, { reason, accepted, committed });
     if (!accepted) this.stats.currentConfirmedRatio = 0;
     const depthAvailable = !["depth-error", "depth-missing", "invalid-depth"].includes(reason);
     this.experience.recordFrame({ timestamp: time, reason, accepted, committed, matched,
@@ -1587,27 +1727,61 @@ export class RoomScanner {
     };
   }
   async stop() {
-    if (this.session && !this.closed) {
+    if (this.stopPromise) return this.stopPromise;
+    this.stopping = true;
+    this.stopPromise = (async () => {
       try {
-        await this.session.end();
-      } catch {
+        if (this.session && !this.closed && !this.sessionEnded) await this.session.end();
+      } catch (error) {
+        this.recordCaptureError(error, "Camera session end failed");
+      } finally {
         this.cleanup();
       }
-    } else this.cleanup();
+    })();
+    return this.stopPromise;
   }
   cleanup() {
     if (this.closed) return;
     this.closed = true;
-    if (this.depthWatchdog != null) window.clearInterval(this.depthWatchdog);
-    this.hitSource?.cancel();
-    this.renderer?.setAnimationLoop(null);
-    this.colorReader?.dispose();
-    this.pointTexture?.dispose();
-    this.scene?.traverse((o) => {
-      o.geometry?.dispose();
-      if (o.material) o.material.dispose();
+    const release = (operation) => {
+      try {
+        operation();
+      } catch (error) {
+        this.recordCaptureError(error, "Capture cleanup failed");
+      }
+    };
+    release(() => {
+      if (this.depthWatchdog != null) window.clearInterval(this.depthWatchdog);
     });
-    this.renderer?.dispose();
-    this.onEnd?.();
+    release(() => this.session?.removeEventListener?.("end", this.onSessionEnd));
+    release(() => this.space?.removeEventListener?.("reset", this.onSpaceReset));
+    release(() => this.renderer?.setAnimationLoop(null));
+    release(() => this.hitSource?.cancel());
+    release(() => this.colorReader?.dispose());
+    release(() => this.pointTexture?.dispose());
+    const disposed = new Set();
+    const dispose = (resource) => {
+      if (!resource || disposed.has(resource)) return;
+      disposed.add(resource);
+      release(() => resource.dispose?.());
+    };
+    release(() => this.scene?.traverse((object) => {
+      dispose(object.geometry);
+      (Array.isArray(object.material) ? object.material : [object.material]).forEach(dispose);
+    }));
+    dispose(this.pointGeometry);
+    dispose(this.coverageMaterial);
+    dispose(this.recoveryMarker?.geometry);
+    dispose(this.recoveryMarker?.material);
+    release(() => this.renderer?.dispose());
+    this.session = this.space = this.viewer = this.hitSource = this.renderer = this.binding = null;
+    this.colorReader = this.pointTexture = this.scene = this.camera = null;
+    this.pointGeometry = this.coverageMaterial = this.recoveryMarker = null;
+    this.positions = this.colors = null;
+    this.depthWatchdog = this.onSessionEnd = this.onSpaceReset = null;
+    this.hit = null;
+    this.runtimeDiagnostics?.record("session-end", performance.now());
+    this.updateRuntimeDiagnostics();
+    release(() => this.onEnd?.());
   }
 }

@@ -206,3 +206,32 @@ test("a tracking reset cannot be bypassed with finish or resume", async () => {
   expect(await screen.findByRole("alert")).toHaveTextContent("Tracking origin changed");
   expect(createFusionWorker).not.toHaveBeenCalled();
 });
+
+test("late end events from an older scanner cannot stop a new scan", async () => {
+  await startPanel();
+  const oldScanner = scanner;
+  act(() => oldScanner.onEnd());
+  fireEvent.click(screen.getByRole("button", { name: "Start camera scan" }));
+  await screen.findByRole("button", { name: "Finish & review" });
+  expect(scanner).not.toBe(oldScanner);
+  act(() => oldScanner.onEnd());
+  expect(screen.getByRole("button", { name: "Finish & review" })).toBeInTheDocument();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
+test("a camera ending before startup resolves cannot reopen scanning controls", async () => {
+  let resolveStart;
+  const starting = new Promise(resolve => { resolveStart = resolve; });
+  render(<ScannerPanel capabilities={{ ar: true, secure: true }}
+    onSurface={jest.fn()} onCancel={jest.fn()} />);
+  RoomScanner.mockImplementationOnce(({ onUpdate, onEnd }) => {
+    scanner = { start: () => starting, stop: jest.fn(), onEnd, onUpdate };
+    return scanner;
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Start camera scan" }));
+  scanner.closed = true;
+  act(() => scanner.onEnd());
+  await act(async () => resolveStart(false));
+  expect(screen.getByRole("button", { name: "Start camera scan" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Cancel scan" })).not.toBeInTheDocument();
+});

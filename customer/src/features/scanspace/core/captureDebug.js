@@ -2,7 +2,65 @@
 // Snapshot before worker transfer detaches the live typed arrays. Camera photos
 // are omitted to bound memory; per-point RGB is sufficient for geometry replay.
 export function captureDebugEnabled() {
-  return new URLSearchParams(window.location.search).get("scanspaceDebug") === "1";
+  return typeof window !== "undefined" &&
+    new URLSearchParams(window.location.search).get("scanspaceDebug") === "1";
+}
+
+const RUNTIME_FIELDS = [
+  "closed", "paused", "originChanged", "tracking", "nativeDepthActive", "sessionVisibility",
+  "contextLost", "depthUsage", "depthType", "format", "dimensions", "xrFrames", "depthReads",
+  "depthFrames", "totalDepthMisses", "depthReadErrors", "depthResumeAttempts", "depthResumeErrors",
+  "depthRecoveryState", "depthFailureKind", "depthFailureMs", "depthRecoveries", "frameQuality",
+  "fusionKeyframes", "acceptedDepthFrames", "rejectedDepthFrames", "captureIntervalMs",
+  "captureProcessingMs", "geometryProcessingMs", "colorReadMs", "poseOverlapRatio",
+  "poseMedianResidual", "poseUpperResidual", "gateLinearSpeed", "gateAngularSpeed",
+  "maxLinearSpeed", "maxAngularSpeed",
+];
+const diagnosticValue = (value) => typeof value === "string" ? value.slice(0, 240) :
+  typeof value === "boolean" ? value : Number.isFinite(value) ? value : null;
+
+// Opt-in local runtime evidence, including failures before any geometry is
+// saved. Never retain XR objects, images, positions, or an unbounded history.
+export class CaptureRuntimeDiagnostics {
+  constructor() {
+    this.buildId = process.env.REACT_APP_VERCEL_GIT_COMMIT_SHA ||
+      process.env.REACT_APP_GIT_SHA || "local-or-unknown";
+    this.browser = typeof navigator === "undefined" ? "unknown" : navigator.userAgent;
+    this.state = {};
+    this.features = [];
+    this.events = [];
+    this.errorCount = 0;
+  }
+  update(stats) {
+    this.state = Object.fromEntries(RUNTIME_FIELDS.map(key => [key, diagnosticValue(stats[key])]));
+    this.features = (stats.features || []).slice(0, 16).map(value => String(value).slice(0, 64));
+  }
+  record(type, timestamp, details = {}) {
+    this.startedAt ??= timestamp;
+    if (type === "error") this.errorCount++;
+    const event = { type, elapsedMs: Math.max(0, timestamp - this.startedAt) };
+    for (const key of ["reason", "stage", "name", "message", "accepted", "committed"])
+      if (details[key] !== undefined) event[key] = diagnosticValue(details[key]);
+    this.events.push(event);
+    if (this.events.length > 48) this.events.shift();
+  }
+  snapshot() {
+    return { version: 1, kind: "scanspace-runtime", buildId: this.buildId,
+      browser: this.browser, features: this.features.slice(), state: { ...this.state },
+      errorCount: this.errorCount, events: this.events.map(event => ({ ...event })) };
+  }
+}
+
+export function installCaptureRuntimeDebug(diagnostics) {
+  // This handle retains only diagnostics, so cancellation can release the
+  // scanner's GPU/geometry while the last failure remains available to inspect.
+  window.scanspaceDebug = {
+    snapshot: () => diagnostics.snapshot(),
+    download: () => downloadCaptureBlob(
+      new Blob([JSON.stringify(diagnostics.snapshot())], { type: "application/json" }),
+      `cdx-scanspace-runtime-${Date.now()}.json`,
+    ),
+  };
 }
 
 export function snapshotDepthCapture(raw) {
@@ -75,10 +133,14 @@ export function downloadDepthCapture(blob, diagnostics = null) {
   const file = new Blob([
     '{"capture":', blob, ',"diagnostics":', JSON.stringify(diagnostics), "}",
   ], { type: "application/json" });
+  downloadCaptureBlob(file, `cdx-scanspace-debug-${Date.now()}.json`);
+}
+
+function downloadCaptureBlob(file, filename) {
   const url = URL.createObjectURL(file);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `cdx-scanspace-debug-${Date.now()}.json`;
+  link.download = filename;
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

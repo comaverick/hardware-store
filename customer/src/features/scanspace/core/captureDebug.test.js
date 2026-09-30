@@ -1,4 +1,5 @@
-import { snapshotDepthCapture, restoreDepthCapture } from "./captureDebug";
+import { snapshotDepthCapture, restoreDepthCapture, CaptureRuntimeDiagnostics,
+  captureDebugEnabled, installCaptureRuntimeDebug } from "./captureDebug";
 import { createRgbdKeyframe } from "./fusion";
 
 const readBlob = (blob) => new Promise((resolve, reject) => {
@@ -62,4 +63,55 @@ test("flags legacy transformed-UV captures instead of silently reinterpreting th
 test("rejects malformed replay dimensions before reconstruction allocates geometry", () => {
   expect(() => restoreDepthCapture({ keyframes: [{ columns: 999999, rows: 999999 }] }))
     .toThrow(/dimensions/);
+});
+
+describe("runtime diagnostics", () => {
+  afterEach(() => {
+    window.history.replaceState({}, "", "/");
+    delete window.scanspaceDebug;
+  });
+
+  test("are opt-in and available before any views are saved", () => {
+    expect(captureDebugEnabled()).toBe(false);
+    window.history.replaceState({}, "", "/?scanspaceDebug=1");
+    expect(captureDebugEnabled()).toBe(true);
+    const diagnostics = new CaptureRuntimeDiagnostics();
+    diagnostics.update({ fusionKeyframes: 0, xrFrames: 12, depthReads: 4,
+      nativeDepthActive: false, depthFailureKind: "depth-missing" });
+    installCaptureRuntimeDebug(diagnostics);
+    expect(window.scanspaceDebug.snapshot().state).toMatchObject({
+      fusionKeyframes: 0, xrFrames: 12, depthReads: 4, nativeDepthActive: false,
+      depthFailureKind: "depth-missing",
+    });
+  });
+
+  test("stay bounded and exclude camera data", () => {
+    const diagnostics = new CaptureRuntimeDiagnostics();
+    diagnostics.update({ features: ["depth-sensing"], positions: [1, 2, 3], colorImage: [255] });
+    for (let index = 0; index < 70; index++) diagnostics.record("error", index * 100, {
+      stage: "Depth read failed", name: "InvalidStateError", message: "failure".repeat(100),
+      positions: [1, 2, 3], colorImage: [255],
+    });
+    const snapshot = diagnostics.snapshot();
+    expect(snapshot.events).toHaveLength(48);
+    expect(snapshot.errorCount).toBe(70);
+    expect(snapshot.events[0].message.length).toBeLessThanOrEqual(240);
+    expect(JSON.stringify(snapshot)).not.toMatch(/positions|colorImage/);
+    snapshot.events[0].message = "modified";
+    snapshot.state.xrFrames = 999;
+    expect(diagnostics.snapshot().events[0].message).not.toBe("modified");
+    expect(diagnostics.snapshot().state.xrFrames).not.toBe(999);
+  });
+
+  test("a fresh session does not retain the old session's callbacks", () => {
+    const first = new CaptureRuntimeDiagnostics();
+    installCaptureRuntimeDebug(first);
+    const previous = window.scanspaceDebug;
+    const second = new CaptureRuntimeDiagnostics();
+    second.update({ fusionKeyframes: 0 });
+    installCaptureRuntimeDebug(second);
+    first.update({ fusionKeyframes: 9 });
+    expect(window.scanspaceDebug.snapshot().state.fusionKeyframes).toBe(0);
+    expect(previous.snapshot().state.fusionKeyframes).toBe(9);
+  });
 });
