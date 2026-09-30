@@ -3,46 +3,6 @@ import { CaptureExperience, captureFeedback, sanitizeCaptureDiagnostics } from "
 const good = () => ({ tracking: true, depthCurrent: true, depthState: "active", currentViewChecked: true,
   fusionKeyframes: 12, adaptiveCapture: { state: "tracking", connected: true }, currentConfirmedRatio: 0.7 });
 
-test("continuous acquisition stays active while registration is unresolved for a long sweep", () => {
-  const experience = new CaptureExperience();
-  for (let id = 0; id < 80; id++) {
-    const timestamp = id * 300;
-    experience.recordFrame({ timestamp, reason: "captured", captured: 1, accepted: true, state: "tracking" });
-    const feedback = experience.update({ ...good(), captureMode: "continuous", capturedKeyframes: Math.min(60, id + 1),
-      currentViewChecked: false, fusionKeyframes: 2,
-      adaptiveCapture: { mode: "continuous", state: "recovering", connected: false, pendingCount: 10 },
-    }, timestamp);
-    expect(feedback.code).toBe("scanning");
-    expect(experience.captureStall).toBeNull();
-  }
-  expect(experience.snapshot()).toMatchObject({ capturedFrames: 80, committedFrames: 0, promptCount: 0 });
-});
-
-test("continuous acquisition still gives actionable feedback for a genuine motion or depth stop", () => {
-  const experience = new CaptureExperience();
-  const stats = { ...good(), captureMode: "continuous", capturedKeyframes: 4, movingTooFast: true };
-  experience.recordFrame({ timestamp: 0, reason: "captured", captured: 1, accepted: true, state: "tracking" });
-  experience.update(stats, 0);
-  experience.recordFrame({ timestamp: 2500, reason: "moving-too-fast", state: "tracking" });
-  expect(experience.update(stats, 2500).code).toBe("stalled-motion");
-  expect(experience.update({ ...stats, depthRecoveryState: "retrying" }, 2600).code).toBe("depth-retrying");
-  expect(experience.update({ ...stats, originChanged: true }, 2700).code).toBe("reset");
-});
-
-test("rotation without translation gets a gentle movement cue while acquisition stays active", () => {
-  expect(captureFeedback({ ...good(), captureMode: "continuous", capturedKeyframes: 5, cameraBaseline: .02 }))
-    .toMatchObject({ code: "baseline", tone: "active", label: "Move sideways as you scan" });
-  expect(captureFeedback({ ...good(), captureMode: "continuous", capturedKeyframes: 5, cameraBaseline: .1 }).code)
-    .toBe("scanning");
-});
-
-test("a depth outage preserves review guidance for captured views still waiting for alignment", () => {
-  const feedback = captureFeedback({ ...good(), captureMode: "continuous", capturedKeyframes: 12,
-    fusionKeyframes: 0, depthRecoveryState: "stalled" });
-  expect(feedback).toMatchObject({ code: "depth-stalled", hint: expect.stringContaining("Your captured views are safe") });
-  expect(feedback.hint).toMatch(/review them now/i);
-});
-
 test("a short shake is quiet; sustained motion gets one prompt that clears immediately", () => {
   const experience = new CaptureExperience(), stats = good();
   expect(experience.update(stats, 0).code).toBe("scanning");
@@ -125,7 +85,7 @@ test("measured shared depth reports alignment instead of blaming overlap", () =>
   experience.recordFrame({ timestamp: 3200, reason: "overlap-lost", state: "recovering",
     overlap: 0.27, medianResidual: 0.058, upperResidual: 0.095 });
   expect(experience.update(stats, 3200)).toMatchObject({ code: "stalled-alignment",
-    label: "Aligning this view", hint: expect.stringMatching(/sideways step/i) });
+    label: "Aligning this view", hint: expect.stringMatching(/keep trying/i) });
 });
 
 test("bridge confirmation and conflicting depth have distinct guidance", () => {
@@ -139,23 +99,8 @@ test("bridge confirmation and conflicting depth have distinct guidance", () => {
     label: "Checking this connection" });
   experience.recordFrame({ timestamp: 3400, reason: "alignment-conflict", state: "recovering" });
   expect(experience.update(stats, 3400)).toMatchObject({ code: "stalled-alignment",
-    label: "Checking depth alignment" });
+    label: "Depth views disagree" });
   expect(experience.snapshot().decisions["confirming-bridge"]).toBe(1);
-});
-
-test("start rechecking invites a continuous sweep and escalates a persistent conflict after four seconds", () => {
-  const experience = new CaptureExperience();
-  const stats = { ...good(), fusionKeyframes: 2, currentViewChecked: false, frameQuality: "rechecking-start",
-    adaptiveCapture: { state: "recovering", connected: true } };
-  experience.recordFrame({ timestamp: 0, reason: "connected", accepted: true, committed: 2, state: "tracking" });
-  experience.recordFrame({ timestamp: 400, reason: "rechecking-start", state: "recovering" });
-  expect(experience.update(stats, 400)).toMatchObject({ code: "seed-recheck", tone: "active",
-    hint: expect.stringMatching(/keep sweeping sideways/i) });
-  experience.recordFrame({ timestamp: 2100, reason: "rechecking-start", state: "recovering" });
-  expect(experience.update(stats, 2100).code).toBe("stalled-start");
-  experience.recordFrame({ timestamp: 4100, reason: "rechecking-start", state: "recovering" });
-  expect(experience.update(stats, 4100)).toMatchObject({ code: "stalled-reposition", label: "Try a wider view" });
-  expect(experience.snapshot().decisions["rechecking-start"]).toBe(3);
 });
 
 test("a long spell of accepted but redundant views asks for a small sideways step", () => {
@@ -215,37 +160,6 @@ test("diagnostics distinguish gate peaks, useful commits, recovery time and paus
   expect(stats.recent[0]).toMatchObject({ gateLinearSpeed: 1.2, sampledLinearSpeed: 0, maxLinearSpeed: 0.35 });
   stats.decisions.connected = 999;
   expect(experience.snapshot().decisions.connected).toBe(1);
-});
-
-test("a narrow connection asks for translation and a prolonged overlap stall changes the action", () => {
-  const experience = new CaptureExperience();
-  const stats = { ...good(), currentViewChecked: false, currentConfirmedRatio: 0,
-    adaptiveCapture: { state: "recovering", connected: true, needsTranslation: true } };
-  experience.recordFrame({ timestamp: 0, reason: "connected", accepted: true, committed: 2, state: "tracking" });
-  experience.recordFrame({ timestamp: 3200, reason: "confirming-bridge", state: "recovering" });
-  expect(experience.update(stats, 3200)).toMatchObject({ code: "stalled-translation",
-    hint: expect.stringMatching(/sideways step.*shared edge/i) });
-  experience.recordFrame({ timestamp: 11500, reason: "overlap-lost", state: "recovering" });
-  expect(experience.update({ ...stats, adaptiveCapture: { ...stats.adaptiveCapture, needsTranslation: false } }, 11500))
-    .toMatchObject({ code: "stalled-reposition", hint: expect.stringMatching(/step back.*sideways step/i) });
-  expect(experience.snapshot().prompts["stalled-translation"]).toBe(1);
-  expect(experience.snapshot().prompts["stalled-reposition"]).toBe(1);
-});
-
-test("saved-view geometry drives guidance without requiring all missing raw-depth pixels to fill", () => {
-  expect(captureFeedback({ ...good(), surfaceReady: true, surfaceKind: "wall" })).toMatchObject({
-    code: "surface-confirmed", label: "Wall section captured" });
-  expect(captureFeedback({ ...good(), currentConfirmedRatio: 0.3, currentMeasuredConfirmedRatio: 0.94,
-    validDepthRatio: 0.3 })).toMatchObject({ code: "confirmed", label: "This view is checked" });
-  expect(captureFeedback({ ...good(), currentViewChecked: false, surfaceReady: true })).toMatchObject({ code: "scanning" });
-  expect(captureFeedback({ ...good(), surfaceReady: true, cameraBaseline: 0.12 })).toMatchObject({ code: "baseline" });
-});
-
-test("a completed-view message clears when the next area is unconfirmed", () => {
-  const experience = new CaptureExperience();
-  expect(experience.update({ ...good(), currentConfirmedRatio: 0.9 }, 0).code).toBe("confirmed");
-  expect(experience.update({ ...good(), currentViewChecked: false,
-    adaptiveCapture: { state: "checking", connected: true } }, 500).code).toBe("scanning");
 });
 
 test("raw diagnostics are bounded and exclude images, positions and arbitrary keys", () => {

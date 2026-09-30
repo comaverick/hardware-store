@@ -142,13 +142,12 @@ test("adaptive capture connections and quality survive export without provisiona
     version: 2, state: "checking", reason: "checking-overlap", connected: true,
     frameCount: 3, pendingCount: 2, recoveries: 1, promoted: 1,
     pendingAgeDrops: 3, pendingCapacityDrops: 4, pendingRedundantDrops: 2,
-    seedRepairs: 1, seedDiscardedFrames: 2, seedRecheckCount: 0, localConflictBypasses: 3, shortcutLinks: 2,
     coverage: { observed: 120, confirmed: 60, ratio: 0.5, target: [1, 2, 3],
       regions: [{ id: "middle", observed: 120, confirmed: 60, ratio: 0.5 }] },
     pending: [{ shouldNotExport: true }],
   };
   scan.rawCapture.stats.captureDiagnostics = { attempts: 10, rejected: 7, accepted: 3,
-    decisions: { "moving-too-fast": 5, "checking-overlap": 2, "rechecking-start": 1, connected: 3 },
+    decisions: { "moving-too-fast": 5, "checking-overlap": 2, connected: 3 },
     recent: [{ reason: "moving-too-fast", gateLinearSpeed: 1.2, sampledLinearSpeed: 0, camera: [1, 2, 3] }] };
   scan.captureQuality.captureAudit = { passed: false, issues: ["Needs another angle"], checkedReconstruction: true };
   const restored = parsePartialScan(serializePartialScan(scan));
@@ -158,10 +157,9 @@ test("adaptive capture connections and quality survive export without provisiona
   expect(restored.rawCapture.stats.adaptiveCapture).toMatchObject({
     connected: true, pendingCount: 2, state: "checking", coverage: { ratio: 0.5 },
     pendingAgeDrops: 3, pendingCapacityDrops: 4, pendingRedundantDrops: 2,
-    seedRepairs: 1, seedDiscardedFrames: 2, localConflictBypasses: 3, shortcutLinks: 2,
   });
   expect(restored.rawCapture.stats.captureDiagnostics).toMatchObject({ attempts: 10,
-    decisions: { "moving-too-fast": 5, "rechecking-start": 1 }, recent: [{ gateLinearSpeed: 1.2, sampledLinearSpeed: 0 }] });
+    decisions: { "moving-too-fast": 5 }, recent: [{ gateLinearSpeed: 1.2, sampledLinearSpeed: 0 }] });
   expect(restored.rawCapture.stats.captureDiagnostics.recent[0].camera).toBeUndefined();
   expect(restored.rawCapture.stats.adaptiveCapture.pending).toBeUndefined();
   expect(restored.rawCapture.stats.adaptiveCapture.coverage.target).toBeUndefined();

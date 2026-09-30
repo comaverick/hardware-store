@@ -5193,14 +5193,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     extraTextureFrames = structural.frames.filter(f => !ids.has(f.frameId));
   }
   const stages = {
-    algorithmVersion: 46,
-    captureRetention: {
-      mode: options.captureMode || "validated-live",
-      capturedFrames: prepared.length,
-      liveCheckedFrames: keyframes.filter(frame => frame.captureStatus === "checked").length,
-      finalValidatedFrames: selected.length,
-      excludedFrameIds: prepared.filter(frame => !selected.some(saved => saved.frameId === frame.frameId)).map(frame => frame.frameId),
-    },
+    algorithmVersion: 45,
     completionMode: options.completionMode === "surface" ? "surface" : "room",
     reconstructionProfile: options.reconstructionProfile || "quality",
     supportMode: "translated-camera-viewpoints",

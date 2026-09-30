@@ -1,28 +1,21 @@
-import { MIN_SURFACE_CAMERA_BASELINE_METERS, MIN_SURFACE_FUSION_KEYFRAMES } from "./readiness";
-
 const WARNING_DELAY_MS = 1800;
 const PROMPT_COOLDOWN_MS = 4500;
 const COMPLETION_HOLD_MS = 4000;
-const SAVED_VIEW_STALL_MS = 2000;
-const REPOSITION_AFTER_MS = 4000;
+const SAVED_VIEW_STALL_MS = 3000;
 const CURRENT_ATTEMPT_MS = 1200;
 const MAX_RECENT_DECISIONS = 48;
 const states = ["starting", "tracking", "checking", "recovering", "tracking-lost", "paused"];
 const reasons = ["connected", "starting", "moving-too-fast", "sparse-depth", "near-field-obstruction",
   "depth-error", "depth-missing", "invalid-depth", "checking-overlap", "overlap-lost",
-  "alignment-conflict", "rechecking-start", "confirming-recovery", "confirming-bridge", "capacity",
-  "captured", "repeat-view", "depth-refreshed", "tracking-lost", "camera-jump", "unknown"];
-const prompts = ["motion", "depth", "depth-retrying", "depth-stalled", "tracking", "reconnect", "reset", "unsupported", "capacity",
-  "stalled-motion", "stalled-depth", "stalled-obstruction", "stalled-bridge", "stalled-alignment", "stalled-overlap",
-  "stalled-recovery", "stalled-position", "stalled-translation", "stalled-reposition", "stalled-start"];
+  "alignment-conflict", "confirming-recovery", "confirming-bridge", "capacity", "unknown"];
+const prompts = ["motion", "depth", "depth-retrying", "depth-stalled", "tracking", "reconnect", "reset", "unsupported", "capacity"];
 const measurements = ["gateLinearSpeed", "gateAngularSpeed", "maxLinearSpeed", "maxAngularSpeed",
   "sampledLinearSpeed", "sampledAngularSpeed", "validDepthRatio", "overlap", "medianResidual",
-  "upperResidual", "captureIntervalMs", "processingMs", "colorReadMs", "depthSamplingMs", "depthPreparationMs",
-  "overlapProcessingMs", "confirmationProcessingMs"];
+  "upperResidual", "captureIntervalMs", "processingMs"];
 const number = value => Number.isFinite(value) ? Math.max(0, Math.min(1e12, value)) : 0;
 const counts = (value, keys) => Object.fromEntries(keys.map(key => [key, number(value?.[key])]));
 const scanning = () => ({ code: "scanning", tone: "active", label: "Scanning",
-  hint: "Sweep smoothly across the surface, keeping some of the previous area in view." });
+  hint: "Move slowly and keep part of the last captured area in view." });
 
 function depthFailureLabel(kind, stalled) {
   if (kind === "xr-frame-stalled") return stalled ? "Camera scan stopped responding" : "Camera scan interrupted";
@@ -32,37 +25,27 @@ function depthFailureLabel(kind, stalled) {
   return stalled ? "Depth sensor stopped responding" : "Depth signal interrupted";
 }
 
-function stalledViewFeedback(latest, stats, stalledMs) {
+function stalledViewFeedback(latest, recoveryDirection) {
   const reason = latest.reason;
   const warning = { tone: "warning", immediate: true, stalled: true };
   if (reason === "moving-too-fast") return { ...warning, code: "stalled-motion",
-    label: "Slow your sweep slightly", hint: "Keep moving smoothly across the surface; views save automatically." };
+    label: "Slow down to save a view", hint: "Sweep more slowly; ScanSpace will save a view automatically when it is steady." };
   if (reason === "sparse-depth") return { ...warning, code: "stalled-depth",
     label: "Depth is patchy", hint: "Step back slightly and aim at a well-lit, non-reflective surface." };
   if (reason === "near-field-obstruction") return { ...warning, code: "stalled-obstruction",
     label: "Move the phone back", hint: "Step back from nearby objects, then hold this area in view." };
-  if (["starting", "confirming-bridge", "checking-overlap", "overlap-lost"].includes(reason) &&
-      stats.adaptiveCapture?.needsTranslation) return { ...warning, code: "stalled-translation",
-    label: "Add a sideways view", hint: "Take a small sideways step while keeping the same shared edge in view." };
-  if (["checking-overlap", "overlap-lost", "confirming-bridge", "confirming-recovery", "alignment-conflict", "rechecking-start"].includes(reason) && stalledMs >= REPOSITION_AFTER_MS)
-    return { ...warning, code: "stalled-reposition", label: "Try a wider view",
-      hint: "Step back slightly to include more of the saved area, then take a small sideways step." };
   if (reason === "confirming-bridge") return { ...warning, code: "stalled-bridge",
-    label: "Checking this connection", hint: "Keep the same shared edge in view and take a small sideways step." };
+    label: "Checking this connection", hint: "Keep the same shared edge in view and move a little sideways." };
   if (reason === "alignment-conflict") return { ...warning, code: "stalled-alignment",
-    label: "Checking depth alignment", hint: "Sweep sideways with some saved area visible; capture keeps checking." };
-  if (reason === "rechecking-start") return { ...warning, code: "stalled-start",
-    label: "Checking first views", hint: "Keep sweeping sideways across the same area so the starting views can be checked." };
+    label: "Depth views disagree", hint: "Keep some saved area visible and move slowly while alignment is checked." };
   if (reason === "overlap-lost" && latest.overlap >= 0.18)
     return { ...warning, code: "stalled-alignment", label: "Aligning this view",
-      hint: "Keep the shared edge visible and take a small sideways step to check alignment." };
+      hint: "Shared depth is visible. Keep moving slowly along it; ScanSpace will keep trying." };
   if (["checking-overlap", "overlap-lost"].includes(reason))
     return { ...warning, code: "stalled-overlap", label: "Connecting this view",
-      hint: stats.recoveryTargetVisible
-        ? "Keep the marked edge visible and take a small sideways step."
-        : `${stats.recoveryDirection || "Bring part of the last saved area into view."} Then take a small sideways step.` };
+      hint: recoveryDirection || "Keep part of the last saved area visible and move slowly; capture continues automatically." };
   if (reason === "confirming-recovery") return { ...warning, code: "stalled-recovery",
-    label: "Confirming this connection", hint: "Keep the saved edge visible and take a small sideways step." };
+    label: "Confirming this connection", hint: "Keep some saved area in view and move slowly; capture continues automatically." };
   return { ...warning, code: "stalled-position", label: "Need another viewpoint",
     hint: "Keep the same surface visible and take a small sideways step." };
 }
@@ -82,54 +65,31 @@ export function captureFeedbackCandidate(stats) {
     label: depthFailureLabel(stats.depthFailureKind, true),
     hint: capture?.capacityReached
       ? "This section is also at its safe view limit. Review the saved scan now."
-      : Math.max(stats.capturedKeyframes || 0, stats.fusionKeyframes || 0) >= 2
-        ? "Your captured views are safe. Review them now, or leave this open while ScanSpace keeps trying."
+      : (stats.fusionKeyframes || 0) >= 2
+        ? "Your saved views are safe. Review them now, or leave this open while ScanSpace keeps trying."
         : "No usable scan is saved yet. Leave this open while ScanSpace retries, or start a new scan." };
   if (stats.depthRecoveryState === "retrying") return { code: "depth-retrying", tone: "warning", immediate: true,
     label: depthFailureLabel(stats.depthFailureKind, false),
-    hint: "ScanSpace is retrying automatically. Captured views remain saved." };
+    hint: "ScanSpace is retrying automatically. Verified views remain saved." };
   if (!stats.depthCurrent || stats.depthState === "error") return { code: "depth", tone: "warning",
     label: "Waiting for the camera", hint: "Hold still with a well-lit surface in view." };
   if (capture?.capacityReached) return { code: "capacity", tone: "warning", immediate: true,
     label: "This section is captured", hint: "Review and save this section before starting another." };
   if (stats.captureStall) return stats.captureStall;
-  if (stats.frameQuality === "rechecking-start") return { code: "seed-recheck", tone: "active",
-    label: "Checking first views", hint: "Keep sweeping sideways across the same area; capture continues automatically." };
   if (stats.movingTooFast) return { code: "motion", tone: "warning", label: "Move a little more slowly",
-    hint: "Keep a smooth sideways sweep; capture resumes automatically." };
-  if (stats.captureMode === "continuous" || capture?.mode === "continuous") {
-    if (["sparse-depth", "near-field-obstruction"].includes(stats.frameQuality)) return {
-      code: "depth", tone: "warning", label: "Step back slightly",
-      hint: "Keep the wall and a nearby edge in view; capture resumes automatically." };
-    if (!(stats.capturedKeyframes || capture?.capturedCount)) return {
-      code: "starting", tone: "pending", label: "Getting started",
-      hint: "Point at the surface and begin a smooth sideways sweep." };
-    if ((stats.capturedKeyframes || capture?.capturedCount) >= 3 &&
-        Number.isFinite(stats.cameraBaseline) && stats.cameraBaseline < 0.04) return {
-      code: "baseline", tone: "active", label: "Move sideways as you scan",
-      hint: "Shift the phone a little sideways while sweeping across the surface." };
-    return scanning();
-  }
+    hint: "Slow your sweep; capture resumes automatically when the view is steady." };
   if (capture?.state === "recovering") {
     if (["confirming-recovery", "confirming-bridge"].includes(stats.frameQuality)) return scanning();
     return { code: "reconnect", tone: "warning", label: "Reconnecting scan",
-      hint: "Bring a saved edge into view, then take a small sideways step; capture keeps trying." };
+      hint: "Keep some of the saved area visible while moving slowly; capture keeps trying." };
   }
   if (["sparse-depth", "near-field-obstruction"].includes(stats.frameQuality)) return {
     code: "depth", tone: "warning", label: "This surface is hard to capture", hint: "Step back slightly and try a small side angle." };
   if (capture?.state === "starting" || (stats.fusionKeyframes || 0) < 2) return {
     code: "starting", tone: "pending", label: "Getting started", hint: "Move a little sideways with the same surface in view." };
   if (capture?.state === "checking" || stats.currentViewChecked === false) return scanning();
-  if ((stats.fusionKeyframes || 0) >= MIN_SURFACE_FUSION_KEYFRAMES && Number.isFinite(stats.cameraBaseline) &&
-      stats.cameraBaseline < MIN_SURFACE_CAMERA_BASELINE_METERS) return { code: "baseline", tone: "pending",
-    label: "Add a sideways view", hint: "Take a small sideways step while keeping the same surface visible." };
-  if (stats.surfaceReady) return { code: "surface-confirmed", tone: "complete",
-    label: `${({ wall: "Wall", floor: "Floor", ceiling: "Ceiling" })[stats.surfaceKind] || "Surface"} section captured`,
-    hint: "Continue along the next section, or review the surfaces you captured." };
-  if ((stats.currentConfirmedRatio || 0) >= 0.85 ||
-      ((stats.currentMeasuredConfirmedRatio || 0) >= 0.85 && (stats.validDepthRatio || 0) >= 0.2))
-    return { code: "confirmed", tone: "complete", label: "This view is checked",
-      hint: "Continue sideways to the next area, or review your scan. Unseen gaps stay open." };
+  if ((stats.currentConfirmedRatio || 0) >= 0.85) return { code: "confirmed", tone: "complete",
+    label: "This area has good coverage", hint: "Continue to another area, or review your scan." };
   return scanning();
 }
 
@@ -153,7 +113,7 @@ export function fastMotionShare(stats = {}, recentOnly = false) {
 // used for exports and imports so a raw file cannot add unbounded event data.
 export function sanitizeCaptureDiagnostics(value) {
   if (!value || typeof value !== "object") return null;
-  const scalars = ["elapsedMs", "activeMs", "attempts", "accepted", "rejected", "committedFrames", "capturedFrames", "promptCount"];
+  const scalars = ["elapsedMs", "activeMs", "attempts", "accepted", "rejected", "committedFrames", "promptCount"];
   return {
     version: 1,
     ...counts(value, scalars),
@@ -162,7 +122,7 @@ export function sanitizeCaptureDiagnostics(value) {
     prompts: counts(value.prompts, prompts),
     recent: (Array.isArray(value.recent) ? value.recent : []).slice(-MAX_RECENT_DECISIONS).map(event => ({
       elapsedMs: number(event?.elapsedMs), reason: reasons.includes(event?.reason) ? event.reason : "unknown",
-      accepted: event?.accepted === true, committed: number(event?.committed), captured: number(event?.captured), matched: event?.matched === true,
+      accepted: event?.accepted === true, committed: number(event?.committed), matched: event?.matched === true,
       state: states.includes(event?.state) ? event.state : "starting",
       ...counts(event, measurements),
     })),
@@ -174,41 +134,36 @@ export class CaptureExperience {
     this.diagnostics = sanitizeCaptureDiagnostics({});
     this.lastPromptAt = new Map();
   }
-  recordFrame({ timestamp, reason, accepted = false, committed = 0, captured = 0, matched = false, state, ...values }) {
+  recordFrame({ timestamp, reason, accepted = false, committed = 0, matched = false, state, ...values }) {
     this.startedAt ??= timestamp;
     this.firstAttemptAt ??= timestamp;
     if (committed > 0) this.lastCommittedAt = timestamp;
-    if (captured > 0 || reason === "depth-refreshed") this.lastCapturedAt = timestamp;
     const key = reasons.includes(reason) ? reason : "unknown";
     const data = this.diagnostics;
     data.attempts++;
     data[accepted ? "accepted" : "rejected"]++;
     data.committedFrames += committed;
-    data.capturedFrames += captured;
     data.decisions[key]++;
     data.recent.push({ elapsedMs: Math.max(0, timestamp - this.startedAt), reason: key,
-      accepted, committed, captured, matched, state, ...counts(values, measurements) });
+      accepted, committed, matched, state, ...counts(values, measurements) });
     if (data.recent.length > MAX_RECENT_DECISIONS) data.recent.shift();
   }
   stalledView(stats, now) {
-    const lastProgressAt = this.lastCapturedAt ?? this.lastCommittedAt ?? this.firstAttemptAt;
+    const lastProgressAt = this.lastCommittedAt ?? this.firstAttemptAt;
     if (stats.paused || stats.originChanged || !stats.tracking || !stats.depthCurrent ||
         stats.depthState === "unavailable" || stats.adaptiveCapture?.capacityReached ||
         lastProgressAt == null || now - lastProgressAt < SAVED_VIEW_STALL_MS) return null;
     // A complete, confirmed area does not need another saved viewpoint.
-    if ((stats.fusionKeyframes || 0) >= 6 && stats.currentViewChecked !== false &&
-        stats.adaptiveCapture?.state === "tracking" && (stats.surfaceReady || (stats.currentConfirmedRatio || 0) >= 0.85)) return null;
+    if ((stats.fusionKeyframes || 0) >= 6 && (stats.currentConfirmedRatio || 0) >= 0.85) return null;
     const recent = this.diagnostics.recent.filter(event =>
       now - (this.startedAt + event.elapsedMs) <= CURRENT_ATTEMPT_MS);
     if (!recent.length) return null;
     const latest = recent.at(-1);
     if (now - (this.startedAt + latest.elapsedMs) > CURRENT_ATTEMPT_MS) return null;
-    if ((stats.captureMode === "continuous" || stats.adaptiveCapture?.mode === "continuous") && latest.accepted)
-      return null;
     // Once enough views are saved, a stationary revisit is not a failure.
     // Existing coverage guidance can still point out a weak surface.
     if (latest.accepted && (stats.fusionKeyframes || 0) >= 6) return null;
-    return stalledViewFeedback(latest, stats, now - lastProgressAt);
+    return stalledViewFeedback(latest, stats.recoveryDirection);
   }
   update(stats, timestamp) {
     this.startedAt ??= timestamp;
@@ -227,9 +182,7 @@ export class CaptureExperience {
       this.candidateCode = candidate.code;
       this.candidateSince = now;
     }
-    if (stats.currentViewChecked === false || stats.adaptiveCapture?.state !== "tracking" ||
-        (candidate.tone === "warning" && candidate.immediate)) this.completedHoldUntil = 0;
-    if (candidate.tone === "complete") {
+    if (candidate.code === "confirmed") {
       this.completedFeedback = candidate;
       this.completedHoldUntil = now + COMPLETION_HOLD_MS;
     }

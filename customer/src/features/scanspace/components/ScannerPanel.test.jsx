@@ -78,23 +78,6 @@ test("weak coverage builds the preview directly, preserves frames, and can resum
   expect(screen.queryByRole("status", { name: "Capture review" })).not.toBeInTheDocument();
 });
 
-test("review can validate captured views even when live registration has not found a connection", async () => {
-  result.stats.captureMode = "continuous";
-  result.stats.capturedKeyframes = 4;
-  result.stats.fusionKeyframes = 0;
-  result.stats.adaptiveCapture.connected = false;
-  result.stats.adaptiveCapture.pendingCount = 4;
-  result.keyframes = Array.from({ length: 4 }, (_, i) => ({ timestamp: i, captureStatus: "captured" }));
-  await startPanel();
-  const review = screen.getByRole("button", { name: "Finish & review" });
-  expect(review).toBeEnabled();
-  fireEvent.click(review);
-  expect(await screen.findByTestId("scan-preview")).toBeInTheDocument();
-  const request = createFusionWorker.mock.results[0].value.postMessage.mock.calls[0][0];
-  expect(request.keyframes).toHaveLength(4);
-  expect(request.options.captureMode).toBe("continuous");
-});
-
 test("explicit partial save retains the failed audit and original raw capture", async () => {
   result.stats.adaptiveCapture.pendingCount = 2;
   const onSurface = await startPanel();
@@ -158,7 +141,7 @@ test("a stalled scan shows the same actionable reason in progress and live statu
   await startPanel();
   expect(screen.getByText("No new view saved")).toBeInTheDocument();
   expect(screen.getByRole("status")).toHaveTextContent("Not enough overlap");
-  expect(screen.getAllByText(/turn back toward the last captured area/i)).toHaveLength(1);
+  expect(screen.getAllByText(/turn back toward the last captured area/i)).toHaveLength(2);
 });
 
 test("a stopped depth feed keeps review available and changes the recovery action", async () => {

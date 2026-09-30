@@ -39,7 +39,6 @@ export function snapshotDepthCapture(raw) {
       timestamp: frame.timestamp,
       captureId: frame.captureId,
       captureLinks: frame.captureLinks,
-      captureStatus: frame.captureStatus,
       depthType: frame.depthType,
       linearSpeed: frame.linearSpeed || 0,
       angularSpeed: frame.angularSpeed || 0,

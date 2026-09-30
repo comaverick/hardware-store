@@ -44,12 +44,8 @@ export function captureProgressSummary(stats = {}) {
       : stats.connectedSurfaceCoverage,
   );
   const frames = Math.max(0, Number(stats.fusionKeyframes) || 0);
-  const continuous = stats.captureMode === "continuous" || adaptive.mode === "continuous";
-  const capturedFrames = Math.max(0, Number(stats.capturedKeyframes ?? adaptive.capturedCount) || 0);
-  const capturedTotal = Math.max(capturedFrames, Number(stats.capturedViews ?? adaptive.captured) || 0);
   const frameLimit = Math.max(0, Number(stats.fusionKeyframeLimit) || 0);
-  const verifiedTotal = Math.max(frames, (Number(stats.captureDiagnostics?.committedFrames) || 0) -
-    (Number(adaptive.seedDiscardedFrames) || 0));
+  const verifiedTotal = Math.max(frames, Number(stats.captureDiagnostics?.committedFrames) || 0);
   const weak = normalized.find(region => region.state === "weak");
   const building = normalized.find(region => region.state === "building");
   const observed = normalized.some(region => region.observed > 0);
@@ -60,17 +56,40 @@ export function captureProgressSummary(stats = {}) {
   const movingTooFast = stats.captureFeedback?.code === "motion";
   const shortBaseline = Number.isFinite(stats.cameraBaseline) && frames >= MIN_SURFACE_FUSION_KEYFRAMES &&
     stats.cameraBaseline < MIN_SURFACE_CAMERA_BASELINE_METERS;
-  const hasCapture = continuous ? capturedFrames >= 2 : frames >= 2 && adaptive.connected !== false;
+  const hasCapture = frames >= 2 && adaptive.connected !== false;
   const reviewReady = frames >= MIN_SURFACE_FUSION_KEYFRAMES &&
     adaptive.connected !== false && observed && !weak && !building &&
     !(adaptive.pendingCount || 0) && !stalled && !movingTooFast && !shortBaseline;
   const checking = adaptive.state === "checking" || stats.currentViewChecked === false;
+  let next = "Keep one surface in view and take a small step sideways.";
+  if (depthStalled) {
+    next = capacityReached
+      ? "No new depth is arriving, and this section reached its safe view limit. Review the saved scan now."
+      : hasCapture
+        ? "No new depth is arriving. Review your saved scan now, or leave the camera open while it retries."
+        : "No usable scan is saved yet. Leave the camera open while it retries, or cancel and start again.";
+  } else if (capacityReached) {
+    next = "This section reached its safe view capacity. Finish & review the saved scan.";
+  } else if (depthRetrying) {
+    next = "Depth input is interrupted. ScanSpace is retrying automatically; your saved views remain safe.";
+  } else if (stalled) {
+    next = stats.captureStall.hint;
+  } else if (movingTooFast) {
+    next = stats.captureFeedback.hint;
+  } else if (shortBaseline) {
+    next = "Take a small sideways step while keeping the same surface in view to add depth from another position.";
+  } else if (frames >= 2 && weak) {
+    next = `Aim at ${names[weak.id].long.toLowerCase()} and make another overlapping pass.`;
+  } else if (frames >= 2 && frames < MIN_SURFACE_FUSION_KEYFRAMES) {
+    const remaining = MIN_SURFACE_FUSION_KEYFRAMES - frames;
+    next = `Keep moving sideways for ${remaining} more overlapping ${remaining === 1 ? "view" : "views"}.`;
+  } else if (reviewReady) {
+    next = "Your selected area has overlapping views. Finish and inspect the result.";
+  }
   return {
     checking,
-    continuous,
-    capturedFrames,
-    capturedTotal,
     hasCapture,
+    next,
     overlap,
     regions: normalized,
     reviewReady,
@@ -96,12 +115,12 @@ export function CaptureCoverage({ coverage }) {
             ? EyeSlash
             : WarningCircle;
         const status = state === "complete"
-          ? "Checked"
+          ? "Covered"
           : state === "weak"
-            ? "Partial"
+            ? "Another pass"
             : state === "building"
-              ? "Partial"
-              : "Not seen";
+              ? "Keep scanning"
+              : "Not scanned";
         return (
           <div className={`ss-coverage-region is-${state}`} key={region.id}>
             <span>
@@ -130,24 +149,18 @@ export function CaptureProgress({ stats }) {
   if (summary.capacityReached) stateLabel = "Section captured";
   if (summary.depthRetrying) stateLabel = "Retrying depth";
   if (summary.depthStalled) stateLabel = "Depth stopped";
-  if (summary.continuous && !summary.depthRetrying && !summary.depthStalled) {
-    stateLabel = summary.stalled ? "Waiting for a usable view" : summary.capturedFrames ? "Capturing" : "Getting started";
-    if (summary.reviewReady) stateLabel = "Ready to review";
-  }
   return (
     <section className="ss-capture-progress" aria-label="Scan progress">
       <div className="ss-capture-progress-head">
-        <p><span>{summary.continuous ? "Captured views" : "Saved views"}</span>
-          <strong>{summary.continuous ? summary.capturedTotal : summary.verifiedTotal}</strong></p>
+        <p><span>Retained depth views</span><strong>{summary.frames}</strong></p>
         <span className={`ss-capture-state ${summary.reviewReady && !summary.depthStalled && !summary.depthRetrying ? "is-ready" : ""}`}>
           {stateLabel}
         </span>
       </div>
-      {!summary.continuous && summary.verifiedTotal > summary.frames &&
-        <p className="ss-capture-retention">{summary.frames} views kept for review.</p>}
-      <p className={summary.continuous ? "ss-capture-legend" : "ss-capture-overlap"}>{summary.continuous
-        ? `${summary.capturedFrames} ${summary.capturedFrames === 1 ? "view" : "views"} kept for review · Blue: captured · Green: checked.`
-        : "Checks apply to observed areas. Unseen gaps stay open."}</p>
+      {!!summary.frameLimit && summary.frames >= summary.frameLimit &&
+        <p className="ss-capture-retention">{summary.verifiedTotal} verified in this scan · {summary.frames} kept for reconstruction.</p>}
+      <p className="ss-capture-overlap">Confirmed saved coverage <strong>{summary.overlap}%</strong> · Unscanned areas may stay open.</p>
+      <p className="ss-capture-next" id="ss-capture-next"><strong>Next:</strong> {summary.next}</p>
       <CaptureCoverage coverage={stats.adaptiveCapture?.coverage} />
     </section>
   );

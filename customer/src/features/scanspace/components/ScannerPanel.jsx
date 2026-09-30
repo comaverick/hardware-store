@@ -10,7 +10,6 @@ import { auditCapture } from "../core/adaptiveCapture";
 import { captureFeedback } from "../core/captureExperience";
 import { CaptureAuditNotice, CaptureProgress } from "./CaptureFeedback";
 import { createFusionWorker } from "../core/createFusionWorker";
-import { downloadPartialScan } from "../core/partialScanFile";
 const PartialScanScene = lazy(() => import("./PartialScanScene"));
 const SHOW_SCAN_DIAGNOSTICS = process.env.NODE_ENV === "development";
 
@@ -91,7 +90,6 @@ const captureQualitySummary = (stats, fusion = null) => ({
   untexturedEstimatedTriangles: fusion?.untexturedEstimatedTriangles || 0,
   topology: fusion?.topologyAfterRepair || null,
   recoveredCaptureGroups: fusion?.alignment?.componentRecovery || null,
-  captureRetention: fusion?.captureRetention || null,
   surfaceRepair: fusion?.surfaceRepair || null,
 });
 
@@ -120,9 +118,8 @@ export default function ScannerPanel({
     [partial, setPartial] = useState(null),
     [fusion, setFusion] = useState(null),
     [error, setError] = useState("");
-  const hasReconstructableCapture = stats.captureMode === "continuous"
-    ? (stats.capturedKeyframes || 0) >= 2
-    : (stats.fusionKeyframes || 0) >= 2 && stats.adaptiveCapture?.connected !== false;
+  const hasReconstructableCapture = (stats.fusionKeyframes || 0) >= 2 &&
+    stats.adaptiveCapture?.connected !== false;
   const targetState = captureFeedback(stats);
   useEffect(() => {
     if (!active || busy || partial || lastFeedbackCode.current === targetState.code) return;
@@ -173,10 +170,8 @@ export default function ScannerPanel({
   }
   function downloadDebugCapture() {
     const source = scanner.current;
-    const raw = partial?.result?.rawCapture || partial?.rawCapture ||
-      (source && { ...source, keyframes: source.capture?.frames || source.keyframes });
-    if (!raw?.keyframes?.length) return;
-    downloadDepthCapture(debugCapture.current || snapshotDepthCapture(raw), source?.stats.fusion);
+    if (!source?.keyframes?.length) return;
+    downloadDepthCapture(debugCapture.current || snapshotDepthCapture(source), source.stats.fusion);
   }
   async function buildFusedMesh(
     raw,
@@ -326,7 +321,6 @@ export default function ScannerPanel({
             fused.diagnostics?.reason ||
             "The measured surface did not pass multi-view quality checks.",
           pointCount: acceptedPoints.length,
-          capturedViewCount: raw.keyframes.length,
           coverage: raw.stats.coverage || 0,
           cameraBaseline: raw.stats.cameraBaseline || 0,
           rejectedDepthFrames: raw.stats.rejectedDepthFrames || 0,
@@ -403,7 +397,7 @@ export default function ScannerPanel({
               : active
                 ? stats.paused
                   ? "Scanning paused."
-                  : "Sweep smoothly. Views save automatically while you move."
+                  : "Move slowly and overlap each pass."
               : "Your scan stays on this phone during capture. Depth and captured colors depend on the capabilities granted by your browser."}
           </p>
         </div>
@@ -411,7 +405,7 @@ export default function ScannerPanel({
           <section className="ss-scan-guide" aria-labelledby="ss-scan-guide-title">
             <h3 id="ss-scan-guide-title">Before you start</h3>
             <ul>
-              <li><Camera aria-hidden="true" size={20} weight="bold" /><span><strong>Move slowly</strong><small>Make one smooth sideways sweep. You can keep moving as views save.</small></span></li>
+              <li><Camera aria-hidden="true" size={20} weight="bold" /><span><strong>Move slowly</strong><small>Keep one surface in view as you take a small sideways step.</small></span></li>
               <li><ArrowsLeftRight aria-hidden="true" size={20} weight="bold" /><span><strong>Overlap each pass</strong><small>Keep part of the previous area visible while you turn.</small></span></li>
               <li><SquaresFour aria-hidden="true" size={20} weight="bold" /><span><strong>Choose your area</strong><small>Two walls, a floor, and a ceiling are fine. Unscanned space will stay open.</small></span></li>
             </ul>
@@ -433,7 +427,7 @@ export default function ScannerPanel({
           <>
             {!partial && <CaptureProgress stats={stats} />}
             <div className="ss-scan-bottom">
-              {!partial && <div className={`ss-scanning-target is-${targetState.tone}`} id="ss-capture-guidance" role="status" aria-live="polite" aria-atomic="true">
+              {!partial && <div className={`ss-scanning-target is-${targetState.tone}`} role="status" aria-live="polite" aria-atomic="true">
                 <i aria-hidden="true" />
                 <span><strong>{targetState.label}</strong><small>{targetState.hint}</small></span>
               </div>}
@@ -463,7 +457,7 @@ export default function ScannerPanel({
                   </button>
                   <button
                     className="ss-primary"
-                    aria-describedby="ss-capture-guidance"
+                    aria-describedby="ss-capture-next"
                     disabled={busy || stats.originChanged || !hasReconstructableCapture}
                     onClick={finishScan}
                   >
@@ -474,17 +468,12 @@ export default function ScannerPanel({
                 <section className="ss-partial-capture" role="status">
                   <strong>Scan processing paused</strong>
                   <p>
-                    ScanSpace kept {partial.capturedViewCount
-                      ? `${partial.capturedViewCount} captured views`
-                      : `${partial.pointCount.toLocaleString()} measured points`}.
-                    You can keep scanning or download the captured views.
+                    ScanSpace kept {partial.pointCount.toLocaleString()} measured
+                    points. Processing stopped for the reason below; your
+                    capture was not discarded.
                   </p>
                   <p className="ss-partial-reason">{partial.reason}</p>
                   <div className="ss-actions">
-                    {partial.rawCapture?.keyframes?.length > 0 && <button onClick={() => downloadPartialScan({
-                      name: "Captured scan", kind: "raw-capture", rawCapture: partial.rawCapture,
-                      pointCount: partial.pointCount, reason: partial.reason,
-                    })}>Download captured views</button>}
                     <button
                       disabled={busy || !active || stats.originChanged}
                       onClick={continueCapture}
@@ -533,24 +522,6 @@ export default function ScannerPanel({
               captureProfile: stats.captureProfile || "careful",
               captureIntervalMs: stats.captureIntervalMs || 0,
               captureProcessingMs: stats.captureProcessingMs || 0,
-              captureAnalysisMode: stats.captureAnalysisMode || "inline",
-              analysisProcessingMs: stats.analysisProcessingMs || 0,
-              previewProcessingMs: Math.round(stats.previewProcessingMs || 0),
-              depthSamplingMs: Math.round(stats.depthSamplingMs || 0),
-              depthPreparationMs: Math.round(stats.depthPreparationMs || 0),
-              overlapProcessingMs: Math.round(stats.overlapProcessingMs || 0),
-              confirmationProcessingMs: Math.round(stats.confirmationProcessingMs || 0),
-              colorReadMs: Math.round(stats.colorReadMs || 0),
-              depthSamplingSkips: stats.depthSamplingSkips || 0,
-              checkedSurfaces: stats.checkedSurfaces || 0,
-              surfaceReady: !!stats.surfaceReady,
-              recoveryBaselineCm: Math.round((stats.adaptiveCapture?.recoveryBaseline || 0) * 100),
-              shortcutLinks: stats.adaptiveCapture?.shortcutLinks || 0,
-              seedRecheckViews: stats.adaptiveCapture?.seedRecheckCount || 0,
-              repairedStarts: stats.adaptiveCapture?.seedRepairs || 0,
-              replacedStartingViews: stats.adaptiveCapture?.seedDiscardedFrames || 0,
-              recentAgreementOverrides: stats.adaptiveCapture?.localConflictBypasses || 0,
-              observedSurfaceOverlap: `${stats.connectedSurfaceCoverage || 0}%`,
               provisionalViews: stats.adaptiveCapture?.pendingCount || 0,
               reconnectedViews: stats.adaptiveCapture?.promoted || 0,
               recoveryEvents: stats.adaptiveCapture?.recoveries || 0,

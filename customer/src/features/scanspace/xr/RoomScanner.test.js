@@ -75,8 +75,7 @@ test("stationary unsaved frames cannot turn the preview green", () => {
   scanner.frame(1500, frame);
   expect(scanner.stats.errors).toEqual([]);
   expect(scanner.keyframes).toHaveLength(0);
-  expect(scanner.capture.state).toBe("tracking");
-  expect(scanner.capture.frames).toHaveLength(1);
+  expect(scanner.capture.state).toBe("starting");
   expect(scanner.cloud.previewStableCount()).toBe(0);
   expect(scanner.stats.currentConfirmedRatio).toBe(0);
   position.x = 0.12;
@@ -84,7 +83,7 @@ test("stationary unsaved frames cannot turn the preview green", () => {
   scanner.frame(2000, frame);
   expect(scanner.stats.errors).toEqual([]);
   expect(scanner.keyframes).toHaveLength(2);
-  expect(scanner.stats.stablePointCount).toBeGreaterThan(0);
+  expect(scanner.cloud.previewStableCount()).toBeGreaterThan(0);
   // Waiting at the same pose must never make one depth observation look like
   // independent multi-view support or flood fusion with redundant samples.
   scanner.frame(3500, frame);
@@ -98,12 +97,6 @@ test("confirmed coverage splats stay smaller than the measured surface detail", 
   expect(coveragePreviewSize(0.08)).toBeGreaterThanOrEqual(0.045);
   expect(coveragePreviewSize(0.08)).toBeLessThan(0.08);
   expect(coveragePreviewSize(0.18)).toBeLessThanOrEqual(0.11);
-});
-
-test("a vertical scanning sweep contributes to the same 3D baseline used by depth confirmation", () => {
-  const scanner = new RoomScanner({ onUpdate: () => {} });
-  scanner.recordCommittedViews([{ camera: [0, 1.5, 0] }, { camera: [0, 1.8, 0] }]);
-  expect(scanner.stats.cameraBaseline).toBeCloseTo(0.3);
 });
 
 test("higher-resolution texture snapshots stay bounded without dropping depth frames", () => {
@@ -313,19 +306,19 @@ test("an accepted stationary revisit refreshes texture without adding geometry",
   // original depth pose.
   view.transform.position.x = 0.10;
   view.transform.matrix = new Matrix4().makeTranslation(0.10, 1.6, 0).elements;
-  scanner.captureDepthFrame(2200, frame, view);
+  scanner.captureDepthFrame(1500, frame, view);
   expect(scanner.colorReader.read).toHaveBeenCalledTimes(3);
   expect(scanner.keyframes).toHaveLength(2);
-  expect(add).not.toHaveBeenCalled();
-  expect(scanner.stats.independentTextureCaptures).toBe(3);
-  expect(scanner.textureKeyframes).toHaveLength(2);
-  const refreshed = scanner.textureKeyframes.find(frame => frame.colorFocus === 20);
-  expect(refreshed.colorImage[0]).toBe(160);
+  expect(add).toHaveBeenCalledTimes(2);
+  expect(scanner.stats.independentTextureCaptures).toBe(2);
+  expect(scanner.textureKeyframes).toHaveLength(1);
+  expect(scanner.textureKeyframes[0].colorFocus).toBe(20);
+  expect(scanner.textureKeyframes[0].colorImage[0]).toBe(160);
   expect(scanner.keyframes[1].colorImage).toBeNull();
   expect(scanner.keyframes[1].transformMatrix[12]).toBeCloseTo(0.08);
-  expect(refreshed.transformMatrix[12]).toBeCloseTo(0.10);
-  expect(refreshed.viewTransformMatrix[12]).toBeCloseTo(0.10);
-  expect(refreshed.textureOnly).toBe(true);
+  expect(scanner.textureKeyframes[0].transformMatrix[12]).toBeCloseTo(0.10);
+  expect(scanner.textureKeyframes[0].viewTransformMatrix[12]).toBeCloseTo(0.10);
+  expect(scanner.textureKeyframes[0].textureOnly).toBe(true);
 });
 
 test("a genuinely focused slow-sweep exposure is retained, but fast or blurred exposures are not", () => {
@@ -386,9 +379,6 @@ test("a materially better stationary depth revisit replaces one keyframe", () =>
     { width: 4, height: 4 },
     { linearSpeed: 0, angularSpeed: 0 },
   );
-  scanner.liveSurfaces = [{ kind: "wall", cells: ["0,0"] }];
-  scanner.stats.surfaceReady = true;
-  scanner.stats.checkedSurfaces = 1;
   const replaced = scanner.refreshNearbyDepthKeyframe(
     points(false),
     view,
@@ -403,9 +393,6 @@ test("a materially better stationary depth revisit replaces one keyframe", () =>
   expect(scanner.stats.depthRefreshes).toBe(1);
   expect(scanner.keyframes).toHaveLength(1);
   expect(scanner.keyframes[0].measuredDepthCount).toBeGreaterThan(0);
-  expect(scanner.liveSurfaces).toEqual([]);
-  expect(scanner.stats.surfaceReady).toBe(false);
-  expect(scanner.stats.checkedSurfaces).toBe(0);
 });
 
 test("keyframe retention preserves a bounded spatial path instead of dropping every other view", () => {
@@ -469,7 +456,7 @@ test("a transient depth read error is recorded without permanently pausing captu
 function captureHarness() {
   const scanner = new RoomScanner({ onUpdate: () => {} });
   scanner.session = { depthUsage: "cpu-optimized", depthType: "raw" };
-  scanner.renderer = { render: () => {}, setAnimationLoop: () => {}, dispose: () => {} };
+  scanner.renderer = { render: () => {} };
   scanner.updatePreview = () => {};
   const camera = new PerspectiveCamera(65, 1, 0.1, 20);
   const view = { projectionMatrix: camera.projectionMatrix.elements, transform: {
@@ -489,7 +476,7 @@ function captureHarness() {
   return { scanner, frame, view, move, setEmulated: value => { emulated = value; }, setDepth: value => { depth = value; } };
 }
 
-test("emulated tracking withholds geometry and resumes on the first trustworthy pose", () => {
+test("emulated tracking withholds geometry and automatically confirms recovery in two observations", () => {
   const { scanner, frame, move, setEmulated } = captureHarness();
   expect(scanner.keyframes).toHaveLength(2);
   const reads = frame.getDepthInformation.mock.calls.length;
@@ -504,6 +491,8 @@ test("emulated tracking withholds geometry and resumes on the first trustworthy 
   setEmulated(false);
   move(0.1);
   scanner.frame(1800, frame);
+  expect(scanner.stats.adaptiveCapture.state).toBe("recovering");
+  scanner.frame(2200, frame);
   expect(scanner.stats.adaptiveCapture.state).toBe("tracking");
   expect(scanner.stats.adaptiveCapture.connected).toBe(true);
 });
@@ -520,13 +509,13 @@ test("an out-and-back shake is rejected even when the sampled depth poses are id
   expect(scanner.stats.currentConfirmedRatio).toBe(0);
   expect(scanner.paused).toBe(false);
   expect(scanner.stats.adaptiveCapture.state).toBe("tracking");
-  expect(scanner.stats.adaptiveCapture.mode).toBe("continuous");
+  expect(scanner.stats.adaptiveCapture.recoveries).toBe(0);
   const event = scanner.stats.captureDiagnostics.recent.at(-1);
   expect(event.reason).toBe("moving-too-fast");
   expect(event.sampledLinearSpeed).toBe(0);
   expect(event.gateLinearSpeed).toBeGreaterThan(event.maxLinearSpeed);
   expect(event.matched).toBe(false);
-  expect(scanner.stats.captureFeedback.code).toBe("scanning");
+  expect(scanner.stats.captureFeedback.code).toBe("confirmed");
 });
 
 test("a brief pose spike does not veto settled depth, but still protects color", () => {
@@ -542,8 +531,8 @@ test("a brief pose spike does not veto settled depth, but still protects color",
   expect(scanner.cameraMotion.depthLinearSpeed).toBe(0);
   expect(scanner.isColorFrameReliable({ textureLinearSpeed: scanner.cameraMotion.linearSpeed })).toBe(false);
   scanner.captureDepthFrame(1200, frame, view);
-  expect(scanner.stats.frameQuality).toBe("repeat-view");
-  expect(scanner.stats.captureDiagnostics.recent.at(-1)).toMatchObject({ reason: "repeat-view", accepted: true });
+  expect(scanner.stats.frameQuality).toBe("connected");
+  expect(scanner.stats.captureDiagnostics.recent.at(-1)).toMatchObject({ reason: "connected", accepted: true });
   expect(scanner.keyframes).toHaveLength(2);
 });
 
@@ -561,7 +550,7 @@ test("a motion-rejected view is retried soon after the phone settles", () => {
   scanner.recordCameraMotion(pose, 1280);
   scanner.frame(1300, frame);
   expect(frame.getDepthInformation).toHaveBeenCalledTimes(reads + 1);
-  expect(scanner.stats.frameQuality).toBe("repeat-view");
+  expect(scanner.stats.frameQuality).toBe("connected");
   expect(scanner.stats.captureIntervalMs).toBeLessThan(350);
 });
 
@@ -577,23 +566,22 @@ test("three brief motion skips preserve the saved map and resume without recover
   }
   expect(scanner.stats.captureDiagnostics.decisions["moving-too-fast"]).toBe(3);
   expect(scanner.stats.captureDiagnostics.promptCount).toBe(0);
-  expect(scanner.stats.adaptiveCapture.mode).toBe("continuous");
+  expect(scanner.stats.adaptiveCapture.recoveries).toBe(0);
   expect(scanner.keyframes).toEqual(frames);
   scanner.frame(1900, frame);
-  expect(scanner.stats.frameQuality).toBe("repeat-view");
-  expect(scanner.stats.currentViewChecked).toBe(false);
-  expect(scanner.stats.capturedKeyframes).toBe(2);
+  expect(scanner.stats.frameQuality).toBe("connected");
+  expect(scanner.stats.currentViewChecked).toBe(true);
   expect(scanner.stats.adaptiveCapture.state).toBe("tracking");
   expect(scanner.stats.captureDiagnostics.attempts).toBe(6);
 });
 
-test("a soft skip after tracking returns does not block subsequent capture", () => {
+test("a soft skip between reliable recovery observations does not restart reconnection", () => {
   const { scanner, frame, view, setEmulated } = captureHarness();
   setEmulated(true);
   scanner.frame(1300, frame);
   setEmulated(false);
   scanner.frame(1600, frame);
-  expect(scanner.stats.frameQuality).toBe("repeat-view");
+  expect(scanner.stats.frameQuality).toBe("confirming-recovery");
   const pose = scanner.keyframePose(view);
   scanner.recordCameraMotion(pose, 1700);
   scanner.recordCameraMotion({ ...pose, position: { ...pose.position, x: 0.15 } }, 1720);
@@ -602,7 +590,7 @@ test("a soft skip after tracking returns does not block subsequent capture", () 
   expect(scanner.stats.frameQuality).toBe("moving-too-fast");
   scanner.frame(2050, frame);
   expect(scanner.stats.adaptiveCapture.state).toBe("tracking");
-  expect(scanner.stats.adaptiveCapture.mode).toBe("continuous");
+  expect(scanner.stats.adaptiveCapture.recoveries).toBe(1);
   expect(scanner.stats.captureDiagnostics.prompts.reconnect).toBe(0);
 });
 
@@ -672,28 +660,22 @@ test.each([
     agreement: 0.92, median: 0.01, upper: 0.02, freeSpaceRatio: 0 }],
   ["near-threshold", { compared: 150, agreeing: 60, tiles: 9, support: 0.24,
     agreement: 0.46, median: 0.058, upper: 0.098, freeSpaceRatio: 0.04 }],
-])("capture continues while a %s connection is still waiting for background checks", (_kind, measured) => {
+])("a corroborated %s bridge adds views to the same saved scan", (_kind, measured) => {
   const { scanner, frame, move } = captureHarness();
-  const worker = { postMessage: jest.fn(), terminate: jest.fn() };
-  scanner.startCaptureAnalysis(worker);
+  scanner.capture.compare = (left, right) => ({
+    accepted: left.timestamp > 1000 && right.timestamp > 1000,
+    conflict: false, overlap: measured.support, forward: measured, backward: measured,
+  });
   move(0.16);
   scanner.frame(1400, frame);
   expect(scanner.keyframes).toHaveLength(2);
-  expect(scanner.stats.frameQuality).toBe("captured");
-  move(0.25);
+  expect(scanner.stats.frameQuality).toBe("confirming-bridge");
+  move(0.23);
   scanner.frame(1800, frame);
-  expect(scanner.capture.frames).toHaveLength(4);
-  expect(scanner.stats.capturedKeyframes).toBe(4);
-  expect(scanner.stats.captureDiagnostics.capturedFrames).toBe(4);
-  expect(scanner.stats.captureDiagnostics.decisions["captured"]).toBe(4);
-  const job = worker.postMessage.mock.calls[0][0];
-  expect(job.changed).toHaveLength(3);
-  worker.onmessage({ data: { type: "analysis", revision: job.revision, result: {
-    checkedIds: [1, 2], coverage: { ratio: measured.support, regions: [] }, surfaces: [],
-  } } });
-  expect(scanner.keyframes).toHaveLength(2);
-  expect(scanner.result().keyframes).toHaveLength(4);
-  scanner.cleanup();
+  expect(scanner.keyframes).toHaveLength(4);
+  expect(scanner.stats.adaptiveCapture.connected).toBe(true);
+  expect(scanner.stats.fusionKeyframes).toBe(4);
+  expect(scanner.stats.captureDiagnostics.decisions["confirming-bridge"]).toBe(1);
 });
 
 test("preview maintenance batches redundant frame removals but final result is exact", () => {
@@ -719,10 +701,10 @@ test("preview maintenance batches redundant frame removals but final result is e
   expect(exactRebuild).toHaveBeenCalledTimes(1);
   expect(scanner.previewNeedsRebuild).toBe(false);
   expect(result.keyframes).toHaveLength(2);
-  expect(result.keyframes[0].depths.some(depth => depth > 0)).toBe(true);
+  expect(result.points.length).toBeGreaterThan(0);
 });
 
-test("routine alignment never adds an amber stop target to continuous capture", () => {
+test("the amber target is reserved for sustained reconnection, not routine coverage or confirmation", () => {
   const { scanner, view } = captureHarness();
   scanner.recoveryMarker = { visible: true, position: { fromArray: jest.fn() } };
   scanner.updateRecoveryTarget(view);
@@ -736,7 +718,7 @@ test("routine alignment never adds an amber stop target to continuous capture", 
   expect(scanner.recoveryMarker.visible).toBe(false);
   scanner.updateExperience(3300);
   scanner.updateRecoveryTarget(view);
-  expect(scanner.recoveryMarker.visible).toBe(false);
+  expect(scanner.recoveryMarker.visible).toBe(true);
   expect(scanner.stats.recoveryDirection).not.toMatch(/amber/);
   scanner.stats.frameQuality = "confirming-recovery";
   scanner.updateExperience(2400);
@@ -744,73 +726,18 @@ test("routine alignment never adds an amber stop target to continuous capture", 
   expect(scanner.recoveryMarker.visible).toBe(false);
 });
 
-test("a shifted depth layer is retained for review without falsely increasing checked coverage", () => {
-  const { scanner, frame, move, setDepth } = captureHarness();
+test("a shifted depth layer is withheld and does not increment accepted capture counts", () => {
+  const { scanner, frame, setDepth } = captureHarness();
   const accepted = scanner.stats.acceptedDepthFrames;
   setDepth(2.25);
-  move(0.2);
   scanner.frame(1500, frame);
   expect(scanner.keyframes).toHaveLength(2);
-  expect(scanner.capture.frames).toHaveLength(3);
-  expect(scanner.stats.acceptedDepthFrames).toBe(accepted + 1);
-  expect(scanner.stats.adaptiveCapture.state).toBe("tracking");
-  expect(scanner.capture.frames.at(-1).captureStatus).toBe("captured");
+  expect(scanner.stats.acceptedDepthFrames).toBe(accepted);
+  expect(scanner.stats.rejectedDepthFrames).toBeGreaterThan(0);
+  expect(scanner.stats.adaptiveCapture.state).toBe("recovering");
 });
 
-test("a normal moving sweep saves agreeing depth without reading a blurred camera image", () => {
-  const { scanner, frame, view, move } = captureHarness();
-  scanner.binding = {};
-  view.camera = { width: 360, height: 720 };
-  scanner.colorReader = { read: jest.fn() };
-  move(0.20);
-  scanner.captureDepthFrame(1200, frame, view);
-  expect(scanner.stats.gateLinearSpeed).toBeCloseTo(0.6);
-  expect(scanner.stats.frameQuality).toBe("captured");
-  expect(scanner.stats.movingTooFast).toBe(false);
-  expect(scanner.capture.frames).toHaveLength(3);
-  expect(scanner.colorReader.read).not.toHaveBeenCalled();
-});
-
-test("contradictory early views cannot trap a new coherent wall sweep or erase its measurements", () => {
-  const { scanner, frame, view, move, setDepth } = captureHarness();
-  const original = scanner.keyframes.slice();
-  scanner.textureKeyframes = [{ timestamp: 1000, colorImage: new Uint8Array(4) }];
-  const rebuild = jest.spyOn(scanner, "rebuildPreviewCloud");
-  setDepth(2.25);
-  move(0.16);
-  scanner.captureDepthFrame(1300, frame, view);
-  expect(scanner.stats.frameQuality).toBe("captured");
-  move(0.24);
-  scanner.captureDepthFrame(1450, frame, view);
-  expect(scanner.keyframes).toEqual(original);
-  move(0.32);
-  scanner.captureDepthFrame(1600, frame, view);
-  scanner.updateAdaptiveStats(3000, { forceCoverage: true });
-  expect(scanner.keyframes).toHaveLength(3);
-  expect(scanner.stats.adaptiveCapture).toMatchObject({ state: "tracking", connected: true, capturedCount: 5 });
-  expect(scanner.capture.frames.slice(0, 2)).toEqual(original);
-  expect(scanner.textureKeyframes).toHaveLength(1);
-  expect(rebuild).not.toHaveBeenCalled();
-  expect(scanner.previewNeedsRebuild).toBe(false);
-  expect(scanner.keyframes.every(frame => frame.depths[0] > 2.1)).toBe(true);
-  expect(scanner.paused).toBe(false);
-});
-
-test("alignment uncertainty does not force additional synchronous sensor reads", () => {
-  const { scanner, frame, move, setDepth } = captureHarness();
-  setDepth(2.25);
-  move(0.2);
-  scanner.frame(1400, frame);
-  expect(scanner.capture.state).toBe("tracking");
-  scanner.captureProcessingMs = 60;
-  const reads = frame.getDepthInformation.mock.calls.length;
-  scanner.frame(1520, frame);
-  expect(frame.getDepthInformation).toHaveBeenCalledTimes(reads);
-  expect(scanner.stats.captureIntervalMs).toBeGreaterThanOrEqual(180);
-  expect(scanner.keyframes).toHaveLength(2);
-});
-
-test("repeated stationary sensor readings avoid depth sampling and synchronous RGB readback", () => {
+test("faster depth sampling does not perform synchronous RGB readback every frame", () => {
   const { scanner, frame, view } = captureHarness();
   scanner.binding = {};
   scanner.renderer = { getContext: () => ({}), resetState: () => {} };
@@ -820,87 +747,8 @@ test("repeated stationary sensor readings avoid depth sampling and synchronous R
   scanner.captureDepthFrame(1630, frame, view);
   scanner.captureDepthFrame(1760, frame, view);
   scanner.captureDepthFrame(1890, frame, view);
-  expect(scanner.colorReader.read).not.toHaveBeenCalled();
+  expect(scanner.colorReader.read).toHaveBeenCalledTimes(2);
   expect(scanner.keyframes).toHaveLength(2);
-});
-
-test("a motion rejection avoids both the depth grid and camera readback without weakening the next gate", () => {
-  const { scanner, frame, view, move } = captureHarness();
-  const getDepthInMeters = jest.fn(() => 2), read = jest.fn();
-  frame.getDepthInformation.mockReturnValue({ width: 320, height: 240, getDepthInMeters });
-  scanner.binding = {};
-  view.camera = { width: 360, height: 720 };
-  scanner.colorReader = { read };
-  const validRatio = scanner.stats.validDepthRatio;
-  move(0.6);
-  scanner.captureDepthFrame(1100, frame, view);
-  expect(scanner.stats.frameQuality).toBe("moving-too-fast");
-  expect(getDepthInMeters).not.toHaveBeenCalled();
-  expect(read).not.toHaveBeenCalled();
-  expect(scanner.stats.validDepthRatio).toBe(validRatio);
-  expect(scanner.stats.depthSamplingSkips).toBe(1);
-  expect(scanner.keyframes).toHaveLength(2);
-  expect(scanner.stats.captureDiagnostics.recent.at(-1)).toMatchObject({ colorReadMs: 0, depthSamplingMs: 0 });
-});
-
-test("patchy depth is rejected before RGB readback", () => {
-  const { scanner, frame, view } = captureHarness();
-  frame.getDepthInformation.mockReturnValue({ width: 320, height: 240, getDepthInMeters: () => 0 });
-  scanner.binding = {};
-  view.camera = { width: 360, height: 720 };
-  scanner.colorReader = { read: jest.fn() };
-  scanner.captureDepthFrame(2200, frame, view);
-  expect(scanner.stats.frameQuality).toBe("sparse-depth");
-  expect(scanner.colorReader.read).not.toHaveBeenCalled();
-  expect(scanner.keyframes).toHaveLength(2);
-});
-
-test("a sharp stationary texture uses a slower refresh while novel views can get color sooner", () => {
-  const { scanner, view } = captureHarness();
-  scanner.lastColorPose = scanner.keyframePose(view);
-  scanner.lastColorReadAt = 1000;
-  scanner.stats.colorFocus = 10;
-  expect(scanner.shouldReadColor({}, scanner.keyframePose(view), 1500)).toBe(false);
-  expect(scanner.shouldReadColor({}, scanner.keyframePose(view), 2800)).toBe(true);
-  const novel = { ...scanner.keyframePose(view), position: { x: 0.24, y: 1.6, z: 0 } };
-  expect(scanner.shouldReadColor({}, novel, 1500)).toBe(true);
-  expect(scanner.shouldReadColor({ linearSpeed: 0.3, angularSpeed: 0.1 }, novel, 1500)).toBe(false);
-  expect(scanner.shouldReadColor({ linearSpeed: 0.3, angularSpeed: 0.1 }, novel, 2000)).toBe(true);
-});
-
-test("worker analysis never promotes provisional geometry and discards results for removed views", () => {
-  const { scanner } = captureHarness();
-  const worker = { postMessage: jest.fn(), terminate: jest.fn() };
-  scanner.startCaptureAnalysis(worker);
-  scanner.updateAdaptiveStats(3000);
-  expect(worker.postMessage).toHaveBeenCalledTimes(1);
-  const coverage = scanner.stats.adaptiveCapture.coverage;
-  const saved = scanner.keyframes[0];
-  scanner.capture.frames = scanner.capture.frames.filter(frame => frame !== saved);
-  worker.onmessage({ data: { type: "analysis", revision: 1,
-    result: { coverage: { observed: 9999, confirmed: 9999 }, surfaces: [] } } });
-  expect(scanner.stats.adaptiveCapture.coverage).toBe(coverage);
-  scanner.cleanup();
-  expect(worker.terminate).toHaveBeenCalledTimes(1);
-});
-
-test("an unchanged preview does not rebuild the saved point buffers", () => {
-  const { scanner, frame, view, move } = captureHarness();
-  scanner.positions = new Float32Array(36000);
-  scanner.colors = new Float32Array(36000);
-  scanner.pointGeometry = { attributes: { position: {}, color: {} }, setDrawRange: jest.fn() };
-  scanner.updatePreview = RoomScanner.prototype.updatePreview.bind(scanner);
-  const reads = jest.spyOn(scanner.cloud, "values");
-  scanner.updatePreview();
-  scanner.updatePreview();
-  expect(reads).not.toHaveBeenCalled();
-  expect(scanner.pointGeometry.setDrawRange).not.toHaveBeenCalled();
-  move(0.16);
-  scanner.captureDepthFrame(1700, frame, view);
-  scanner.updateAdaptiveStats(3000, { forceCoverage: true });
-  scanner.updatePreview();
-  expect(reads).not.toHaveBeenCalled();
-  expect(scanner.pointGeometry.setDrawRange).toHaveBeenCalledTimes(1);
 });
 
 test("nearby overlapping views with a shifted surface are rejected live", () => {

@@ -91,7 +91,6 @@ function encodeRawFrame(frame) {
     colorChannels: finite(frame.colorChannels, 4),
     geometryMode: String(frame.geometryMode || "view-aligned-v1"),
     captureId: finite(frame.captureId, 0),
-    captureStatus: ["captured", "checked"].includes(frame.captureStatus) ? frame.captureStatus : "",
     captureLinks: Array.isArray(frame.captureLinks) ? frame.captureLinks.filter(Number.isFinite).slice(0, 64) : [],
     nativeDepthWidth: finite(frame.nativeDepthWidth, 0),
     nativeDepthHeight: finite(frame.nativeDepthHeight, 0),
@@ -174,7 +173,6 @@ function decodeRawFrame(frame, label) {
     colorChannels,
     geometryMode: String(frame.geometryMode || "view-aligned-v1"),
     captureId: finite(frame.captureId, 0),
-    captureStatus: ["captured", "checked"].includes(frame.captureStatus) ? frame.captureStatus : "",
     captureLinks: Array.isArray(frame.captureLinks) ? frame.captureLinks.filter(Number.isFinite).slice(0, 64) : [],
     nativeDepthWidth: Math.max(0, Math.min(8192, finite(frame.nativeDepthWidth, 0))),
     nativeDepthHeight: Math.max(0, Math.min(8192, finite(frame.nativeDepthHeight, 0))),
@@ -201,9 +199,7 @@ function rawStats(stats) {
   const adaptive = stats?.adaptiveCapture;
   if (adaptive && typeof adaptive === "object") {
     const numeric = ["version", "frameCount", "pendingCount", "recoveries", "promoted", "expired", "removed", "capacityStops",
-      "pendingAgeDrops", "pendingCapacityDrops", "pendingRedundantDrops", "pendingConflictDrops", "pendingResetDrops",
-      "shortcutLinks", "seedRecheckCount", "seedRepairs", "seedDiscardedFrames", "localConflictBypasses",
-      "capturedCount", "captured", "refreshed", "redundant", "groupCount"];
+      "pendingAgeDrops", "pendingCapacityDrops", "pendingRedundantDrops", "pendingConflictDrops", "pendingResetDrops"];
     const regions = (Array.isArray(adaptive.coverage?.regions) ? adaptive.coverage.regions : []).slice(0, 3)
       .filter(region => ["lower", "middle", "upper"].includes(region?.id)).map(region => ({
         id: region.id, observed: Math.max(0, finite(region.observed)), confirmed: Math.max(0, finite(region.confirmed)),
@@ -213,7 +209,6 @@ function rawStats(stats) {
       ...Object.fromEntries(numeric.map(name => [name, Math.max(0, finite(adaptive[name]))])),
       state: ["starting", "tracking", "checking", "recovering"].includes(adaptive.state) ? adaptive.state : "starting",
       reason: String(adaptive.reason || "").slice(0, 80), connected: adaptive.connected === true,
-      mode: adaptive.mode === "continuous" ? "continuous" : "validated-live",
       capacityReached: adaptive.capacityReached === true,
       coverage: { observed: Math.max(0, finite(adaptive.coverage?.observed)),
         confirmed: Math.max(0, finite(adaptive.coverage?.confirmed)),

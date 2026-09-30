@@ -1,7 +1,7 @@
 import { Matrix4, PerspectiveCamera } from "three";
 import { createRgbdKeyframe } from "./fusion";
 import { unprojectDepth } from "./depth";
-import { AdaptiveCapture, adaptiveCaptureProfile, auditCapture, captureBridgeOverlap, captureOverlap, confirmedViewCoverage, confirmedViewRatio, connectedCoverage } from "./adaptiveCapture";
+import { AdaptiveCapture, adaptiveCaptureProfile, auditCapture, captureBridgeOverlap, captureOverlap, confirmedViewRatio, connectedCoverage } from "./adaptiveCapture";
 
 function wallFrame(x, timestamp, { yaw = 0, wallZ = -2, upperWallZ = null, sparse = false, visible = null } = {}) {
   const camera = new PerspectiveCamera(65, 1, 0.1, 20);
@@ -65,80 +65,6 @@ test("bidirectional depth tests accept ordinary turns and reject shifted layers 
   expect(captureOverlap(original, wallFrame(0.1, 400, { sparse: true })).accepted).toBe(false);
 });
 
-test("three independent stable views repair a contradicted starting pair and keep a wall sweep progressing", () => {
-  const capture = started();
-  const original = capture.frames.slice();
-  const first = wallFrame(0.14, 600, { wallZ: -2.25 });
-  expect(capture.consider(first)).toMatchObject({ accepted: false, reason: "rechecking-start" });
-  expect(capture.consider(wallFrame(0.20, 750, { wallZ: -2.25 })).accepted).toBe(false);
-  expect(capture.frames).toEqual(original);
-  const result = capture.consider(wallFrame(0.26, 900, { wallZ: -2.25 }));
-  expect(result).toMatchObject({ accepted: true, reseeded: true });
-  expect(capture.snapshot()).toMatchObject({ connected: true, state: "tracking", seedRepairs: 1, seedDiscardedFrames: 2 });
-  expect(capture.frames).toHaveLength(3);
-  expect(capture.frames).toContain(first);
-  expect(capture.frames.some(frame => original.includes(frame))).toBe(false);
-  for (let i = 1; i <= 15; i++)
-    expect(capture.consider(wallFrame(0.26 + i * 0.08, 900 + i * 160, { wallZ: -2.25 })).accepted).toBe(true);
-  expect(capture.frames).toHaveLength(18);
-  for (const frame of capture.frames) for (const id of frame.captureLinks || [])
-    expect(captureOverlap(frame, capture.frames.find(other => other.captureId === id))).toMatchObject({ accepted: true, conflict: false });
-});
-
-test("stationary, inconsistent, stale and tracking-interrupted depth cannot replace the starting pair", () => {
-  const capture = started();
-  const original = capture.frames.slice();
-  for (let i = 0; i < 12; i++) capture.consider(wallFrame(0.14, 600 + i * 130, { wallZ: -2.25 }));
-  expect(capture.frames).toEqual(original);
-  for (let i = 0; i < 8; i++)
-    capture.consider(wallFrame(0.14 + i * 0.05, 2400 + i * 150, { wallZ: i % 2 ? -2.5 : -2.25 }));
-  expect(capture.frames).toEqual(original);
-  capture.consider(wallFrame(0.14, 4000, { wallZ: -2.25 }));
-  capture.consider(wallFrame(0.20, 4200, { wallZ: -2.25 }));
-  capture.failure("tracking-lost", 4300);
-  capture.consider(wallFrame(0.26, 4400, { wallZ: -2.25 }));
-  expect(capture.frames).toEqual(original);
-  capture.consider(wallFrame(0.32, 6400, { wallZ: -2.25 }));
-  expect(capture.frames).toEqual(original);
-  expect(capture.seedEvidence.length).toBeLessThanOrEqual(3);
-});
-
-test("a contradicted established map is never discarded to keep the counter moving", () => {
-  const capture = started();
-  capture.consider(wallFrame(0.16, 650));
-  const original = capture.frames.slice();
-  for (let i = 0; i < 10; i++) capture.consider(wallFrame(0.20 + i * 0.05, 900 + i * 150, { wallZ: -2.25 }));
-  expect(capture.frames).toEqual(original);
-  expect(capture.snapshot().seedRepairs).toBe(0);
-});
-
-test("two linked recent views outweigh one old contradiction, but a recent contradiction still blocks capture", () => {
-  let conflictId = null;
-  const compare = (a, b) => ({
-    accepted: a.captureId !== conflictId && b.captureId !== conflictId,
-    conflict: a.captureId === conflictId || b.captureId === conflictId,
-    overlap: 0.9,
-  });
-  const capture = started({ compare });
-  capture.consider(wallFrame(0.16, 650));
-  capture.consider(wallFrame(0.24, 900));
-  conflictId = capture.frames[0].captureId;
-  expect(capture.consider(wallFrame(0.32, 1150)).accepted).toBe(true);
-  expect(capture.snapshot()).toMatchObject({ connected: true, localConflictBypasses: 1 });
-  conflictId = capture.frames.at(-1).captureId;
-  expect(capture.consider(wallFrame(0.40, 1400))).toMatchObject({ accepted: false, reason: "alignment-conflict" });
-  expect(capture.frames).toHaveLength(5);
-});
-
-test("one matching recent view cannot conceal conflicting geometry", () => {
-  const capture = started();
-  const newest = capture.frames[1];
-  capture.compare = (a, b) => ({ accepted: a === newest || b === newest,
-    conflict: a !== newest && b !== newest, overlap: 0.9 });
-  expect(capture.consider(wallFrame(0.16, 650)).accepted).toBe(false);
-  expect(capture.frames).toHaveLength(2);
-});
-
 test("a thin measured strip is a possible bridge, but a shifted layer is not", () => {
   const original = wallFrame(0, 100);
   const strip = wallFrame(0.08, 400, { visible: (_u, v) => v < 0.1 });
@@ -187,27 +113,6 @@ test("two displaced, agreeing views reconnect a narrow bridge into one saved sca
   expect(capture.snapshot().connected).toBe(true);
   expect(capture.frames).toHaveLength(4);
   expect(capture.pending).toHaveLength(0);
-});
-
-test("tiny sideways steps preserve the narrow bridge anchor until it can be corroborated", () => {
-  const capture = started();
-  const anchor = wallFrame(0.08, 650, { yaw: 1.1 });
-  capture.consider(anchor);
-  expect(capture.snapshot().needsTranslation).toBe(true);
-  for (let i = 1; i <= 9; i++) capture.consider(wallFrame(0.08 + i * 0.006, 650 + i * 120, { yaw: 1.1 }));
-  expect(capture.frames).toContain(anchor);
-  expect(capture.frames.length).toBeGreaterThanOrEqual(4);
-  expect(capture.snapshot()).toMatchObject({ connected: true, needsTranslation: false });
-});
-
-test("measured-view feedback keeps missing depth separate from confirmed measurements", () => {
-  const first = wallFrame(0, 100, { visible: (_u, v) => v < 0.35 });
-  const second = wallFrame(0.08, 400, { visible: (_u, v) => v < 0.35 });
-  const coverage = confirmedViewCoverage(second, [first, second]);
-  expect(coverage.ratio).toBeLessThan(0.4);
-  expect(coverage.measuredRatio).toBeGreaterThan(0.85);
-  expect(coverage.measured).toBeLessThan(coverage.sampled);
-  expect(confirmedViewCoverage(second, [first, wallFrame(0, 700)]).measuredRatio).toBe(0);
 });
 
 test("a narrow bridge cannot promote a second view from a shifted depth layer", () => {
@@ -400,22 +305,6 @@ test("capacity protects an irreplaceable connecting view instead of severing a c
   expect(auditCapture({ fusionKeyframes: 10, adaptiveCapture: capture.snapshot() }).issues.join(" ")).toMatch(/capacity/);
 });
 
-test("a freshly validated shortcut can compact a connecting view without severing the map", () => {
-  let recheck = false;
-  const compare = (a, b) => {
-    const x = Math.min(a.camera[0], b.camera[0]), y = Math.max(a.camera[0], b.camera[0]);
-    return { accepted: y - x < 0.11 || (recheck && x === 0 && y < 0.17), conflict: false, overlap: 0.8 };
-  };
-  const capture = started({ maximumFrames: 3, compare });
-  capture.consider(wallFrame(0.16, 700));
-  recheck = true;
-  expect(capture.consider(wallFrame(0.24, 1000)).accepted).toBe(true);
-  expect(capture.snapshot()).toMatchObject({ connected: true, capacityReached: false, shortcutLinks: 1 });
-  expect(capture.frames).toHaveLength(3);
-  for (const frame of capture.frames) for (const id of frame.captureLinks)
-    expect(compare(frame, capture.frames.find(other => other.captureId === id)).accepted).toBe(true);
-});
-
 test("adaptive timing follows motion, depth quality, detail and actual processing cost", () => {
   const still = adaptiveCaptureProfile({ depthType: "raw", width: 320, height: 240 });
   const moving = adaptiveCaptureProfile({ depthType: "raw", width: 320, height: 240, linearSpeed: 0.3 });
@@ -430,18 +319,6 @@ test("adaptive timing follows motion, depth quality, detail and actual processin
   const previewBusy = adaptiveCaptureProfile({ processingMs: 700, geometryProcessingMs: 20 });
   expect(previewBusy.interval).toBe(600);
   expect(previewBusy.sampleLongSide).toBe(96);
-  expect(weak.hardMaxLinearSpeed).toBeGreaterThan(weak.maxLinearSpeed);
-  expect(weak.hardMaxAngularSpeed).toBeGreaterThan(weak.maxAngularSpeed);
-  expect(busy.recoveryInterval).toBeLessThan(busy.interval);
-  expect(adaptiveCaptureProfile({ processingMs: 300 }).recoveryInterval).toBeGreaterThanOrEqual(450);
-});
-
-test("repeat-observed planes reduce duplicates while detail and weak depth keep dense spacing", () => {
-  const base = { depthType: "raw", width: 320, height: 240, surfaceReady: true };
-  expect(adaptiveCaptureProfile(base)).toMatchObject({ name: "surface", spacing: 0.12 });
-  expect(adaptiveCaptureProfile({ ...base, edgeRatio: 0.2 }).spacing).toBe(0.045);
-  expect(adaptiveCaptureProfile({ ...base, validRatio: 0.3 }).spacing).toBe(0.07);
-  expect(adaptiveCaptureProfile(base).maxLinearSpeed).toBe(adaptiveCaptureProfile({ ...base, surfaceReady: false }).maxLinearSpeed);
 });
 
 test("live coverage can use a recent snapshot while saved views still update immediately", () => {
