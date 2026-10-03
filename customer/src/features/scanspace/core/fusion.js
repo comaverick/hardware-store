@@ -1,7 +1,9 @@
 import { consolidatePlanarSurfaces } from "./planarSurface.js";
 import { refineJointTrajectory, recoverFrameComponents } from "./trajectoryAlignment.js";
 import { discoverStructuralPlanes, regularizeStructuralDepth } from "./structuralDepth.js";
+import { repairCeilingRegions } from "./ceilingRecovery.js";
 import { rebuildStructuralSurfaces } from "./structuralSurface.js";
+import { pruneContradictedSurfaceTriangles } from "./surfaceEvidence.js";
 import { conformSurfaceTopology, orientManifoldFaces, pruneUnsupportedFragments, surfaceTopologyDiagnostics, triangulatePlanarLoop } from "./surfaceTopology.js";
 import { registerSurfaceTextures } from "./textureRegistration.js";
 import { selectSurfaceTextures } from "./surfaceTextures.js";
@@ -5170,7 +5172,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
   let usable = localLayerConsensus.frames;
   if (localLayerConsensus.diagnostics)
     alignment.localLayerConsensus = localLayerConsensus.diagnostics;
-  const structuralPlanes = options.structuralDepth
+  let structuralPlanes = options.structuralDepth
     ? discoverStructuralPlanes(usable, {
       floorY: options.floorY,
       // Broad plane discovery can use two local views once the plane itself
@@ -5178,8 +5180,12 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       // still require three independent observations in each cell.
       minimumCellViews: options.structuralPlaneMinimumCellViews ?? 2,
     }) : [];
+  const ceilingRecovery = options.completionMode === "surface" && structuralPlanes.length
+    ? repairCeilingRegions([...usable, ...extraTextureFrames], structuralPlanes, { project: projectWorld })
+    : { frames: [...usable, ...extraTextureFrames], planes: structuralPlanes, diagnostics: null };
+  structuralPlanes = ceilingRecovery.planes;
   const structural = regularizeStructuralDepth(
-    structuralPlanes.length ? [...usable, ...extraTextureFrames] : [],
+    structuralPlanes.length ? ceilingRecovery.frames : [],
     structuralPlanes,
     { unproject: depthPosition },
     {
@@ -5193,7 +5199,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     extraTextureFrames = structural.frames.filter(f => !ids.has(f.frameId));
   }
   const stages = {
-    algorithmVersion: 45,
+    algorithmVersion: 47,
     completionMode: options.completionMode === "surface" ? "surface" : "room",
     reconstructionProfile: options.reconstructionProfile || "quality",
     supportMode: "translated-camera-viewpoints",
@@ -5212,11 +5218,13 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       textureRegistration: !!options.textureRegistration,
       repairPlanarGaps: !!options.repairPlanarGaps,
       structuralDepth: !!options.structuralDepth,
+      ceilingRecovery: !!ceilingRecovery.diagnostics?.correctedSamples,
       structuralRebuild: !!options.structuralRebuild,
       conformTopology: !!options.conformTopology,
       recoverCaptureGroups: !!options.recoverCaptureGroups,
     },
     inputKeyframes: keyframes.length,
+    ceilingRecovery: ceilingRecovery.diagnostics,
     ambiguousLegacyKeyframes,
     preparedKeyframes: prepared.length,
     inputDepthSamples: keyframes.reduce((sum, frame) => sum + (frame?.validCount || 0), 0),
@@ -5620,8 +5628,13 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
           proposedTriangles: stages.structuralRebuild.reconstructedTriangles,
           proposedRemovedTriangles: stages.structuralRebuild.removedTriangles,
           proposedRemovedCompetingTriangles: stages.structuralRebuild.removedCompetingTriangles,
+          proposedCorrectedBoundaryVertices: stages.structuralRebuild.correctedBoundaryVertices,
+          proposedSplitBoundaryEdges: stages.structuralRebuild.splitBoundaryEdges,
+          proposedMaxBoundaryDisplacementMeters: stages.structuralRebuild.maxBoundaryDisplacementMeters,
           reconstructedArea: 0, reconstructedTriangles: 0,
           removedTriangles: 0, removedCompetingTriangles: 0,
+          correctedBoundaryVertices: 0, splitBoundaryEdges: 0,
+          maxBoundaryDisplacementMeters: 0,
           estimatedArea: 0, estimatedTriangles: 0, estimatedHoleCount: 0,
           bridgedArea: 0, bridgedCells: 0, bridgedRuns: 0,
           planes: [] };
@@ -5676,6 +5689,11 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
         filledHoleTriangles: previousTriangles + surface.filledHoleTriangles };
     }
     if (options.conformTopology) {
+      // Unsupported attached sheets survive component pruning. Remove only
+      // faces contradicted by independent original depth views, after gap
+      // repair so a rejected face cannot be immediately filled back in.
+      surface = pruneContradictedSurfaceTriangles(surface, usable, projectWorld);
+      stages.surfaceEvidence = surface.surfaceEvidence;
       surface = pruneUnsupportedFragments(surface, usable, projectWorld);
       stages.fragmentPruning = surface.fragmentPruning;
       surface = orientManifoldFaces(surface);

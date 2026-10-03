@@ -1,5 +1,6 @@
 // Geometry-only reconstruction, before camera projection. Never create a room
 // rectangle or fill the convex hull: the output is the union of measured faces.
+import { MIN_CEILING_PATCH_AREA } from './structuralCriteria';
 const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const sub = (a, b) => a.map((v, i) => v - b[i]);
 const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
@@ -324,24 +325,41 @@ function protectMeasuredRelief(group, plane, sourcePositions, frames, protectedV
 
 function detectPlanes(records, distanceLimit, options, protectedVertices) {
   const planes = [], ignored = new Set();
-  // Raw multi-view planes survive even when extracted facets are too curled
-  // to vote for their true orientation. Do not let this later mesh pass undo
-  // the bounded correction already applied to the depth samples.
+  // Raw multi-view planes supply the measured orientation when extracted
+  // facets are too curled to vote for it. Walls retain their original raw
+  // depth until this relief-aware, bounded mesh correction.
   for (const support of options.structuralPlanes || []) {
-    if (support.kind === 'wall' || support.supportingFrameIds.length < 3) continue;
+    if (support.supportingFrameIds.length < 3) continue;
     const plane = { n:support.normal, d:support.offset };
+    if (support.kind === 'wall' && support.reliefCells?.size) {
+      // Raw relief is a persistent veto, not just a raw-seed exclusion. The
+      // later mesh-only hypotheses must not flatten the same measured ridge.
+      // Keep the veto inside these measured cells and near this wall plane.
+      for (const record of records) {
+        if (Math.abs(dot(record.normal, plane.n)) < .35) continue;
+        for (let corner = 0; corner < record.p.length; corner++) {
+          const p = record.p[corner];
+          if (Math.abs(dot(plane.n, p) - plane.d) > .065) continue;
+          const key = support.axes.map(axis => Math.floor(dot(axis, p) / support.cellSize)).join(',');
+          if (support.reliefCells.has(key)) protectedVertices.add(record.ids[corner]);
+        }
+      }
+    }
     const supported = p => {
       const key = `${Math.floor(dot(support.axes[0],p)/support.cellSize)},${Math.floor(dot(support.axes[1],p)/support.cellSize)}`;
-      return (support.cells.get(key)?.size || 0) >= 2;
+      return (support.cells.get(key)?.size || 0) >= (support.kind === 'floor' ? 2 : 3) &&
+        !support.reliefCells?.has(key);
     };
     const group = records.filter(r => r.plane < 0 && Math.abs(dot(r.normal,plane.n)) > .55 &&
-      r.p.every(p => Math.abs(dot(plane.n,p)-plane.d) < .05) && supported(r.center));
-    if (group.reduce((s,r) => s+r.area,0) < .6) continue;
+      r.p.every(p => Math.abs(dot(plane.n,p)-plane.d) < .05 &&
+        (support.kind !== 'wall' || supported(p))) && supported(r.center));
+    if (group.reduce((s,r) => s+r.area,0) < (support.kind === 'ceiling' ? MIN_CEILING_PATCH_AREA : .6)) continue;
     // Preserve actual beams/risers/fixtures using the same per-view relief
     // evidence as pictures and curtains. Numerical noise alone is not relief.
     protectMeasuredRelief(group,plane,options.sourcePositions,options.evidenceFrames,protectedVertices);
     const eligible = group.filter(r => !r.ids.some(id => protectedVertices.has(id)));
-    if (eligible.reduce((s,r) => s+r.area,0) < .5) continue;
+    if (eligible.reduce((s,r) => s+r.area,0) < (support.kind === 'ceiling' ? MIN_CEILING_PATCH_AREA : .5)) continue;
+    if (support.kind === 'wall' && hasMeasuredThickness(eligible, records.filter(r => r.plane < 0), plane)) continue;
     const id = planes.length;
     planes.push({...plane,kind:support.kind,supportingFrameIds:support.supportingFrameIds,
       maximumCorrection:.05});
@@ -473,7 +491,7 @@ export function consolidatePlanarSurfaces(mesh, options = {}) {
   const planes = detectPlanes(records, distanceLimit, options, protectedVertices);
   // Protection discovered by another plane must also win at shared corners.
   for (const r of records) if (r.ids.some((id) => protectedVertices.has(id))) r.plane = -1;
-  const diagnostics = { version: 4, planes: [], protectedVertices: protectedVertices.size, correctedVertices: 0,
+  const diagnostics = { version: 5, planes: [], protectedVertices: protectedVertices.size, correctedVertices: 0,
     maxDisplacementMeters: 0, removedOverlapArea: 0, inputTriangles: mesh.indices.length / 3, outputTriangles: mesh.indices.length / 3 };
   const positions = new Float32Array(mesh.positions);
   if (options.sourcePositions && !options.preserveDenoisedRelief)
@@ -503,8 +521,9 @@ export function consolidatePlanarSurfaces(mesh, options = {}) {
         const residual = dot(plane.n, q) - plane.d;
         q = q.map((v, i) => v - plane.n[i] * residual);
       }
-      const limit = values.some(plane => plane.kind === 'floor' || plane.kind === 'ceiling')
-        ? .05 : Math.max(...values.map(plane => plane.maximumCorrection || distanceLimit * 1.5));
+      // A shared corner must honor every incident patch's correction bound.
+      // A generic mesh plane cannot widen a raw wall's five-centimetre limit.
+      const limit = Math.min(...values.map(plane => plane.maximumCorrection || distanceLimit * 1.5));
       if (Math.hypot(...sub(p, q)) > limit || values.some(p => Math.abs(dot(p.n,q)-p.d)>1e-6))
         rejected.add(id);
       else solutions.set(id,q);

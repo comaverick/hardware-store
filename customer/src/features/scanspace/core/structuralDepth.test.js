@@ -11,6 +11,37 @@ function grid(frameId,height=()=>0) {
 }
 const helpers={unproject:(f,i,depth)=>[0,1,2].map(k=>f.camera[k]+(f.positions[i*3+k]-f.camera[k])*depth/f.filteredDepth[i])};
 
+function wall(frameId, shape = () => 0) {
+  const frame = grid(frameId);
+  for (let y = 0; y < frame.rows; y++) for (let x = 0; x < frame.columns; x++)
+    frame.positions.set([x * .07, y * .07, shape(x * .07, y * .07)], (y * frame.columns + x) * 3);
+  return frame;
+}
+
+test('raw wall support distinguishes repeatedly measured raised relief from flat footprint cells', () => {
+  const frames = [0, 1, 2, 3].map(i => wall(i, (x, y) =>
+    x > .8 && x < 1.6 && y > .8 && y < 1.6 ? .03 : 0));
+  const planes = discoverStructuralPlanes(frames, { floorY: 0 });
+  const plane = planes.find(p => p.kind === 'wall');
+  expect(plane).toBeDefined();
+  const keyAt = p => plane.axes.map(axis => Math.floor(axis.reduce((sum, v, i) => sum + v * p[i], 0) / plane.cellSize)).join(',');
+  expect(plane.reliefCells.has(keyAt([1.12, 1.12, .03]))).toBe(true);
+  expect(plane.reliefCells.has(keyAt([.42, 1.12, 0]))).toBe(false);
+  expect(plane.cells.get(keyAt([.42, 1.12, 0])).size).toBeGreaterThanOrEqual(3);
+});
+
+test('raw wall seed evidence retains its measured angle and never snaps raw curtain depth', () => {
+  const frames = [0, 1, 2, 3].map(i => wall(i, x => x * .21));
+  const plane = discoverStructuralPlanes(frames, { floorY: 0 }).find(p => p.kind === 'wall');
+  expect(plane).toBeDefined();
+  expect(plane.normal[0] / plane.normal[2]).toBeCloseTo(-.21, 4);
+  const curtain = wall(4, x => x * .21 + .028 * Math.cos(x * Math.PI * 4));
+  const before = curtain.positions.slice();
+  const result = regularizeStructuralDepth([curtain], [plane], helpers);
+  expect(result.diagnostics.correctedSamples).toBe(0);
+  expect(result.frames[0].positions).toEqual(before);
+});
+
 test('independent broad floor and ceiling measurements establish separate structural planes',()=>{
   const floor=[0,1,2,3].map(i=>grid(i)),ceiling=[4,5,6,7].map(i=>grid(i,()=>2.6));
   const planes=discoverStructuralPlanes([...floor,...ceiling],{floorY:0});
@@ -56,6 +87,48 @@ test('repeated stationary observations and desk tops cannot establish structural
   expect(discoverStructuralPlanes(stationary,{floorY:0})).toHaveLength(0);
   expect(discoverStructuralPlanes([0,1,2,3].map(i=>grid(i,()=>.8)),{floorY:0})).toHaveLength(0);
   expect(discoverStructuralPlanes([0,1,2].map(i=>grid(i)),{})).toHaveLength(0);
+});
+
+test('camera order cannot hide three mutually translated structural observations', () => {
+  const cameras = [
+    [.19113266, 1.44091988, -.11932269],
+    [.17643759, 1.37360799, -.15738606],
+    [.16198438, 1.31719267, -.15217741],
+    [.15754895, 1.37150550, -.10084696],
+  ];
+  const frames = cameras.map((camera, id) => ({ ...grid(id), camera: new Float32Array(camera) }));
+  const orders = [frames, frames.slice().reverse(), [frames[1], frames[3], frames[0], frames[2]]];
+  for (const ordered of orders) {
+    const plane = discoverStructuralPlanes(ordered, { floorY: 0 }).find(p => p.kind === 'floor');
+    expect(plane).toBeDefined();
+    expect(plane.supportingFrameIds.slice().sort()).toEqual([0, 2, 3]);
+    expect([...plane.cells.values()].some(ids => ids.size === 3)).toBe(true);
+  }
+});
+
+test('three-view fallback avoids a central camera that blocks a valid structural footprint', () => {
+  // Farthest-first chooses 0 then 1, but camera 1 lies within six centimetres
+  // of 2, 3 and 4. Cameras 0, 2, 3 and 4 are mutually independent.
+  const cameras = [[-.6, 1.4, 3], [0, 1.4, 3], [-.012, 1.4, 3.054],
+    [-.057, 1.4, 3], [-.012, 1.4, 2.946]];
+  const frames = cameras.map((camera, id) => ({ ...grid(id), camera: new Float32Array(camera) }));
+  const plane = discoverStructuralPlanes(frames, { floorY: 0 }).find(p => p.kind === 'floor');
+  expect(plane).toBeDefined();
+  expect(plane.supportingFrameIds.slice().sort()).toEqual([0, 2, 3, 4]);
+  expect([...plane.cells.values()].some(ids => ids.size === 4)).toBe(true);
+});
+
+test('stationary repeats cannot conceal a stable raised step when extending floor support', () => {
+  const translated = [0, 1, 2].map(i => grid(i, x => x > 1.7 ? .12 : 0));
+  const repeats = Array.from({ length: 16 }, (_, i) => ({ ...grid(i + 3),
+    camera: translated[0].camera.slice() }));
+  const plane = discoverStructuralPlanes([...translated, ...repeats], { floorY: 0 })
+    .find(p => p.kind === 'floor');
+  expect(plane).toBeDefined();
+  const keyAt = p => plane.axes.map(axis => Math.floor(axis.reduce((sum, v, i) => sum + v * p[i], 0)
+    / plane.cellSize)).join(',');
+  expect(plane.cells.get(keyAt([2.1, .12, 1.12]))?.size || 0).toBeLessThan(3);
+  expect(plane.cells.get(keyAt([1.12, 0, 1.12])).size).toBeGreaterThanOrEqual(3);
 });
 
 test('genuine raised steps outside the consensus footprint are not flattened',()=>{

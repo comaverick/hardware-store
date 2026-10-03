@@ -27,6 +27,21 @@ test('a distant horizontal fragment is not pulled onto a supported plane', () =>
   expect(Array.from(result.positions).filter((_, index) => index % 3 === 1).every(y => y > .13)).toBe(true);
 });
 
+test('a narrow measured ceiling corner is consolidated without requiring a floor-sized patch', () => {
+  const positions = new Float32Array([0,2.635,0, 1.2,2.635,0, 0,2.635,-.36, 1.2,2.635,-.36]);
+  const source = { positions, indices: new Uint32Array([0,1,2,1,3,2]), colors: new Uint8Array(12) };
+  const support = { kind: 'ceiling', normal: [0,1,0], offset: 2.6, axes: [[1,0,0],[0,0,-1]], cellSize: .12,
+    supportingFrameIds: [0,1,2], cells: new Map() };
+  for (let y=0;y<=3;y++) for (let x=0;x<=10;x++) support.cells.set(`${x},${y}`,new Set([0,1,2]));
+  const result = consolidatePlanarSurfaces(source,{structuralPlanes:[support]});
+  expect(result.planarConsolidation.planes.find(p=>p.kind==='ceiling').retainedArea).toBeCloseTo(.432,5);
+  expect(Array.from(result.positions).filter((_,i)=>i%3===1).every(y=>Math.abs(y-2.6)<1e-5)).toBe(true);
+  for (const key of support.cells.keys()) support.cells.set(key,new Set([0,1]));
+  expect(consolidatePlanarSurfaces(source,{structuralPlanes:[support]}).planarConsolidation.planes
+    .some(p=>p.kind==='ceiling')).toBe(false);
+  expect(source.positions[1]).toBeCloseTo(2.635,5);
+});
+
 function sheet({ z = () => 0, origin = [0, 0, 0], rotate = false, hole = false, size = 2, step = 0.1 } = {}) {
   const positions = [], indices = [], colors = [], n = Math.round(size / step);
   for (let y = 0; y <= n; y++) for (let x = 0; x <= n; x++) {
@@ -55,6 +70,98 @@ function area(mesh) {
   }
   return value;
 }
+
+function rawWallSupport({ normal = [0, 0, 1], offset = 0, views = 3 } = {}) {
+  const u = [normal[2], 0, -normal[0]], support = { kind: 'wall', normal, offset,
+    axes: [u, [0, 1, 0]], cellSize: .12, supportingFrameIds: [0, 1, 2], cells: new Map(), reliefCells: new Set() };
+  for (let y = -1; y <= 18; y++) for (let x = -1; x <= 18; x++)
+    support.cells.set(`${x},${y}`, new Set(Array.from({ length: views }, (_, i) => i)));
+  return support;
+}
+
+test('a measured raw wall plane corrects curled facets within five centimetres', () => {
+  const source = sheet({ step: .025, z: (x, y) => .025 * Math.sin(x * 23) * Math.cos(y * 19) });
+  const before = source.positions.slice(), support = rawWallSupport();
+  const result = consolidatePlanarSurfaces(source, { structuralPlanes: [support],
+    sourcePositions: source.positions, evidenceFrames: measuredViews(() => 0, .004), voxelSize: .022 });
+  expect(result.planarConsolidation.planes.some(p => p.kind === 'wall' && Math.abs(p.offset) < 1e-8)).toBe(true);
+  expect(result.planarConsolidation.correctedVertices).toBeGreaterThan(2000);
+  expect(result.planarConsolidation.maxDisplacementMeters).toBeLessThanOrEqual(.05);
+  expect(source.positions).toEqual(before);
+});
+
+test('raw wall seeding preserves corroborated curtain and picture relief', () => {
+  const shape = (x, y) => x < .65 ? .035 * Math.cos(x * Math.PI * 8) :
+    x > 1.05 && x < 1.65 && y > .65 && y < 1.45 ? .035 : 0;
+  const source = sheet({ step: .025, z: shape });
+  const result = consolidatePlanarSurfaces(source, { structuralPlanes: [rawWallSupport()],
+    sourcePositions: source.positions, evidenceFrames: measuredViews(shape, .004), voxelSize: .022 });
+  const curtain = [], picture = [];
+  for (let i = 0; i < result.positions.length; i += 3) {
+    const [x, y, z] = result.positions.subarray(i, i + 3);
+    if (x < .6 && y > .3 && y < 1.7) curtain.push(z);
+    if (x > 1.15 && x < 1.55 && y > .75 && y < 1.35) picture.push(z);
+  }
+  expect(Math.max(...curtain) - Math.min(...curtain)).toBeGreaterThan(.06);
+  expect(Math.min(...picture)).toBeGreaterThan(.029);
+});
+
+test('a raw wall relief mask also prevents generic fallback flattening shallow ridges', () => {
+  const source = sheet({ step: .05, z: x => .025 + .005 * Math.cos(x * Math.PI * 3) });
+  const support = rawWallSupport();
+  support.reliefCells = new Set(support.cells.keys());
+  const result = consolidatePlanarSurfaces(source, { structuralPlanes: [support] });
+  expect(result.planarConsolidation.protectedVertices).toBe(source.positions.length / 3);
+  expect(result.positions).toEqual(source.positions);
+  expect(result.indices).toBe(source.indices);
+});
+
+test('raw wall relief protection stays near its measured wall and cell footprint', () => {
+  const support = rawWallSupport();
+  support.reliefCells = new Set(['4,4']);
+  const nearby = sheet({ step: .05, z: x => .025 + .005 * Math.cos(x * Math.PI * 3) });
+  const distant = sheet({ origin: [0, 0, .25] });
+  const result = consolidatePlanarSurfaces(join(nearby, distant), { structuralPlanes: [support] });
+  expect(result.planarConsolidation.protectedVertices).toBeGreaterThan(0);
+  expect(result.planarConsolidation.protectedVertices).toBeLessThan(30);
+  expect(result.planarConsolidation.correctedVertices).toBeGreaterThan(100);
+  const remotePlane = result.planarConsolidation.planes.find(plane => Math.abs(plane.offset - .25) < 1e-6);
+  expect(remotePlane).toBeDefined();
+  expect(remotePlane.retainedArea).toBeCloseTo(4, 4);
+});
+
+test('two local views and uncovered corners do not authorize a raw wall seed', () => {
+  const source = sheet({ z: () => .035 }), support = rawWallSupport({ views: 2 });
+  const insufficient = consolidatePlanarSurfaces(source, { structuralPlanes: [support] });
+  expect(insufficient.planarConsolidation.planes.some(p => p.kind === 'wall')).toBe(false);
+  support.cells = new Map([['8,8', new Set([0, 1, 2])]]);
+  const uncovered = consolidatePlanarSurfaces(source, { structuralPlanes: [support] });
+  expect(uncovered.planarConsolidation.planes.some(p => p.kind === 'wall')).toBe(false);
+});
+
+test('wall seeds preserve a genuine thin solid and a separated parallel surface', () => {
+  const side = { positions: new Float32Array([0, 0, 0, 0, 2, 0, 0, 0, .04, 0, 2, .04]),
+    indices: new Uint32Array([0, 1, 2, 1, 3, 2]), colors: new Uint8Array(12) };
+  const solid = join(sheet(), sheet({ origin: [0, 0, .04] }), side);
+  const preserved = consolidatePlanarSurfaces(solid, { structuralPlanes: [rawWallSupport()] });
+  expect(preserved.planarConsolidation.planes).toHaveLength(0);
+  expect(preserved.positions).toBe(solid.positions);
+  const separate = consolidatePlanarSurfaces(join(sheet(), sheet({ origin: [0, 0, .25] })),
+    { structuralPlanes: [rawWallSupport()] });
+  expect(area(separate)).toBeCloseTo(8, 4);
+  expect(Math.max(...Array.from(separate.positions).filter((_, i) => i % 3 === 2))).toBeCloseTo(.25, 5);
+});
+
+test('raw wall consolidation retains the measured angle and an unscanned opening', () => {
+  const angle = .21, length = Math.hypot(angle, 1), support = rawWallSupport({ normal: [-angle / length, 0, 1 / length] });
+  const source = sheet({ hole: true, z: x => x * angle + .025 });
+  const result = consolidatePlanarSurfaces(source, { structuralPlanes: [support] });
+  expect(result.planarConsolidation.planes.some(p => p.kind === 'wall')).toBe(true);
+  expect(area(result)).toBeCloseTo((4 - .8 * .8) * length, 4);
+  for (let i = 0; i < result.positions.length; i += 3)
+    expect(result.positions[i + 2]).toBeCloseTo(result.positions[i] * angle, 5);
+  expect(source.positions[2]).toBeCloseTo(.025, 5);
+});
 test('planar consolidation preserves estimated labels when it changes triangle topology', () => {
   const source = sheet({ z: (x) => 0.015 * Math.sin(x * Math.PI) });
   source.estimatedTriangleMask = new Uint8Array(source.indices.length / 3).fill(1);

@@ -28,6 +28,7 @@ import {
   wallConsensusKeyframes,
   projectWorld,
 } from "./fusion";
+import { scanFusionOptions } from "./fusionOptions";
 import { Matrix4, PerspectiveCamera, Vector3 } from "three";
 import { unprojectDepth } from "./depth";
 
@@ -936,7 +937,7 @@ test("allows validated multi-view surface fusion without a room heading sweep", 
   expect(result.mesh?.kind).toBe("projective-tsdf-surface-net");
   expect(result.mesh?.triangleCount).toBeGreaterThan(0);
   expect(result.diagnostics.completionMode).toBe("surface");
-  expect(result.diagnostics.algorithmVersion).toBe(45);
+  expect(result.diagnostics.algorithmVersion).toBe(47);
   expect(result.diagnostics.planarConsolidation.planes.length).toBeGreaterThan(0);
   expect(result.diagnostics.globalSurfaceConsensus).toBeUndefined();
   expect(result.diagnostics.measuredSurfaceQuality.assessed).toBe(true);
@@ -947,6 +948,19 @@ test("allows validated multi-view surface fusion without a room heading sweep", 
     "final-mesh-positions",
   );
   expect(result.diagnostics.fallback).toBeUndefined();
+});
+
+test("shared completion options retain supported geometry through cleanup before texturing", () => {
+  const frames = [planeKeyframe(0), planeKeyframe(0.08), planeKeyframe(-0.08)];
+  const result = fuseRgbdKeyframes(frames, scanFusionOptions({ floorY: 0 }, "surface", {
+    maxDimension: 64,
+  }));
+  expect(result.mesh?.triangleCount).toBeGreaterThan(0);
+  expect(result.diagnostics.keyframes).toBe(3);
+  expect(result.diagnostics.surfaceEvidence.mode).toBe("original-depth-free-space");
+  expect(result.diagnostics.surfaceEvidence.removedTriangles).toBe(0);
+  expect(result.diagnostics.topologyAfterRepair.dominantComponentAreaRatio).toBeGreaterThan(0.99);
+  expect(result.diagnostics.textureProjectionMode).toBe("final-mesh-positions");
 });
 
 test("independent texture observations cannot add depth support, warp or duplicate geometry", () => {

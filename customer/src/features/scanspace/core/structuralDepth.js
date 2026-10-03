@@ -1,4 +1,5 @@
 import { fitPlane } from './planarSurface';
+import { MIN_CEILING_PATCH_AREA } from './structuralCriteria';
 export const MIN_STRUCTURAL_CELL_VIEWS = 3;
 export const MAX_STRUCTURAL_DISPLACEMENT_METERS = 0.05;
 export const MIN_STRUCTURAL_CAMERA_BASELINE_METERS = 0.06;
@@ -14,21 +15,66 @@ const basis = n => {
   return [u, cross(n, u)];
 };
 const cameraDistance = (a, b) => length(sub(Array.from(a.camera), Array.from(b.camera)));
-function independentFrameIds(ids, framesById, minimumBaseline) {
-  const independent = [];
-  for (const id of ids) {
-    const frame = framesById.get(id);
-    if (!frame?.camera?.length) continue;
-    if (independent.every(other => cameraDistance(frame, other) >= minimumBaseline))
-      independent.push(frame);
+const median = values => {
+  const sorted = values.slice().sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)] || 0;
+};
+export function independentFrameIds(ids, framesById, minimumBaseline) {
+  const frames = [...new Set(ids)].map(id => framesById.get(id))
+    .filter(frame => frame?.camera?.length >= 3)
+    .sort((a, b) => typeof a.frameId === 'number' && typeof b.frameId === 'number'
+      ? a.frameId - b.frameId : String(a.frameId).localeCompare(String(b.frameId)));
+  const count = frames.length;
+  if (!count) return new Set();
+  // Cache distances once. Farthest-first selection gives nearby repeat views
+  // no extra vote and is independent of capture/input iteration order.
+  const distances = Array.from({ length: count }, () => new Float64Array(count));
+  const center = [0, 1, 2].map(axis => frames.reduce((sum, frame) => sum + frame.camera[axis], 0) / count);
+  let seed = 0, farthest = -1;
+  for (let i = 0; i < count; i++) {
+    const distance = length(sub(Array.from(frames[i].camera), center));
+    if (distance > farthest) { seed = i; farthest = distance; }
+    for (let j = 0; j < i; j++)
+      distances[i][j] = distances[j][i] = cameraDistance(frames[i], frames[j]);
   }
-  return new Set(independent.map(frame => frame.frameId));
+  const extend = selected => {
+    const remaining = new Set(Array.from({ length: count }, (_, i) => i)
+      .filter(i => !selected.includes(i)));
+    const nearest = new Float64Array(count).fill(Infinity);
+    for (const i of remaining) for (const j of selected)
+      nearest[i] = Math.min(nearest[i], distances[i][j]);
+    while (remaining.size) {
+      let next = -1, separation = -1;
+      for (const i of remaining) if (nearest[i] >= minimumBaseline && nearest[i] > separation) {
+        next = i; separation = nearest[i];
+      }
+      if (next < 0) break;
+      selected.push(next); remaining.delete(next);
+      for (const i of remaining) nearest[i] = Math.min(nearest[i], distances[i][next]);
+    }
+    return selected;
+  };
+  let independent = extend([seed]);
+  if (independent.length < 3 && count >= 3) {
+    // A central camera can block three mutually translated views. Search only
+    // for the required three-view witness, then resume the bounded greedy pass;
+    // never attempt to solve the full maximum-independent-set problem.
+    findThree: for (let i = 0; i < count - 2; i++) for (let j = i + 1; j < count - 1; j++) {
+      if (distances[i][j] < minimumBaseline) continue;
+      for (let k = j + 1; k < count; k++) if (distances[i][k] >= minimumBaseline && distances[j][k] >= minimumBaseline) {
+        independent = extend([i, j, k]);
+        break findThree;
+      }
+    }
+  }
+  return new Set(independent.map(i => frames[i].frameId));
 }
-function samplesFor(frame) {
+function samplesFor(frame, maximumSamples = Infinity) {
   const samples = [],
     w = frame.columns,
-    h = frame.rows;
-  for (let y = 2; y < h - 2; y++) for (let x = 2; x < w - 2; x++) {
+    h = frame.rows,
+    stride = Math.max(1, Math.ceil(Math.sqrt(w * h / maximumSamples)));
+  for (let y = 2; y < h - 2; y += stride) for (let x = 2; x < w - 2; x += stride) {
     const i = y * w + x,
       ids = [i, i - 1, i + 1, i - w, i + w];
     if (ids.some(k => !frame.measuredMask[k] || !frame.filteredDepth[k])) continue;
@@ -42,6 +88,36 @@ function samplesFor(frame) {
     });
   }
   return samples;
+}
+
+// A wall footprint can include a shallow picture or curtain ridge. Repeated
+// offsets in the same cell are measured relief, even when they fit inside the
+// plane's noise band. Each translated camera gets one vote, regardless of how
+// many pixels it contributes. These cells remain available as measured data
+// but cannot authorize snapping a later mesh onto the background wall.
+function wallReliefCells(frames, plane, axes, cells, minimumViews, minimumBaseline) {
+  const observations = new Map(), framesById = new Map(frames.map(frame => [frame.frameId, frame]));
+  for (const frame of frames) for (const sample of samplesFor(frame, 1800)) {
+    const residual = dot(plane.n, sample.p) - plane.d;
+    if (Math.abs(residual) > .065 || Math.abs(dot(plane.n, sample.n)) < .55) continue;
+    const key = axes.map(axis => Math.floor(dot(axis, sample.p) / .12)).join(',');
+    if (!cells.has(key)) continue;
+    if (!observations.has(key)) observations.set(key, new Map());
+    const views = observations.get(key), values = views.get(frame.frameId) || [];
+    values.push(residual);
+    views.set(frame.frameId, values);
+  }
+  const relief = new Set();
+  for (const [key, views] of observations) {
+    const ids = independentFrameIds(views.keys(), framesById, minimumBaseline);
+    if (ids.size < Math.max(3, minimumViews)) continue;
+    const offsets = [...ids].map(id => median(views.get(id))), center = median(offsets);
+    const scatter = 1.4826 * median(offsets.map(value => Math.abs(value - center)));
+    if (Math.abs(center) < .014 || scatter > .008 || Math.abs(center) < scatter * 2) continue;
+    if (offsets.filter(value => value * center > 0 && Math.abs(value - center) <= .012).length >= Math.ceil(offsets.length * .7))
+      relief.add(key);
+  }
+  return relief;
 }
 
 // Per-view fits must explain a broad patch, not just a ribbon on a curtain or
@@ -109,6 +185,7 @@ export function discoverStructuralPlanes(frames, {
 } = {}) {
   if (!Number.isFinite(floorY) || frames.length < 3) return [];
   const candidates = [];
+  const framesById = new Map(frames.map(frame => [frame.frameId, frame]));
   frames.forEach((frame, id) => {
     const samples = samplesFor(frame);
     for (const kind of ['floor', 'ceiling', 'wall']) {
@@ -124,10 +201,9 @@ export function discoverStructuralPlanes(frames, {
   for (const seed of candidates.slice().sort((a, b) => b.area - a.area)) {
     if (used.has(seed)) continue;
     const group = candidates.filter(c => !used.has(c) && c.kind === seed.kind && dot(c.n, seed.n) > .993 && Math.abs(dot(seed.n, c.inliers[Math.floor(c.inliers.length / 2)].p) - seed.d) < (seed.kind === 'wall' ? .09 : .14));
-    const independent = [];
-    for (const c of group)
-      if (independent.every(other => cameraDistance(c.frame, other.frame) >= minimumCameraBaseline))
-        independent.push(c);
+    const candidatesById = new Map(group.map(candidate => [candidate.frame.frameId, candidate]));
+    const independent = [...independentFrameIds(candidatesById.keys(), framesById, minimumCameraBaseline)]
+      .map(id => candidatesById.get(id));
     if (independent.length < Math.max(3, minimumCellViews)) continue;
     const records = independent.flatMap(c => c.inliers.filter((_, i) => i % 3 === 0).map(s => ({
       p: [s.p],
@@ -143,14 +219,13 @@ export function discoverStructuralPlanes(frames, {
       if (!cells.has(key)) cells.set(key, new Set());
       cells.get(key).add(c.frame.frameId);
     }
-    const framesById = new Map(frames.map(frame => [frame.frameId, frame]));
     for (const [key, ids] of cells)
       cells.set(key, independentFrameIds(ids, framesById, minimumCameraBaseline));
     const supported = [...cells.values()].filter(ids => ids.size >= minimumCellViews).length;
     // Partial captures often include only a ceiling corner. Its observed
     // footprint can be smaller than a wall/floor while still spanning three
     // independent camera positions; never extrapolate beyond these cells.
-    if (supported * .0144 < (seed.kind === 'ceiling' ? .35 : .65)) continue;
+    if (supported * .0144 < (seed.kind === 'ceiling' ? MIN_CEILING_PATCH_AREA : .65)) continue;
     // Extend the footprint using nearby observations, but never over a stable
     // second height (a real step, beam or suspended panel). Each cell votes
     // once per camera view so dense sampling does not masquerade as evidence.
@@ -169,7 +244,10 @@ export function discoverStructuralPlanes(frames, {
       for (const [k, views] of nearby) {
         const independentIds = independentFrameIds(views.keys(), framesById, minimumCameraBaseline);
         if (independentIds.size < minimumCellViews || (cells.get(k)?.size || 0) >= minimumCellViews) continue;
-        const values = [...views.values()].map(v => v.reduce((s, x) => s + x, 0) / v.length).sort((a, b) => a - b);
+        const values = [...independentIds].map(id => {
+          const v = views.get(id);
+          return v.reduce((s, x) => s + x, 0) / v.length;
+        }).sort((a, b) => a - b);
         const median = values[Math.floor(values.length / 2)],
           spread = values[Math.floor(values.length * .8)] - values[Math.floor(values.length * .2)];
         if (Math.abs(median) > .09 || (Math.abs(median) > .045 && spread < .035)) continue;
@@ -183,6 +261,7 @@ export function discoverStructuralPlanes(frames, {
       kind: seed.kind,
       axes,
       cells,
+      ...(seed.kind === 'wall' ? { reliefCells: wallReliefCells(frames, fit, axes, cells, minimumCellViews, minimumCameraBaseline) } : {}),
       cellSize: .12,
       minimumCellViews,
       supportingFrameIds: independent.map(c => c.frame.frameId),
@@ -217,6 +296,7 @@ export function regularizeStructuralDepth(frames, planes, helpers, {
       normal: p.normal,
       offset: p.offset,
       supportingFrameIds: p.supportingFrameIds,
+      protectedReliefCells: p.reliefCells?.size || 0,
       area: p.area
     })),
     correctedSamples: 0,
