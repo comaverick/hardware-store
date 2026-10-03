@@ -4,6 +4,7 @@ import {
   serializePartialScan,
 } from "./partialScanFile";
 import { createRgbdKeyframe } from "./fusion";
+import { buildScanDesignSurfaces, validScanDesignSurfaces } from "./scanDesignSurfaces";
 
 function measuredScan() {
   return {
@@ -82,6 +83,68 @@ function rawScan() {
     },
   };
 }
+
+test("portable designs retain flat walls and measured source geometry through a round trip", () => {
+  const scan = measuredScan();
+  scan.mesh.uvs = new Float32Array([0, 0, 1, 0, 0, 1]);
+  scan.mesh.designSurfaces = buildScanDesignSurfaces(scan.mesh, [{ kind: "wall", normal: [0, 0, 1], offset: 0 }]);
+  expect(scan.mesh.designSurfaces).not.toBeNull();
+  const encoded = serializePartialScan(scan), decoded = parsePartialScan(encoded);
+  expect(validScanDesignSurfaces(decoded.mesh.designSurfaces, decoded.mesh)).toBe(true);
+  expect(decoded.mesh.positions).toEqual(scan.mesh.positions);
+  expect(decoded.mesh.indices).toEqual(scan.mesh.indices);
+  expect(decoded.mesh.designSurfaces.walls[0].positions).toEqual(scan.mesh.designSurfaces.walls[0].positions);
+  expect(decoded.mesh.designSurfaces.walls[0].detailMask).toEqual(scan.mesh.designSurfaces.walls[0].detailMask);
+  expect(decoded.mesh.designSurfaces.removedSourceFaces).toEqual(scan.mesh.designSurfaces.removedSourceFaces);
+  const damaged = JSON.parse(encoded);
+  damaged.scan.mesh.designSurfaces.sourceKey = "stale-mesh";
+  const fallback = parsePartialScan(JSON.stringify(damaged));
+  expect(fallback.mesh.designSurfaces).toBeNull();
+  expect(fallback.mesh.positions).toEqual(scan.mesh.positions);
+  for (const version of [51,52]) {
+    const previousJoin = JSON.parse(encoded);
+    previousJoin.scan.mesh.designSurfaces.sourceAlgorithmVersion = version;
+    const rebuiltFallback = parsePartialScan(JSON.stringify(previousJoin));
+    expect(rebuiltFallback.mesh.designSurfaces).toBeNull();
+    expect(rebuiltFallback.mesh.positions).toEqual(scan.mesh.positions);
+    expect(rebuiltFallback.mesh.indices).toEqual(scan.mesh.indices);
+  }
+});
+
+test("portable adjusted boundaries retain their photos, source ownership, and estimate mask", () => {
+  const scan = measuredScan();
+  scan.mesh.positions = new Float32Array([0,0,.02, 2,0,.02, 0,2,.02, 0,0,.02, 2,0,.02, 0,0,.7]);
+  scan.mesh.indices = new Uint32Array([0,1,2, 3,5,4]);
+  scan.mesh.normals = new Float32Array([0,0,1, 0,0,1, 0,0,1, 0,1,0, 0,1,0, 0,1,0]);
+  scan.mesh.colors = new Uint8Array(18).fill(230);
+  scan.mesh.uvs = new Float32Array([0,0, 1,0, 0,1, 0,0, 1,0, 0,1]);
+  scan.mesh.designSurfaces = buildScanDesignSurfaces(scan.mesh, [{ kind: "wall", normal: [0,0,1], offset: 0 }]);
+  const encoded = serializePartialScan(scan), decoded = parsePartialScan(encoded);
+  const original = scan.mesh.designSurfaces.fragments, restored = decoded.mesh.designSurfaces.fragments;
+  expect(scan.mesh.designSurfaces.diagnostics.boundaryAdjustedSourceTriangles).toBeGreaterThan(0);
+  expect(restored.positions).toEqual(original.positions); expect(restored.uvs).toEqual(original.uvs);
+  expect(restored.sourceFaces).toEqual(original.sourceFaces);
+  expect(restored.estimatedTriangleMask).toEqual(original.estimatedTriangleMask);
+  expect(decoded.mesh.positions).toEqual(scan.mesh.positions);
+  const damaged = JSON.parse(encoded);
+  damaged.scan.mesh.designSurfaces.fragments.estimatedTriangleMask.data = btoa(String.fromCharCode(2));
+  expect(parsePartialScan(JSON.stringify(damaged)).mesh.designSurfaces).toBeNull();
+  const legacy = JSON.parse(encoded);
+  legacy.scan.mesh.designSurfaces.version = 1;
+  const fallback = parsePartialScan(JSON.stringify(legacy));
+  expect(fallback.mesh.designSurfaces).toBeNull();
+  expect(fallback.mesh.positions).toEqual(scan.mesh.positions);
+});
+
+test.each([measuredScan, rawScan])("scan and design exports restore applied finishes while retaining capture data", createScan => {
+  const scan = createScan();
+  scan.customization = { version: 1, walls: { color: "#a0afa4", finish: "Satin" },
+    floor: { finishId: "stone", direction: "crosswise" }, ceiling: { color: "#ffffff", finish: "Matte" } };
+  const restored = parsePartialScan(serializePartialScan(scan));
+  expect(restored.customization).toEqual(scan.customization);
+  if (scan.rawCapture) expect(restored.rawCapture.keyframes[0].positions).toEqual(scan.rawCapture.keyframes[0].positions);
+  else expect(restored.mesh.positions).toEqual(scan.mesh.positions);
+});
 
 test("incomplete scans survive portable serialization", () => {
   const serialized = serializePartialScan(measuredScan());

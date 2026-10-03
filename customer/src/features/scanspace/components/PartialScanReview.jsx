@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { CheckCircle, Info, WarningCircle } from "@phosphor-icons/react";
 import PartialScanScene from "./PartialScanScene";
 import ScanRenderProgress from "./ScanRenderProgress";
+import RoomCustomizationPanel from "./RoomCustomizationPanel";
 import { downloadDepthCapture } from "../core/captureDebug";
 import { downloadScan } from "../core/partialScanFile";
 import { buildScanCloud } from "../core/scanCloud";
@@ -11,9 +12,15 @@ import {
   MIN_SURFACE_CAMERA_BASELINE_METERS,
 } from "../core/readiness";
 import { auditCapture } from "../core/adaptiveCapture";
+import { sanitizeScanCustomization } from "../core/scanCustomization";
+import { identifyScanSurfaces } from "../core/scanSurfaces";
+import { buildScanDesignSurfaces, getScanDesignSurfaces, SCAN_DESIGN_ALGORITHM_VERSION } from "../core/scanDesignSurfaces";
 
-const hasCheckedPreview = scan => !!(scan.mesh && scan.fusionDiagnostics &&
-  scan.captureQuality?.captureAudit?.checkedReconstruction === true);
+const hasCheckedPreview = scan => {
+  const version = scan.captureQuality?.algorithmVersion ?? scan.fusionDiagnostics?.algorithmVersion;
+  return !!(scan.mesh && scan.fusionDiagnostics && scan.captureQuality?.captureAudit?.checkedReconstruction === true &&
+    (!Number.isFinite(version) || version >= SCAN_DESIGN_ALGORITHM_VERSION));
+};
 
 export default function PartialScanReview({
   scan,
@@ -21,6 +28,8 @@ export default function PartialScanReview({
   onDone,
 }) {
   const [exportError, setExportError] = useState("");
+  const [customization, setCustomization] = useState(() => sanitizeScanCustomization(scan.customization));
+  useEffect(() => setCustomization(sanitizeScanCustomization(scan.customization)), [scan]);
   const [renderedScan, setRenderedScan] = useState(() =>
     scan.rawCapture && !hasCheckedPreview(scan) ? null : scan,
   );
@@ -29,6 +38,7 @@ export default function PartialScanReview({
     stage: "preparing",
     progress: 0,
   });
+  const checkedPreview = hasCheckedPreview(scan);
   useEffect(() => {
     // The live review already reconstructed this exact capture. Reuse its
     // checked mesh on save; imported raw files still require reconstruction.
@@ -108,6 +118,7 @@ export default function PartialScanReview({
           jointPoseRefinement: fused.diagnostics?.alignment?.jointPoseRefinement || null,
           surfaceRepair: fused.diagnostics?.surfaceRepair || null,
           structuralDepth: fused.diagnostics?.structuralDepth || null,
+          designSurfaces: fused.diagnostics?.designSurfaces || null,
           structuralRebuild: fused.diagnostics?.structuralRebuild || null,
           structuralRebuildValidation: fused.diagnostics?.structuralRebuildValidation || null,
           untexturedEstimatedTriangles: fused.diagnostics?.untexturedEstimatedTriangles || 0,
@@ -145,14 +156,21 @@ export default function PartialScanReview({
       active = false;
       worker.terminate();
     };
-  }, [scan]);
-  const displayScan = renderedScan || scan;
+  }, [scan, checkedPreview]);
+  const displayScan = useMemo(() => {
+    const result = renderedScan || scan;
+    if (!result.imported || result.rawCapture || !result.mesh || getScanDesignSurfaces(result.mesh)) return result;
+    const candidates = result.captureQuality?.structuralDepth?.planes || result.captureQuality?.planarConsolidation?.planes;
+    const design = buildScanDesignSurfaces(result.mesh, Array.isArray(candidates) ? candidates : []);
+    return design ? { ...result, mesh: { ...result.mesh, designSurfaces: design } } : result;
+  }, [renderedScan, scan]);
+  const surfaces = useMemo(() => identifyScanSurfaces(displayScan), [displayScan]);
   const quality = displayScan.captureQuality;
   const repair = displayScan.mesh?.surfaceRepair || quality?.surfaceRepair;
   const reviewMessages = new Set(displayScan.measuredReviewWarning?.issues?.map(issue => issue.message) || []);
   const additionalAuditIssues = (quality?.captureAudit?.issues || []).filter(issue => !reviewMessages.has(issue));
   const hasScanDetails = !!(displayScan.measuredReviewWarning || displayScan.measuredGapWarning ||
-    additionalAuditIssues.length || repair?.estimatedHoleCount > 0);
+    additionalAuditIssues.length || repair?.estimatedHoleCount > 0 || displayScan.mesh?.designSurfaces?.walls?.length);
   const rawRendering = !!scan.rawCapture && !renderedScan && !renderError;
   if (rawRendering)
     return (
@@ -201,7 +219,7 @@ export default function PartialScanReview({
     return points;
   }
   return (
-    <section className="ss-partial-review">
+    <section className="ss-partial-review ss-partial-review--customization">
       {renderError && (
         <div className="ss-notice ss-notice--warning" role="status">
           <strong>Showing captured points</strong>
@@ -284,6 +302,11 @@ export default function PartialScanReview({
                   These patches are estimates, not measured depth.</p>
               </div>
             )}
+            {!!displayScan.mesh?.designSurfaces?.walls?.length && <div className="ss-notice ss-notice--guidance" role="status">
+              <strong>Prepared wall surfaces</strong>
+              <p>Wall finishes use estimated flat surfaces. Geometry and Depth points retain the captured measurements.
+                Observed openings and foreground objects are preserved.</p>
+            </div>}
           </div>
         </details>
       )}
@@ -293,7 +316,15 @@ export default function PartialScanReview({
           Check the sides and the ceiling in Walk inside; unscanned object faces remain open.
         </p>
       )}
-      <PartialScanScene scan={displayScan} />
+      <div className="ss-room-workspace">
+        <div className="ss-room-scan">
+          <PartialScanScene scan={displayScan} customization={customization} surfaces={surfaces} />
+        </div>
+        <RoomCustomizationPanel customization={customization} availability={surfaces.counts}
+          onApply={(kind, selection) => setCustomization(previous =>
+            sanitizeScanCustomization({ ...previous, version: 1, [kind]: selection }))}
+          onReset={() => setCustomization(null)} />
+      </div>
       {displayScan.mesh && displayScan.cloud && <p className="ss-notice-detail">
         Inspect Photo, Geometry, and Depth points from the same angle and from the side.
         A defect only in Photo suggests color alignment; a gap in Geometry with depth points
@@ -368,7 +399,7 @@ export default function PartialScanReview({
           type="button"
           onClick={() => {
             try {
-              downloadScan(displayScan);
+              downloadScan({ ...displayScan, customization });
               setExportError("");
             } catch (reason) {
               setExportError(
@@ -377,7 +408,7 @@ export default function PartialScanReview({
             }
           }}
         >
-          Export raw scan
+          {customization ? "Export scan + design" : "Export raw scan"}
         </button>
         {scan.debugCapture && (
           <button type="button" onClick={() =>

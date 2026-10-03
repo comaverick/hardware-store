@@ -1,9 +1,48 @@
 import { useEffect, useMemo } from "react";
 import * as THREE from "three";
 import { createScanMeshResources, shadeUnobservedBacks, observedSideProgramKey } from "../core/renderMesh";
+import { paintRoughness, sanitizeScanCustomization } from "../core/scanCustomization";
+import { createFloorFinishTexture, createScanFinishGeometry } from "../core/scanFinishRendering";
+import { getScanDesignSurfaces } from "../core/scanDesignSurfaces";
 
-export default function ScanMesh({ mesh, low = false, geometryOnly = false }) {
+function CapturedMaterial({ mesh, resources, sided, low, attach }) {
+  return resources.texture ? (
+    <meshBasicMaterial {...sided} attach={attach} vertexColors map={resources.texture}
+      side={THREE.DoubleSide} toneMapped={false} />
+  ) : mesh.portableColors ? (
+    <meshBasicMaterial {...sided} attach={attach} vertexColors side={THREE.DoubleSide} toneMapped={false} />
+  ) : (
+    <meshStandardMaterial {...sided} attach={attach} vertexColors side={THREE.DoubleSide}
+      roughness={0.92} metalness={0} flatShading={low} />
+  );
+}
+
+function CapturedSurface({ mesh, low, geometryOnly, applied, surfaces, design }) {
   const resources = useMemo(() => createScanMeshResources(mesh), [mesh]);
+  const hasFinishes = !!(applied && surfaces?.labels.length);
+  const finishGeometry = useMemo(() => hasFinishes || design
+    ? createScanFinishGeometry(resources.geometry, mesh, surfaces || {
+      labels: new Uint8Array(mesh.indices.length / 3), floorAxes: [[1, 0, 0], [0, 0, 1]],
+    }, design?.removedSourceFaces) : null,
+  [hasFinishes, mesh, resources.geometry, surfaces, design]);
+  const fragments = design?.fragments;
+  // Clipped details share the original atlas instead of allocating another
+  // large captured-photo texture on the phone.
+  const fragmentResources = useMemo(() => {
+    if (!fragments?.indices?.length) return null;
+    return createScanMeshResources(fragments);
+  }, [fragments]);
+  const fragmentFinishGeometry = useMemo(() => {
+    if (!fragmentResources || !hasFinishes) return null;
+    // Adjoining floor/ceiling faces keep their finish ownership after their
+    // display edges move. Photographs still use the original atlas UV channel.
+    const labels = Uint8Array.from(fragments.sourceFaces, face => surfaces.labels[face]);
+    return createScanFinishGeometry(fragmentResources.geometry, fragments,
+      { labels, floorAxes: surfaces.floorAxes });
+  }, [fragmentResources, fragments, hasFinishes, surfaces]);
+  const finishId = applied?.floor?.finishId, direction = applied?.floor?.direction;
+  const floorTexture = useMemo(() => createFloorFinishTexture({ finishId, direction }),
+    [finishId, direction]);
   const sided = mesh.observedSideOriented ? {
     onBeforeCompile: shadeUnobservedBacks, customProgramCacheKey: observedSideProgramKey,
   } : {};
@@ -14,20 +53,88 @@ export default function ScanMesh({ mesh, low = false, geometryOnly = false }) {
     },
     [resources],
   );
-  return (
-    <mesh geometry={resources.geometry} frustumCulled={false}>
+  useEffect(() => () => finishGeometry?.dispose(), [finishGeometry]);
+  useEffect(() => () => fragmentResources?.geometry.dispose(), [fragmentResources]);
+  useEffect(() => () => fragmentFinishGeometry?.dispose(), [fragmentFinishGeometry]);
+  useEffect(() => () => floorTexture?.dispose(), [floorTexture]);
+  // Distinct keys remount materials when their attachment changes between a
+  // single material and indexed groups; Fiber preserves an existing attachment.
+  const primary = (
+    <mesh geometry={geometryOnly ? resources.geometry : finishGeometry || resources.geometry} frustumCulled={false}>
       {geometryOnly ? (
-        <meshStandardMaterial {...sided} color="#b9c2c0" side={THREE.DoubleSide}
+        <meshStandardMaterial key="inspection" {...sided} color="#b9c2c0" side={THREE.DoubleSide}
           roughness={1} metalness={0} flatShading={low} />
-      ) : resources.texture ? (
-        <meshBasicMaterial {...sided} vertexColors map={resources.texture}
-          side={THREE.DoubleSide} toneMapped={false} />
-      ) : mesh.portableColors ? (
-        <meshBasicMaterial {...sided} vertexColors side={THREE.DoubleSide} toneMapped={false} />
+      ) : hasFinishes ? (
+        <>
+          <CapturedMaterial key="captured-group" attach="material-0" {...{ mesh, resources, sided, low }} />
+          {[[1, "walls"], [2, "floor"], [3, "ceiling"]].map(([index, kind]) =>
+            applied[kind] ? (
+              <meshStandardMaterial key={kind} {...sided} attach={`material-${index}`}
+                color={kind === "floor" ? "#ffffff" : applied[kind].color}
+                map={kind === "floor" ? floorTexture : null}
+                roughness={kind === "floor" ? .8 : paintRoughness(applied[kind].finish)}
+                metalness={0} side={THREE.DoubleSide} />
+            ) : <CapturedMaterial key={kind} attach={`material-${index}`} {...{ mesh, resources, sided, low }} />)}
+        </>
       ) : (
-        <meshStandardMaterial {...sided} vertexColors side={THREE.DoubleSide}
-          roughness={0.92} metalness={0} flatShading={low} />
+        <CapturedMaterial key="captured-single" {...{ mesh, resources, sided, low }} />
       )}
     </mesh>
   );
+  return fragmentResources ? <group>
+    {primary}
+    <mesh geometry={fragmentFinishGeometry || fragmentResources.geometry} frustumCulled={false} name="captured-boundary-details">
+      {hasFinishes ? <>
+        <CapturedMaterial key="details" attach="material-0" {...{ mesh, resources, sided, low }} />
+        {[[1, "walls"], [2, "floor"], [3, "ceiling"]].map(([index, kind]) => applied[kind]
+          ? <meshStandardMaterial key={kind} {...sided} attach={`material-${index}`}
+            color={kind === "floor" ? "#ffffff" : applied[kind].color}
+            map={kind === "floor" ? floorTexture : null}
+            roughness={kind === "floor" ? .8 : paintRoughness(applied[kind].finish)}
+            metalness={0} side={THREE.DoubleSide} />
+          : <CapturedMaterial key={kind} attach={`material-${index}`} {...{ mesh, resources, sided, low }} />)}
+      </> : <CapturedMaterial key="details-single" {...{ mesh, resources, sided, low }} />}
+    </mesh>
+  </group> : primary;
+}
+
+function DesignWall({ wall, finish }) {
+  const resources = useMemo(() => createScanMeshResources(wall), [wall]);
+  const detailTexture = useMemo(() => {
+    if (!wall.texture || !wall.detailMask?.some(Boolean)) return null;
+    const pixels = wall.texture.data.slice();
+    for (let i = 0; i < wall.detailMask.length; i++) pixels[i * 4 + 3] = wall.detailMask[i];
+    const texture = new THREE.DataTexture(pixels, wall.texture.width, wall.texture.height, THREE.RGBAFormat);
+    texture.colorSpace = THREE.SRGBColorSpace; texture.flipY = false;
+    texture.minFilter = texture.magFilter = THREE.LinearFilter; texture.needsUpdate = true;
+    return texture;
+  }, [wall]);
+  useEffect(() => () => { resources.geometry.dispose(); resources.texture?.dispose(); detailTexture?.dispose(); },
+    [resources, detailTexture]);
+  return <group name={wall.id}>
+    <mesh geometry={resources.geometry} frustumCulled={false} name="prepared-wall">
+      {finish ? <meshStandardMaterial key="paint" color={finish.color}
+        roughness={paintRoughness(finish.finish)} metalness={0} side={THREE.FrontSide} />
+        : <meshBasicMaterial key="photo" map={resources.texture} side={THREE.FrontSide} toneMapped={false} />}
+    </mesh>
+    <mesh geometry={resources.geometry} frustumCulled={false} name="prepared-wall-back">
+      <meshBasicMaterial color="#505d57" side={THREE.BackSide} toneMapped={false} />
+    </mesh>
+    {finish && detailTexture && <mesh geometry={resources.geometry} frustumCulled={false}
+      renderOrder={2} name="wall-photo-details">
+      <meshBasicMaterial map={detailTexture} alphaTest={.5} side={THREE.FrontSide} toneMapped={false}
+        polygonOffset polygonOffsetFactor={-1} polygonOffsetUnits={-1} />
+    </mesh>}
+  </group>;
+}
+
+export default function ScanMesh({ mesh, low = false, geometryOnly = false, customization, surfaces }) {
+  const design = useMemo(() => getScanDesignSurfaces(mesh), [mesh]);
+  const applied = sanitizeScanCustomization(customization);
+  const captured = <CapturedSurface {...{ mesh, low, geometryOnly, applied, surfaces }}
+    design={geometryOnly ? null : design} />;
+  return design && !geometryOnly ? <group name="prepared-room">
+    {captured}
+    {design.walls.map(wall => <DesignWall key={wall.id} wall={wall} finish={applied?.walls} />)}
+  </group> : captured;
 }

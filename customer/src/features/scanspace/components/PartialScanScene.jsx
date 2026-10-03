@@ -117,7 +117,7 @@ function ScanControls({ cloud, mode, input, view, reset }) {
   );
 }
 
-export default function PartialScanScene({ scan, compact = false }) {
+export default function PartialScanScene({ scan, compact = false, customization = scan.customization, surfaces }) {
   const [mode, setMode] = useState("orbit");
   const [low, setLow] = useState(compact);
   const [surfaceView, setSurfaceView] = useState("photo");
@@ -190,7 +190,8 @@ export default function PartialScanScene({ scan, compact = false }) {
         <ambientLight intensity={0.35} />
         <directionalLight position={[3, 7, 4]} intensity={1.6} />
         {mesh && activeSurfaceView !== "depth" ? (
-          <ScanMesh mesh={mesh} low={low} geometryOnly={activeSurfaceView === "geometry"} />
+          <ScanMesh mesh={mesh} low={low} geometryOnly={activeSurfaceView === "geometry"}
+            customization={customization} surfaces={surfaces} />
         ) : (
           <ScanPointCloud cloud={cloud} low={low} />
         )}
@@ -257,7 +258,8 @@ export default function PartialScanScene({ scan, compact = false }) {
         <i />{" "}
         {mesh && activeSurfaceView === "geometry" ? "Mesh only · inspect gaps and layers"
           : mesh && activeSurfaceView === "depth" ? "Captured depth points"
-          : mesh ? mesh.surfaceRepair?.estimatedHoleCount > 0 ? "Measured + estimated repairs" : "Captured measured surface"
+          : mesh ? mesh.designSurfaces?.walls?.length ? "Prepared walls + estimates"
+            : mesh.surfaceRepair?.estimatedHoleCount > 0 ? "Measured + estimated repairs" : "Captured measured surface"
           : "Captured depth points"}
       </span>
       {!compact && <button

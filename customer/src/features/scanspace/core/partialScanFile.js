@@ -1,5 +1,8 @@
 import { MAX_SCAN_ARRAY_BYTES, MAX_SCAN_MESH_BYTES } from "./textureDetail.js";
 import { sanitizeCaptureDiagnostics } from "./captureExperience.js";
+import { sanitizeScanCustomization } from "./scanCustomization.js";
+import { getScanDesignSurfaces, validScanDesignSurfaces, scanDesignByteLength,
+  SCAN_DESIGN_SURFACE_VERSION, SCAN_DESIGN_ALGORITHM_VERSION } from "./scanDesignSurfaces.js";
 
 export const SCAN_FILE_FORMAT = "scanspace-scan";
 // Kept so exports created before the unified scan UI continue to open.
@@ -320,6 +323,7 @@ function bakedMeshColors(mesh) {
 
 function encodeMesh(mesh) {
   if (!mesh) return null;
+  mesh = portableTextureMesh(mesh);
   const includeTexture = canIncludeTexture(mesh);
   const colors = includeTexture
     ? mesh.colors
@@ -346,6 +350,7 @@ function encodeMesh(mesh) {
     portableColors: Boolean(mesh.texture?.data && !includeTexture),
     observedSideOriented: !!mesh.observedSideOriented,
     surfaceRepair: safeSurfaceRepair(mesh.surfaceRepair),
+    designSurfaces: encodeDesignSurfaces(mesh),
   };
   if (mesh.estimatedTriangleMask?.length) value.estimatedTriangleMask = encodeArray(mesh.estimatedTriangleMask, "u8");
   if (includeTexture) {
@@ -362,7 +367,8 @@ function encodeMesh(mesh) {
 function baseMeshBytes(mesh) {
   if (!mesh?.positions || !mesh?.indices) return Infinity;
   const arrays = [mesh.positions, mesh.normals, mesh.indices, mesh.estimatedTriangleMask].filter(Boolean);
-  return arrays.reduce((total, array) => total + array.byteLength, mesh.positions.length);
+  return arrays.reduce((total, array) => total + array.byteLength,
+    mesh.positions.length + scanDesignByteLength(getScanDesignSurfaces(mesh)));
 }
 
 function canIncludeMesh(mesh) {
@@ -373,7 +379,7 @@ function canIncludeMesh(mesh) {
     arrays.every((array) => array.byteLength <= MAX_ARRAY_BYTES) &&
     colorBytes <= MAX_ARRAY_BYTES &&
     arrays.reduce((total, array) => total + array.byteLength, colorBytes) <=
-      MAX_PORTABLE_MESH_BYTES
+      MAX_PORTABLE_MESH_BYTES - scanDesignByteLength(getScanDesignSurfaces(mesh))
   );
 }
 
@@ -402,6 +408,87 @@ function canIncludeTexture(mesh) {
     baseMeshBytes(mesh) + mesh.uvs.byteLength + data.byteLength <=
       MAX_PORTABLE_MESH_BYTES
   );
+}
+
+// Reserve space for preparation inside the existing portable budget. A small
+// atlas downsample is preferable to throwing away all furniture photographs.
+// This affects an export copy only; the displayed/source atlas stays intact.
+function portableTextureMesh(mesh) {
+  if (!getScanDesignSurfaces(mesh) || canIncludeTexture(mesh) || !canIncludeMesh(mesh) ||
+      !mesh.uvs || !mesh.texture?.data) return mesh;
+  const available = MAX_PORTABLE_MESH_BYTES - baseMeshBytes(mesh) - mesh.uvs.byteLength;
+  if (available < 16384) return mesh;
+  const original = mesh.texture, scale = Math.min(1, Math.sqrt(available / original.data.byteLength));
+  const width = Math.max(1, Math.floor(original.width * scale)), height = Math.max(1, Math.floor(original.height * scale));
+  const data = new Uint8Array(width * height * 4);
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    const sx = Math.min(original.width - 1, Math.floor((x + .5) * original.width / width));
+    const sy = Math.min(original.height - 1, Math.floor((y + .5) * original.height / height));
+    const index = (sy * original.width + sx) * 4;
+    data.set(original.data.subarray(index, index + 4), (y * width + x) * 4);
+  }
+  return { ...mesh, texture: { width, height, data } };
+}
+
+const DESIGN_GEOMETRY_ARRAYS = [["positions", "f32"], ["normals", "f32"], ["uvs", "f32"], ["indices", "u32"]];
+function encodeDesignSurfaces(mesh) {
+  const design = getScanDesignSurfaces(mesh);
+  if (!design || !validScanDesignSurfaces(design, mesh)) return null;
+  const encodeGeometry = value => Object.fromEntries(DESIGN_GEOMETRY_ARRAYS.map(([name, type]) => [name, encodeArray(value[name], type)]));
+  return { version: design.version, sourceAlgorithmVersion: design.sourceAlgorithmVersion,
+    mode: "estimated-planar-design-surface", sourceKey: design.sourceKey,
+    removedSourceFaces: encodeArray(design.removedSourceFaces, "u8"),
+    fragments: { ...encodeGeometry(design.fragments), colors: encodeArray(design.fragments.colors, "u8"),
+      sourceFaces: encodeArray(design.fragments.sourceFaces, "u32"),
+      estimatedTriangleMask: encodeArray(design.fragments.estimatedTriangleMask, "u8") },
+    walls: design.walls.map(wall => ({ ...encodeGeometry(wall), id: wall.id, normal: wall.normal,
+      offset: wall.offset, axes: wall.axes, cellSize: wall.cellSize, extent: wall.extent,
+      area: wall.area, estimatedArea: wall.estimatedArea, componentCount: wall.componentCount,
+      junctionVertexCount: wall.junctionVertexCount || 0,
+      source: wall.source, supportingFrameIds: wall.supportingFrameIds,
+      estimatedTriangleMask: encodeArray(wall.estimatedTriangleMask, "u8"),
+      footprint: encodeArray(wall.footprint, "u8"), openingMask: encodeArray(wall.openingMask, "u8"),
+      detailMask: encodeArray(wall.detailMask, "u8"), texture: {
+        width: wall.texture.width, height: wall.texture.height, data: encodeArray(wall.texture.data, "u8"),
+      } })), diagnostics: design.diagnostics };
+}
+
+function decodeDesignSurfaces(value, mesh) {
+  if (value?.version !== SCAN_DESIGN_SURFACE_VERSION || !Array.isArray(value.walls) || value.walls.length > 8) return null;
+  try {
+    const decodeGeometry = source => Object.fromEntries(DESIGN_GEOMETRY_ARRAYS.map(([name, type]) =>
+      [name, decodeArray(source[name], type, `design ${name}`)]));
+    const fragments = { ...decodeGeometry(value.fragments),
+      colors: decodeArray(value.fragments.colors, "u8", "design fragment colors"),
+      sourceFaces: decodeArray(value.fragments.sourceFaces, "u32", "design fragment sources"),
+      estimatedTriangleMask: decodeArray(value.fragments.estimatedTriangleMask, "u8", "design fragment estimates") };
+    const walls = value.walls.map(source => {
+      const geometry = decodeGeometry(source);
+      return { ...geometry, colors: new Uint8Array(geometry.positions.length).fill(255),
+        id: String(source.id || "").slice(0, 100), normal: source.normal, offset: source.offset,
+        axes: source.axes, cellSize: source.cellSize, extent: source.extent,
+        area: source.area, estimatedArea: source.estimatedArea, componentCount: source.componentCount,
+        junctionVertexCount: Math.max(0, Math.min(geometry.positions.length / 3, Number(source.junctionVertexCount) || 0)),
+        source: source.source === "independent-depth-footprint" ? source.source : "mesh-footprint",
+        supportingFrameIds: Array.isArray(source.supportingFrameIds) ? source.supportingFrameIds.slice(0, 80) : [],
+        estimatedTriangleMask: decodeArray(source.estimatedTriangleMask, "u8", "design estimates"),
+        footprint: decodeArray(source.footprint, "u8", "design footprint"),
+        openingMask: decodeArray(source.openingMask, "u8", "design openings"),
+        detailMask: decodeArray(source.detailMask, "u8", "design photo details"),
+        texture: { width: source.texture.width, height: source.texture.height,
+          data: decodeArray(source.texture.data, "u8", "design photo") } };
+    });
+    const design = { version: SCAN_DESIGN_SURFACE_VERSION,
+      sourceAlgorithmVersion: Number(value.sourceAlgorithmVersion) || SCAN_DESIGN_ALGORITHM_VERSION,
+      mode: "estimated-planar-design-surface", sourceKey: value.sourceKey, walls, fragments,
+      removedSourceFaces: decodeArray(value.removedSourceFaces, "u8", "design replacements"),
+      diagnostics: { walls: walls.length, area: walls.reduce((sum, wall) => sum + wall.area, 0),
+        estimatedArea: walls.reduce((sum, wall) => sum + wall.estimatedArea, 0), measuredGeometryChanged: false } };
+    return validScanDesignSurfaces(design, mesh) ? design : null;
+  } catch {
+    // An optional damaged cache does not make the measured scan unreadable.
+    return null;
+  }
 }
 
 function encodeCloud(cloud) {
@@ -465,7 +552,7 @@ function decodeMesh(mesh) {
     texture = { data, width, height };
   }
   const bounds = boundsFromPositions(positions);
-  return {
+  const decoded = {
     version: 3,
     kind: "portable-measured-mesh",
     positions,
@@ -483,6 +570,8 @@ function decodeMesh(mesh) {
     bounds,
     observer: safeObserver(mesh.observer, bounds),
   };
+  decoded.designSurfaces = decodeDesignSurfaces(mesh.designSurfaces, decoded);
+  return decoded;
 }
 
 function safeSurfaceRepair(value) {
@@ -557,6 +646,7 @@ export function serializePartialScan(scan) {
         name: String(scan.name || "ScanSpace scan").slice(0, 120),
         reason: String(scan.reason || "Captured measured surfaces.").slice(0, 500),
         pointCount: finite(scan.pointCount, 0),
+        customization: sanitizeScanCustomization(scan.customization),
         captureQuality: scan.captureQuality || null,
         measuredGapWarning: !!scan.measuredGapWarning,
         measuredReviewWarning: safeReviewWarning(scan.measuredReviewWarning),
@@ -587,6 +677,7 @@ export function serializePartialScan(scan) {
       name: String(scan.name || "ScanSpace scan").slice(0, 120),
       reason: String(scan.reason || "Captured measured surfaces.").slice(0, 500),
       pointCount: finite(scan.pointCount ?? scan.cloud?.count, 0),
+      customization: sanitizeScanCustomization(scan.customization),
       captureQuality: scan.captureQuality || null,
       measuredGapWarning: !!scan.measuredGapWarning,
       measuredReviewWarning: safeReviewWarning(scan.measuredReviewWarning),
@@ -618,6 +709,7 @@ export function parsePartialScan(value) {
       version: 3,
       kind: "raw-rgbd-scan",
       imported: true,
+      customization: sanitizeScanCustomization(source.customization),
       name: String(source.name || "Imported ScanSpace scan").slice(0, 120),
       walls: [],
       floorObserved: Number.isFinite(rawCapture.floorY),
@@ -644,6 +736,7 @@ export function parsePartialScan(value) {
     version: 2,
     kind: "validated-measured-surface",
     imported: true,
+    customization: sanitizeScanCustomization(source.customization),
     name: String(source.name || "Imported ScanSpace scan").slice(0, 120),
     walls: [],
     floorObserved: false,

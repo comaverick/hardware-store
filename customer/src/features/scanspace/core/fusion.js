@@ -9,6 +9,7 @@ import { pruneContradictedSurfaceTriangles } from "./surfaceEvidence.js";
 import { conformSurfaceTopology, orientManifoldFaces, pruneUnsupportedFragments, surfaceTopologyDiagnostics, triangulatePlanarLoop } from "./surfaceTopology.js";
 import { registerSurfaceTextures } from "./textureRegistration.js";
 import { selectSurfaceTextures } from "./surfaceTextures.js";
+import { buildScanDesignSurfaces, SCAN_DESIGN_ALGORITHM_VERSION } from "./scanDesignSurfaces.js";
 import { textureAtlasLayout, buildTextureDetailGrid, projectedPatchDetail,
   detailPreservingCandidates } from "./textureDetail.js";
 
@@ -5226,7 +5227,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     extraTextureFrames = structural.frames.filter(f => !ids.has(f.frameId));
   }
   const stages = {
-    algorithmVersion: 48,
+    algorithmVersion: SCAN_DESIGN_ALGORITHM_VERSION,
     completionMode: options.completionMode === "surface" ? "surface" : "room",
     reconstructionProfile: options.reconstructionProfile || "quality",
     supportMode: "translated-camera-viewpoints",
@@ -5792,6 +5793,21 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     bounds: meshBounds(textured.positions, floorY),
     observer: { x: options.observer?.x || 0, y: 1.6, z: options.observer?.z || 0 },
   };
+  if (surfaceCompletion) {
+    report?.("texturing", 97);
+    // Preparation is optional and local to the finished designer. A wall
+    // without sufficient evidence must never reject a completed capture.
+    try {
+      mesh.designSurfaces = buildScanDesignSurfaces(mesh, structuralPlanes, usable, {
+        project: projectWorld, projectColor: projectColorWorld,
+        sampleColor: calibratedTexturePixel, unproject: depthPosition,
+        textureFrames,
+      });
+      stages.designSurfaces = mesh.designSurfaces?.diagnostics || null;
+    } catch (error) {
+      stages.designSurfaces = { walls: 0, fallback: true, reason: error.message };
+    }
+  }
   return {
     mesh,
     observations: buildAcceptedObservations(usable),
