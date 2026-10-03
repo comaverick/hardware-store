@@ -274,6 +274,14 @@ const Products = () => {
             <div className="product-name">{product.name}</div>
 
             <div className="product-brand">{product.brand || "No brand"}</div>
+
+            {product.description && (
+              <div className="product-description-preview" title={product.description}>
+                {product.description.length > 60
+                  ? `${product.description.slice(0, 60)}…`
+                  : product.description}
+              </div>
+            )}
           </div>
         </div>
       ),
@@ -541,9 +549,30 @@ const Products = () => {
             </Col>
           </Row>
 
-          <Form.Item label="Description" name="description">
-            <Input.TextArea rows={3} placeholder="Product description..." />
-          </Form.Item>
+          {/* PRODUCT DESCRIPTION SECTION */}
+          <div className="product-form-section">
+            <div className="product-form-section-header">
+              <label className="product-form-section-title" htmlFor="product-description-input">
+                Product Description
+              </label>
+              <Text type="secondary" className="product-form-section-subtitle">
+                Add comprehensive details, materials, and usage guidance displayed to customers on the website.
+              </Text>
+            </div>
+            <Form.Item
+              name="description"
+              className="product-description-form-item"
+            >
+              <Input.TextArea
+                id="product-description-input"
+                rows={4}
+                placeholder="Enter detailed product description (e.g., materials, durability, dimensions, usage tips, and key highlights)..."
+                maxLength={2000}
+                showCount
+                allowClear
+              />
+            </Form.Item>
+          </div>
 
           <div className="product-image-field">
             <label htmlFor="product-image-input">Product image</label>
@@ -770,6 +799,24 @@ const Products = () => {
                 </Card>
               </Col>
             </Row>
+
+            {/* PRODUCT DESCRIPTION */}
+            <div className="product-details-description">
+              <div className="product-details-description-header">
+                <Title level={5}>Description</Title>
+              </div>
+              <div className="detail-description-card">
+                {selectedProduct.description ? (
+                  <Text className="detail-description-text">
+                    {selectedProduct.description}
+                  </Text>
+                ) : (
+                  <Text type="secondary" italic>
+                    No description provided for this product.
+                  </Text>
+                )}
+              </div>
+            </div>
 
             {/* BRANCH STOCK */}
 
