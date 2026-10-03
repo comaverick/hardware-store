@@ -17,7 +17,6 @@ const hasCheckedPreview = scan => !!(scan.mesh && scan.fusionDiagnostics &&
 
 export default function PartialScanReview({
   scan,
-  onCompleteManually,
   onRescan,
   onDone,
 }) {
@@ -152,6 +151,8 @@ export default function PartialScanReview({
   const repair = displayScan.mesh?.surfaceRepair || quality?.surfaceRepair;
   const reviewMessages = new Set(displayScan.measuredReviewWarning?.issues?.map(issue => issue.message) || []);
   const additionalAuditIssues = (quality?.captureAudit?.issues || []).filter(issue => !reviewMessages.has(issue));
+  const hasScanDetails = !!(displayScan.measuredReviewWarning || displayScan.measuredGapWarning ||
+    additionalAuditIssues.length || repair?.estimatedHoleCount > 0);
   const rawRendering = !!scan.rawCapture && !renderedScan && !renderError;
   if (rawRendering)
     return (
@@ -236,48 +237,55 @@ export default function PartialScanReview({
             </p>
           </div>
         )}
-      {displayScan.measuredReviewWarning ? (
-        <div className="ss-notice ss-notice--warning" role="status">
-          <div className="ss-notice-title">
-            <WarningCircle size={17} weight="fill" aria-hidden="true" />
-            <strong>Automatic checks found possible scan issues</strong>
+      {hasScanDetails && (
+        <details className="ss-scan-details">
+          <summary>Scan checks and repairs</summary>
+          <div className="ss-scan-details-body">
+            {displayScan.measuredReviewWarning ? (
+              <div className="ss-notice ss-notice--warning" role="status">
+                <div className="ss-notice-title">
+                  <WarningCircle size={17} weight="fill" aria-hidden="true" />
+                  <strong>Automatic checks found possible scan issues</strong>
+                </div>
+                <p>
+                  Inspect the reconstructed surface. Any small estimated repairs
+                  are listed separately below.
+                </p>
+                <ul>
+                  {displayScan.measuredReviewWarning.issues?.map((issue) => (
+                    <li key={issue.code}>{issue.message}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : displayScan.measuredGapWarning ? (
+              <div className="ss-notice ss-notice--warning" role="status">
+                <div className="ss-notice-title">
+                  <WarningCircle size={17} weight="fill" aria-hidden="true" />
+                  <strong>Some areas remain unmeasured</strong>
+                </div>
+                <p>
+                  Some regions did not provide reliable depth and remain open in this
+                  result. No unseen object detail has been generated.
+                </p>
+              </div>
+            ) : null}
+            {!!additionalAuditIssues.length && <div className="ss-notice ss-notice--warning" role="status">
+              <div className="ss-notice-title">
+                <WarningCircle size={17} weight="fill" aria-hidden="true" />
+                <strong>Capture checks need review</strong>
+              </div>
+              <ul>{additionalAuditIssues.map(issue => <li key={issue}>{issue}</li>)}</ul>
+            </div>}
+            {repair?.estimatedHoleCount > 0 && (
+              <div className="ss-notice ss-notice--guidance" role="status">
+                <strong>Estimated gap repairs</strong>
+                <p>{repair.estimatedHoleCount} small, enclosed surface gaps
+                  ({repair.estimatedArea.toFixed(2)} m²) were repaired from their surrounding surfaces.
+                  These patches are estimates, not measured depth.</p>
+              </div>
+            )}
           </div>
-          <p>
-            Inspect the reconstructed surface before accepting it. Any small
-            estimated repairs are listed separately below.
-          </p>
-          <ul>
-            {displayScan.measuredReviewWarning.issues?.map((issue) => (
-              <li key={issue.code}>{issue.message}</li>
-            ))}
-          </ul>
-        </div>
-      ) : displayScan.measuredGapWarning ? (
-        <div className="ss-notice ss-notice--warning" role="status">
-          <div className="ss-notice-title">
-            <WarningCircle size={17} weight="fill" aria-hidden="true" />
-            <strong>Some areas remain unmeasured</strong>
-          </div>
-          <p>
-            Some regions did not provide reliable depth and remain open in this
-            result. No unseen object detail has been generated.
-          </p>
-        </div>
-      ) : null}
-      {!!additionalAuditIssues.length && <div className="ss-notice ss-notice--warning" role="status">
-        <div className="ss-notice-title">
-          <WarningCircle size={17} weight="fill" aria-hidden="true" />
-          <strong>Capture checks need review</strong>
-        </div>
-        <ul>{additionalAuditIssues.map(issue => <li key={issue}>{issue}</li>)}</ul>
-      </div>}
-      {repair?.estimatedHoleCount > 0 && (
-        <div className="ss-notice ss-notice--guidance" role="status">
-          <strong>Estimated gap repairs</strong>
-          <p>{repair.estimatedHoleCount} small, enclosed surface gaps
-            ({repair.estimatedArea.toFixed(2)} m²) were repaired from their surrounding surfaces.
-            These patches are estimates, not measured depth.</p>
-        </div>
+        </details>
       )}
       {quality?.structuralRebuild?.reconstructedArea > 0 && !quality.structuralRebuild.reverted && (
         <p className="ss-notice-detail" role="status">
@@ -339,9 +347,7 @@ export default function PartialScanReview({
           <strong>Scan saved</strong>
         </div>
         <p>
-          This scan can be exported and opened on another device. Continue with
-          measurements whenever you want to turn the captured surfaces into a
-          room layout.
+          This scan can be exported and opened on another device.
         </p>
         <p className="ss-notice-detail">
           <strong>Structural detection status:</strong> {displayScan.reason}
@@ -384,13 +390,6 @@ export default function PartialScanReview({
         </button>
         <button type="button" onClick={onRescan}>
           Start a new scan
-        </button>
-        <button
-          className="ss-primary"
-          type="button"
-          onClick={() => onCompleteManually(displayScan)}
-        >
-          Continue with measurements
         </button>
       </div>
     </section>

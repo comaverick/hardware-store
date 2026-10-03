@@ -312,9 +312,8 @@ function bakedMeshColors(mesh) {
     const y = Math.min(texture.height - 1, Math.round(v * (texture.height - 1)));
     const source = (y * texture.width + x) * 4;
     if ((texture.data[source + 3] ?? 255) === 0) continue;
-    colors[vertex * 3] = srgbByteToLinearByte(texture.data[source]);
-    colors[vertex * 3 + 1] = srgbByteToLinearByte(texture.data[source + 1]);
-    colors[vertex * 3 + 2] = srgbByteToLinearByte(texture.data[source + 2]);
+    for (let channel = 0; channel < 3; channel++)
+      colors[vertex * 3 + channel] = Math.round(srgbByteToLinearByte(texture.data[source + channel]) * original[vertex * 3 + channel] / 255);
   }
   return colors;
 }
@@ -348,6 +347,7 @@ function encodeMesh(mesh) {
     observedSideOriented: !!mesh.observedSideOriented,
     surfaceRepair: safeSurfaceRepair(mesh.surfaceRepair),
   };
+  if (mesh.estimatedTriangleMask?.length) value.estimatedTriangleMask = encodeArray(mesh.estimatedTriangleMask, "u8");
   if (includeTexture) {
     value.uvs = encodeArray(mesh.uvs, "f32");
     value.texture = {
@@ -361,13 +361,13 @@ function encodeMesh(mesh) {
 
 function baseMeshBytes(mesh) {
   if (!mesh?.positions || !mesh?.indices) return Infinity;
-  const arrays = [mesh.positions, mesh.normals, mesh.indices].filter(Boolean);
+  const arrays = [mesh.positions, mesh.normals, mesh.indices, mesh.estimatedTriangleMask].filter(Boolean);
   return arrays.reduce((total, array) => total + array.byteLength, mesh.positions.length);
 }
 
 function canIncludeMesh(mesh) {
   if (!mesh?.positions || !mesh?.indices) return false;
-  const arrays = [mesh.positions, mesh.normals, mesh.indices].filter(Boolean);
+  const arrays = [mesh.positions, mesh.normals, mesh.indices, mesh.estimatedTriangleMask].filter(Boolean);
   const colorBytes = mesh.positions.length;
   return (
     arrays.every((array) => array.byteLength <= MAX_ARRAY_BYTES) &&
@@ -425,6 +425,8 @@ function decodeMesh(mesh) {
     ? decodeArray(mesh.normals, "f32", "mesh normal")
     : null;
   const uvs = mesh.uvs ? decodeArray(mesh.uvs, "f32", "mesh UV") : null;
+  const estimatedTriangleMask = mesh.estimatedTriangleMask
+    ? decodeArray(mesh.estimatedTriangleMask, "u8", "mesh estimate") : null;
   if (!positions.length || positions.length % 3 || colors.length !== positions.length)
     throw new Error("The scan file has inconsistent mesh geometry.");
   if (
@@ -433,6 +435,9 @@ function decodeMesh(mesh) {
     (uvs && uvs.length !== (positions.length / 3) * 2)
   )
     throw new Error("The scan file has inconsistent mesh geometry.");
+  if (estimatedTriangleMask && (estimatedTriangleMask.length !== indices.length / 3 ||
+    estimatedTriangleMask.some(value => value > 2)))
+    throw new Error("The scan file has inconsistent mesh estimate data.");
   validateFiniteArray(positions, "mesh");
   if (normals) validateFiniteArray(normals, "mesh normal");
   if (uvs) validateFiniteArray(uvs, "mesh UV");
@@ -468,6 +473,7 @@ function decodeMesh(mesh) {
     colors,
     uvs,
     indices,
+    ...(estimatedTriangleMask ? { estimatedTriangleMask } : {}),
     triangleCount: indices.length / 3,
     colorCoverage: finite(mesh.colorCoverage, 0),
     portableColors: !!mesh.portableColors,
@@ -481,13 +487,18 @@ function decodeMesh(mesh) {
 
 function safeSurfaceRepair(value) {
   if (value?.mode !== "bounded-planar-estimate") return null;
-  return {
+  const repair = {
     mode: "bounded-planar-estimate",
     estimatedHoleCount: Math.max(0, Math.floor(finite(value.estimatedHoleCount, 0))),
     estimatedTriangles: Math.max(0, Math.floor(finite(value.estimatedTriangles, 0))),
     estimatedArea: Math.max(0, finite(value.estimatedArea, 0)),
     maxDiameterMeters: Math.max(0, finite(value.maxDiameterMeters, 0)),
   };
+  for (const key of ['colorSupportedHoleCount', 'colorSupportedHoleArea',
+    'maxColorSupportedDiameterMeters', 'colorBlendedTriangles', 'colorBlendedArea']) {
+    if (Number.isFinite(value[key])) repair[key] = Math.max(0, value[key]);
+  }
+  return repair;
 }
 
 function decodeCloud(cloud) {

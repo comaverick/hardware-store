@@ -7,6 +7,7 @@ import {
   projectWorld,
   texturedMesh,
   textureEdgeDifference,
+  fillSmallMeshHoles,
 } from "./fusion";
 
 function cameraFrame(value = 140, x = 0) {
@@ -134,6 +135,34 @@ test("estimated repair triangles stay neutral instead of borrowing a nearby phot
   expect(result.textureCoverage).toBe(0);
   expect(result.untexturedEstimatedTriangles).toBe(1);
   expect(Array.from(result.colors)).toEqual([115, 122, 118, 115, 122, 118, 115, 122, 118]);
+});
+
+test('automatic repair colors match the observed rim without projecting a photograph onto the estimate', () => {
+  const positions = [], indices = [];
+  for (let y = 0; y <= 3; y++) for (let x = 0; x <= 3; x++) positions.push(x * .1, y * .1, -2);
+  for (let y = 0; y < 3; y++) for (let x = 0; x < 3; x++) {
+    if (x === 1 && y === 1) continue;
+    const a = y * 4 + x;
+    indices.push(a, a + 1, a + 4, a + 1, a + 5, a + 4);
+  }
+  const source = { positions: new Float32Array(positions), indices: new Uint32Array(indices), colors: new Uint8Array(positions.length).fill(30) };
+  const mesh = fillSmallMeshHoles(source, { maxDiameter: .2 });
+  const result = texturedMesh(mesh, [cameraFrame(140)], { scales: [], pairCount: 0 }, { repairPlanarGaps: true });
+  const linear = Math.round(255 * ((140 / 255 + .055) / 1.055) ** 2.4);
+  expect(result.repairColorBlending.triangles).toBe(4);
+  expect(result.repairColorBlending.interiorVertices).toBe(1);
+  expect(result.untexturedEstimatedTriangles).toBe(4);
+  expect(result.textureCoverage).toBe(80);
+  expect(Array.from(result.colors.slice(-36))).toEqual(new Array(36).fill(linear));
+  expect(result.indices.length).toBe(mesh.indices.length);
+  result.surfaceRepair = { mode: 'bounded-planar-estimate', estimatedHoleCount: 1,
+    estimatedTriangles: 4, estimatedArea: .01, maxDiameterMeters: .2,
+    colorBlendedTriangles: 4, colorBlendedArea: .01, maxColorSupportedDiameterMeters: .3 };
+  const restored = parsePartialScan(serializePartialScan({ mesh: result }));
+  expect(restored.mesh.colors).toEqual(result.colors);
+  expect(restored.mesh.estimatedTriangleMask).toEqual(mesh.estimatedTriangleMask);
+  expect(restored.mesh.surfaceRepair).toEqual(result.surfaceRepair);
+  expect(mesh.colors.every(value => value === 30)).toBe(true);
 });
 
 test("unrelated dark and bright camera views do not recolor one another", () => {

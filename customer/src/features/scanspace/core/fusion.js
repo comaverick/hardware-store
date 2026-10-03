@@ -2,6 +2,8 @@ import { consolidatePlanarSurfaces } from "./planarSurface.js";
 import { refineJointTrajectory, recoverFrameComponents } from "./trajectoryAlignment.js";
 import { discoverStructuralPlanes, regularizeStructuralDepth } from "./structuralDepth.js";
 import { repairCeilingRegions } from "./ceilingRecovery.js";
+import { createColorGapRepair } from "./colorGapRepair.js";
+import { blendRepairColors } from "./repairColors.js";
 import { rebuildStructuralSurfaces } from "./structuralSurface.js";
 import { pruneContradictedSurfaceTriangles } from "./surfaceEvidence.js";
 import { conformSurfaceTopology, orientManifoldFaces, pruneUnsupportedFragments, surfaceTopologyDiagnostics, triangulatePlanarLoop } from "./surfaceTopology.js";
@@ -2464,6 +2466,8 @@ export function fillSmallMeshHoles(mesh, options = {}) {
   let filledHoleCount = 0;
   let filledHoleTriangles = 0;
   let addedArea = 0;
+  let colorSupportedHoleCount = 0;
+  let colorSupportedHoleArea = 0;
   loops.forEach((loop) => {
     const points = loop.vertices.map((vertex) => [
       mesh.positions[vertex * 3],
@@ -2538,6 +2542,15 @@ export function fillSmallMeshHoles(mesh, options = {}) {
       return cross.reduce((sum, value, axis) => sum + value * loopNormal[axis], 0) < -1e-10;
     })) return;
     let patch = -1;
+    let colorSupported = false;
+    const repairAllowed = p => {
+      if (!options.allowRepair) return true;
+      const permission = options.allowRepair(p, points, {
+        plane: options.supportedPlanes?.[patch], diameter,
+      });
+      if (permission === 'surrounding-colors') colorSupported = true;
+      return !!permission;
+    };
     if (options.supportedPlanes) {
       patch = options.supportedPlanes.findIndex(plane =>
         Math.abs(plane.normal.reduce((sum, value, axis) => sum + value * referenceNormal[axis], 0)) > 0.985 &&
@@ -2551,7 +2564,7 @@ export function fillSmallMeshHoles(mesh, options = {}) {
           (plane.kind === 'ceiling' && plane.supportingFrameIds?.length >= 3) ||
           (Math.abs(plane.normal[1]) > 0.97 && Math.abs(center[1] - (options.floorY || 0)) < 0.25)) &&
         points.every(point => Math.abs(point.reduce((sum, value, axis) => sum + value * plane.normal[axis], 0) - plane.offset) < 0.025));
-      if (patch < 0 || (options.allowRepair && !options.allowRepair(center, points))) return;
+      if (patch < 0 || !repairAllowed(center)) return;
     }
     if (options.triangulateConcave && options.supportedPlanes) {
       const triangles = triangulatePlanarLoop(points,referenceNormal);
@@ -2564,15 +2577,16 @@ export function fillSmallMeshHoles(mesh, options = {}) {
         // object or a real opening must veto triangles that cross it.
         const p = face.map(i => points[i]);
         const samples = [[1/3,1/3,1/3],[.6,.2,.2],[.2,.6,.2],[.2,.2,.6]];
-        if (options.allowRepair && samples.some(w => !options.allowRepair([0,1,2].map(axis => p.reduce((s,q,k) => s+q[axis]*w[k],0)),points))) return;
+        if (samples.some(w => !repairAllowed([0,1,2].map(axis => p.reduce((s,q,k) => s+q[axis]*w[k],0))))) return;
       }
       if (area < .0005 || area > (options.maxArea || .4)) return;
       for (const face of triangles) {
         indices.push(...face.map(i => loop.vertices[i]));
         patches?.push(patch);
-        estimated.push(1);
+        estimated.push(colorSupported ? 2 : 1);
       }
       addedArea += area; filledHoleCount++; filledHoleTriangles += triangles.length;
+      if (colorSupported) { colorSupportedHoleCount++; colorSupportedHoleArea += area; }
       return;
     }
     const centerVertex = positions.length / 3;
@@ -2610,7 +2624,8 @@ export function fillSmallMeshHoles(mesh, options = {}) {
     }
     addedArea += holeArea;
     if (patches) loop.edges.forEach(() => patches.push(patch));
-    loop.edges.forEach(() => estimated.push(1));
+    loop.edges.forEach(() => estimated.push(colorSupported ? 2 : 1));
+    if (colorSupported) { colorSupportedHoleCount++; colorSupportedHoleArea += holeArea; }
     filledHoleCount++;
     filledHoleTriangles += loop.edges.length;
   });
@@ -2623,6 +2638,8 @@ export function fillSmallMeshHoles(mesh, options = {}) {
     filledHoleCount,
     filledHoleTriangles,
     filledHoleArea: addedArea,
+    colorSupportedHoleCount,
+    colorSupportedHoleArea,
     ...(patches ? { surfacePatchIds: new Int32Array(patches) } : {}),
     estimatedTriangleMask: new Uint8Array(estimated),
   };
@@ -4833,7 +4850,13 @@ export function texturedMesh(mesh, frames, precomputedCalibration = null, option
       fallbackColors.set(color.map(linearByte), vertex * 3);
     });
   });
-  records.forEach((record) => {
+  const repairedColors = options.repairPlanarGaps
+    ? blendRepairColors(mesh, records, (record, corner) => {
+      const best = record.candidates[record.selected];
+      const color = best && calibratedTexturePixel(best.frame, best.projections[corner]);
+      return color?.map(linearByte);
+    }) : null;
+  records.forEach((record, recordIndex) => {
     const triangle = record.triangle;
     const best = record.candidates[record.selected] || null;
     if (best) texturedTriangles++;
@@ -4877,7 +4900,9 @@ export function texturedMesh(mesh, frames, precomputedCalibration = null, option
           (tileX * atlas.strideX + atlas.strideX * 0.5) / atlas.width,
           (tileY * atlas.strideY + atlas.strideY * 0.5) / atlas.height,
         );
-        if (record.estimated) colors.push(115, 122, 118);
+        if (record.estimated && repairedColors?.blended[recordIndex])
+          colors.push(...repairedColors.colors.subarray(vertex * 3, vertex * 3 + 3));
+        else if (record.estimated) colors.push(115, 122, 118);
         else colors.push(fallbackColors[vertex * 3], fallbackColors[vertex * 3 + 1], fallbackColors[vertex * 3 + 2]);
       }
       indices.push(target);
@@ -4890,10 +4915,12 @@ export function texturedMesh(mesh, frames, precomputedCalibration = null, option
     uvs: new Float32Array(uvs),
     indices: new Uint32Array(indices),
     texture: { data: atlas.data, width: atlas.width, height: atlas.height },
+    ...(mesh.estimatedTriangleMask ? { estimatedTriangleMask: mesh.estimatedTriangleMask.slice() } : {}),
     textureCoverage: mesh.indices.length ? Math.round(texturedTriangles / (mesh.indices.length / 3) * 100) : 0,
     recoveredTextureTriangles,
     softTextureFallbackTriangles,
     untexturedEstimatedTriangles,
+    repairColorBlending: repairedColors?.diagnostics || null,
     textureProjectionMode,
     fallbackBoundaryVertices: boundaryScores.reduce((count, score) => count + (Number.isFinite(score) ? 1 : 0), 0),
     texturePatchCount,
@@ -5199,7 +5226,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     extraTextureFrames = structural.frames.filter(f => !ids.has(f.frameId));
   }
   const stages = {
-    algorithmVersion: 47,
+    algorithmVersion: 48,
     completionMode: options.completionMode === "surface" ? "surface" : "room",
     reconstructionProfile: options.reconstructionProfile || "quality",
     supportMode: "translated-camera-viewpoints",
@@ -5658,31 +5685,23 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
         supportedPlanes: (surface.planarConsolidation?.planes || []).map(plane => {
           const support = structuralPlanes.find(p => p.kind === 'ceiling' &&
             Math.abs(p.normal.reduce((s,n,i) => s+n*plane.normal[i],0)) > .99 && Math.abs(p.offset-plane.offset) < .05);
-          return support ? {...plane,kind:'ceiling',supportingFrameIds:support.supportingFrameIds} : plane;
+          return support ? {...plane,kind:'ceiling',supportingFrameIds:support.supportingFrameIds,
+            ceilingRecoveryId:support.ceilingRecoveryId} : plane;
         }),
         floorY: options.floorY,
-        allowRepair: (center) => {
-          let agrees = 0, contradicts = 0;
-          for (const frame of usable) {
-            const projected = projectWorld(frame, ...center);
-            if (!projected) continue;
-            const index = gridIndex(frame, projected.u, projected.v);
-            if (!frame.measuredMask[index]) continue;
-            const difference = (frame.originalFilteredDepth || frame.filteredDepth)[index] - projected.depth;
-            if (Math.abs(difference) < 0.05) agrees++;
-            else if (Math.abs(difference) > 0.09) contradicts++;
-          }
-          // Measured background/foreground is evidence of an opening/object,
-          // not permission to put an estimated wall over it.
-          return agrees >= 2 && (contradicts === 0 || (agrees >= 3 && contradicts / (agrees + contradicts) < 0.1));
-        },
+        allowRepair: createColorGapRepair(textureFrames, {
+          project: projectWorld, projectColor: projectColorWorld, sampleColor: texturePixel,
+        }),
       });
       stages.surfaceRepair = {
         mode: "bounded-planar-estimate",
-        estimatedHoleCount: surface.filledHoleCount + (stages.structuralRebuild?.estimatedHoleCount || 0),
+        estimatedHoleCount: previousCount + surface.filledHoleCount + (stages.structuralRebuild?.estimatedHoleCount || 0),
         estimatedTriangles: surface.filledHoleTriangles + (stages.structuralRebuild?.estimatedTriangles || 0),
         estimatedArea: surface.filledHoleArea + (stages.structuralRebuild?.estimatedArea || 0),
         maxDiameterMeters: options.conformTopology ? 0.9 : 0.42,
+        colorSupportedHoleCount: surface.colorSupportedHoleCount || 0,
+        colorSupportedHoleArea: surface.colorSupportedHoleArea || 0,
+        maxColorSupportedDiameterMeters: .3,
       };
       surface = { ...surface,
         filledHoleCount: previousCount + surface.filledHoleCount,
@@ -5699,6 +5718,19 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       surface = orientManifoldFaces(surface);
       stages.faceOrientation = surface.faceOrientation;
       stages.topologyAfterRepair = surfaceTopologyDiagnostics(surface);
+    }
+    if (stages.surfaceRepair && surface.estimatedTriangleMask) {
+      // Report every retained estimate, including the early meshing cracks.
+      // Later clipping/pruning may have removed some originally added faces.
+      let triangles = 0, area = 0;
+      for (let index = 0; index < surface.indices.length; index += 3) {
+        if (!surface.estimatedTriangleMask[index / 3]) continue;
+        triangles++;
+        area += Math.hypot(...meshTriangleNormal(surface.positions,
+          surface.indices[index], surface.indices[index + 1], surface.indices[index + 2])) * .5;
+      }
+      stages.surfaceRepair.estimatedTriangles = triangles;
+      stages.surfaceRepair.estimatedArea = area;
     }
   }
   const finalConnectivity = stages.topologyAfterRepair;
@@ -5743,6 +5775,11 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     );
   report?.("texturing", 88);
   const textured = texturedMesh(surface, textureFrames, colorCalibration, options);
+  if (stages.surfaceRepair && textured.repairColorBlending) {
+    stages.surfaceRepair.colorBlendedTriangles = textured.repairColorBlending.triangles;
+    stages.surfaceRepair.colorBlendedArea = textured.repairColorBlending.area;
+    stages.repairColorBlending = textured.repairColorBlending;
+  }
   const floorY = Number.isFinite(options.floorY) ? options.floorY : 0;
   const mesh = {
     version: 3,

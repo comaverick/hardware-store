@@ -470,10 +470,6 @@
   padding-top: 18px;
   border-top: 1px solid var(--ss-line);
 }
-.ss-partial-review .ss-actions .ss-primary {
-  margin-left: auto;
-  min-width: 214px;
-}
 .ss-partial-review .ss-actions .ss-action-quiet {
   border-color: transparent;
   background: transparent;
@@ -495,6 +491,24 @@
   cursor: pointer;
   font-weight: 650;
   padding-bottom: 10px;
+}
+.ss-partial-review .ss-scan-details {
+  max-width: 920px;
+  margin: 16px 0;
+  padding: 0;
+  border: 1px solid var(--ss-line);
+  border-radius: 8px;
+  background: #f2f5f1;
+}
+.ss-partial-review .ss-scan-details > summary {
+  padding: 12px;
+  font-size: 13px;
+  color: var(--ss-ink);
+}
+.ss-scan-details-body {
+  display: grid;
+  gap: 12px;
+  padding: 0 12px 12px;
 }
 .ss-corners {
   display: grid;
@@ -567,15 +581,18 @@
   background: #eaf1eb;
   color: #345442;
 }
-.ss-partial-review > .ss-notice {
+.ss-partial-review > .ss-notice,
+.ss-scan-details-body > .ss-notice {
   border: 1px solid #d1dfd4;
 }
-.ss-partial-review > .ss-notice--guidance {
+.ss-partial-review > .ss-notice--guidance,
+.ss-scan-details-body > .ss-notice--guidance {
   background: #eef6f2;
   border-color: #c9ddd5;
   color: #345442;
 }
-.ss-partial-review > .ss-notice--warning {
+.ss-partial-review > .ss-notice--warning,
+.ss-scan-details-body > .ss-notice--warning {
   background: #fff3e8;
   border-color: #e8bf94;
   color: #5f3f2b;
@@ -599,17 +616,20 @@
 .ss-notice-title svg {
   flex: 0 0 auto;
 }
-.ss-partial-review > .ss-notice--warning .ss-notice-title {
+.ss-partial-review > .ss-notice--warning .ss-notice-title,
+.ss-scan-details-body > .ss-notice--warning .ss-notice-title {
   color: #8a481f;
 }
-.ss-partial-review > .ss-notice p {
+.ss-partial-review > .ss-notice p,
+.ss-scan-details-body > .ss-notice p {
   margin: 7px 0 0;
 }
 .ss-notice-detail {
   color: inherit;
   font-size: 11px;
 }
-.ss-partial-review > .ss-notice ul {
+.ss-partial-review > .ss-notice ul,
+.ss-scan-details-body > .ss-notice ul {
   margin: 9px 0 0 18px;
   padding: 0;
 }
@@ -2037,11 +2057,6 @@
   }
   .ss-partial-review .ss-actions button {
     width: 100%;
-  }
-  .ss-partial-review .ss-actions .ss-primary {
-    grid-column: 1 / -1;
-    margin-left: 0;
-    order: -1;
   }
   .ss-editor {
     height: auto;

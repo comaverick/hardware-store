@@ -88,7 +88,7 @@ if (!result.mesh) throw new Error(result.diagnostics.reason || 'No reconstructed
 const mesh = result.mesh;
 const manifest = { bounds: mesh.bounds, vertexCount: mesh.vertexCount,
   triangleCount: mesh.triangleCount, attributes: {} };
-for (const name of ['positions', 'indices', 'colors', 'uvs', 'normals']) {
+for (const name of ['positions', 'indices', 'colors', 'uvs', 'normals', 'estimatedTriangleMask']) {
   const values = mesh[name];
   if (!values?.length) continue;
   const filename = `${name}.bin`;

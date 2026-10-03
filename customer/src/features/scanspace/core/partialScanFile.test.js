@@ -227,3 +227,17 @@ test("portable exports retain the live mesh texture when it fits", () => {
   expect(Array.from(restored.mesh.uvs)).toEqual([0, 0, 1, 0, 0, 1]);
   expect(restored.mesh.portableColors).toBe(false);
 });
+
+test('texture-free portable export preserves estimated linear colors multiplying the blank atlas tile', () => {
+  const scan = measuredScan();
+  const original = scan.mesh.colors.slice();
+  // An atlas wider than the portable limit must fall back to baked colors.
+  // Its white tile multiplies a blended repair rather than replacing its color.
+  scan.mesh.texture = { width: 8193, height: 1, data: new Uint8Array(8193 * 4).fill(255) };
+  scan.mesh.uvs = new Float32Array([.5, .5, .5, .5, .5, .5]);
+  const restored = parsePartialScan(serializePartialScan(scan));
+  expect(restored.mesh.texture).toBeNull();
+  expect(restored.mesh.portableColors).toBe(true);
+  expect(restored.mesh.colors).toEqual(original);
+  expect(scan.mesh.colors).toEqual(original);
+});

@@ -349,16 +349,6 @@ export default function ScanSpace() {
         >
           <PartialScanReview
             scan={surfaceScan}
-            onCompleteManually={(renderedScan = surfaceScan) => {
-              setReviewRoom(null);
-              setCapture({
-                scanMesh: renderedScan.mesh || null,
-                scanCloud: renderedScan.cloud || null,
-                textures: {},
-              });
-              setSurfaceScan(null);
-              setStage("review");
-            }}
             onDone={() => {
               setSurfaceScan(null);
               setStage("welcome");
