@@ -46,6 +46,25 @@ test("public storefront catalog exposes active products and branch availability 
           },
         ]);
       },
+      findOne: (filter) => {
+        calls.push({ collection: "products.findOne", filter });
+        if (filter._id === productId) {
+          return query({
+            _id: productId,
+            name: "Claw hammer",
+            sku: "HAM-1",
+            brand: "Acme",
+            category: { name: "Hand Tools", isActive: true },
+            description: "Steel handle",
+            sellingPrice: 245,
+            unit: "piece",
+            image: "",
+            costPrice: 100,
+            barcode: "private-barcode",
+          });
+        }
+        return query(null);
+      },
     },
     BranchModel: {
       find: (filter) => {
@@ -57,6 +76,13 @@ test("public storefront catalog exposes active products and branch availability 
       find: (filter) => {
         calls.push({ collection: "inventory", filter });
         return query([{ product: productId, quantity: 8, reservedQuantity: 3, shelfLocation: "A1" }]);
+      },
+      findOne: (filter) => {
+        calls.push({ collection: "inventory.findOne", filter });
+        if (filter.product === productId && filter.branch === branchId) {
+          return query({ product: productId, quantity: 8, reservedQuantity: 3, shelfLocation: "A1" });
+        }
+        return query(null);
       },
     },
   };
@@ -89,4 +115,27 @@ test("public storefront catalog exposes active products and branch availability 
 
   assert.equal((await fetch(`${base}?branch=invalid`)).status, 400);
   assert.equal((await fetch(`${base}?branch=${"d".repeat(24)}`)).status, 404);
+
+  // Test single product endpoint
+  const productBase = `http://127.0.0.1:${server.address().port}/api/storefront/products`;
+  const singleResponse = await fetch(`${productBase}/${productId}`);
+  const singleData = await singleResponse.json();
+  assert.equal(singleResponse.status, 200);
+  assert.equal(singleData.product._id, productId);
+  assert.equal(singleData.product.name, "Claw hammer");
+  assert.equal(singleData.product.category, "Hand Tools");
+  assert.equal(singleData.product.costPrice, undefined);
+  assert.equal(singleData.product.barcode, undefined);
+  assert.equal(singleData.product.availableQuantity, null);
+  assert.deepEqual(singleData.branches, [{ _id: branchId, name: "Main branch", code: "MAIN" }]);
+
+  const singleBranchResponse = await fetch(`${productBase}/${productId}?branch=${branchId}`);
+  const singleBranchData = await singleBranchResponse.json();
+  assert.equal(singleBranchResponse.status, 200);
+  assert.equal(singleBranchData.product.availableQuantity, 5);
+
+  assert.equal((await fetch(`${productBase}/invalid-id`)).status, 400);
+  assert.equal((await fetch(`${productBase}/${"e".repeat(24)}`)).status, 404);
+  assert.equal((await fetch(`${productBase}/${productId}?branch=invalid`)).status, 400);
+  assert.equal((await fetch(`${productBase}/${productId}?branch=${"f".repeat(24)}`)).status, 404);
 });

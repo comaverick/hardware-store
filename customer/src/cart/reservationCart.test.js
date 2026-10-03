@@ -21,6 +21,20 @@ test("storefront items update the saved cart total and quantity", () => {
   expect(localStorage.getItem("customer:reservation-cart")).toBeNull();
 });
 
+test("storefront items support custom quantity when adding to cart", () => {
+  const cart = useReservationCart.getState();
+  cart.addItem(product, 3);
+  expect(useReservationCart.getState().draft).toMatchObject({
+    total: 1335,
+    items: [{ productId: product.id, quantity: 3, total: 1335 }],
+  });
+  cart.addItem(product, 2);
+  expect(useReservationCart.getState().draft).toMatchObject({
+    total: 2225,
+    items: [{ productId: product.id, quantity: 5, total: 2225 }],
+  });
+});
+
 test("a validated ScanSpace draft still opens the shared cart", async () => {
   const draft = {
     canAdd: true,

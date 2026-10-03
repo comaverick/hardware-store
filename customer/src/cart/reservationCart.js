@@ -60,7 +60,8 @@ export const useReservationCart = create((set, get) => ({
   show: () => set({ open: true }),
   close: () => set({ open: false }),
   clear: () => saveDraft(null, "storefront"),
-  addItem: (product) => {
+  addItem: (product, quantityToAdd = 1) => {
+    const qty = Math.max(1, Number(quantityToAdd) || 1);
     const current = get().draft;
     const items = Array.isArray(current?.items) ? [...current.items] : [];
     const index = items.findIndex((item) => item.productId === product.id);
@@ -70,16 +71,16 @@ export const useReservationCart = create((set, get) => ({
         name: product.name,
         unitPrice: product.price,
         image: product.image || "",
-        quantity: Number(items[index].quantity || 0) + 1,
+        quantity: Number(items[index].quantity || 0) + qty,
       };
     } else {
       items.push({
         productId: product.id,
         name: product.name,
-        quantity: 1,
+        quantity: qty,
         unitPrice: product.price,
         image: product.image || "",
-        total: product.price,
+        total: product.price * qty,
       });
     }
     saveDraft(
