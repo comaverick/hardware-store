@@ -80,13 +80,67 @@ test("XR-tracked capture never resumes after a coordinate reset", () => {
   expect(capture.frames).toHaveLength(2);
 });
 
-test("XR-tracked capture retains the view limit without evicting captured sections", () => {
-  const capture = started({ validateOverlap: false, maximumFrames: 3 });
+test("XR-tracked capture continues at capacity while keeping a bounded trajectory", () => {
+  const compare = jest.fn(() => { throw new Error("Live overlap must not run"); });
+  const capture = started({ validateOverlap: false, maximumFrames: 3, compare });
   capture.consider(wallFrame(0.16, 800));
-  const saved = capture.frames.slice();
-  expect(capture.consider(wallFrame(0.24, 1200)).reason).toBe("capacity");
-  expect(capture.frames).toEqual(saved);
-  expect(capture.snapshot()).toMatchObject({ capacityReached: true, frameCount: 3, connected: true });
+  const anchor = capture.frames[0], latest = wallFrame(0.24, 1200);
+  const decision = capture.consider(latest);
+  expect(decision).toMatchObject({ accepted: true, reason: "connected" });
+  expect(decision.committed).toHaveLength(1);
+  expect(decision.committed[0]).toBe(latest);
+  expect(capture.frames[0]).toBe(anchor);
+  expect(capture.frames.at(-1)).toBe(latest);
+  expect(capture.snapshot()).toMatchObject({ capacityReached: false, frameCount: 3, connected: true, removed: 1 });
+  const ids = new Set(capture.frames.map(frame => frame.captureId));
+  capture.frames.forEach(frame => frame.captureLinks.forEach(id => expect(ids.has(id)).toBe(true)));
+  expect(compare).not.toHaveBeenCalled();
+});
+
+test("long XR-tracked capture retains early, middle and recent views and pinned photos", () => {
+  const capture = started({ validateOverlap: false });
+  const anchors = capture.frames.slice(), photos = [];
+  for (let i = 2; i < 240; i++) {
+    const frame = wallFrame(i * 0.08, 100 + i * 400);
+    if ([10, 40, 90, 130, 170, 210].includes(i)) {
+      frame.colorImage = new Uint8Array([120, 120, 120, 255]);
+      photos.push(frame);
+    }
+    const decision = capture.consider(frame);
+    expect(decision).toMatchObject({ accepted: true, reason: "connected" });
+    expect(decision.committed).toHaveLength(1);
+    expect(decision.committed[0]).toBe(frame);
+    expect(capture.frames.length).toBeLessThanOrEqual(60);
+  }
+  expect(capture.snapshot()).toMatchObject({ connected: true, capacityReached: false, frameCount: 60, capacityStops: 0 });
+  expect(capture.frames.slice(0, 2)).toEqual(anchors);
+  expect(capture.frames.at(-2).camera[0]).toBeCloseTo(238 * 0.08);
+  expect(capture.frames.at(-1).camera[0]).toBeCloseTo(239 * 0.08);
+  photos.forEach(frame => expect(capture.frames).toContain(frame));
+  for (let section = 0; section < 4; section++)
+    expect(capture.frames.filter(frame => frame.camera[0] >= section * 4.8 && frame.camera[0] < (section + 1) * 4.8).length).toBeGreaterThanOrEqual(8);
+  const largestGap = Math.max(...capture.frames.slice(1).map((frame, index) => frame.camera[0] - capture.frames[index].camera[0]));
+  expect(largestGap).toBeLessThan(0.8);
+  const ids = new Set(capture.frames.map(frame => frame.captureId));
+  capture.frames.forEach(frame => frame.captureLinks.forEach(id => expect(ids.has(id)).toBe(true)));
+});
+
+test("tracked compaction preserves sharp turns and also handles a full set of photo views", () => {
+  const capture = started({ validateOverlap: false, maximumFrames: 6 });
+  capture.consider(wallFrame(0.16, 800));
+  const corner = wallFrame(0.24, 1200);
+  capture.consider(corner);
+  capture.consider(wallFrame(0.16, 1600));
+  capture.consider(wallFrame(0.08, 2000));
+  capture.consider(wallFrame(0, 2400));
+  expect(capture.frames).toContain(corner);
+  capture.frames.forEach(frame => { frame.colorImage = new Uint8Array([120, 120, 120, 255]); });
+  const next = wallFrame(-0.08, 2800);
+  next.colorImage = new Uint8Array([120, 120, 120, 255]);
+  expect(capture.consider(next).accepted).toBe(true);
+  expect(capture.frames).toHaveLength(6);
+  expect(capture.frames.at(-1)).toBe(next);
+  expect(capture.snapshot()).toMatchObject({ connected: true, capacityReached: false });
 });
 
 test("XR-tracked depth refresh does not rerun live overlap checks", () => {
@@ -110,6 +164,24 @@ test("reconstruction rejects a bad depth layer retained by XR-tracked acquisitio
   expect(result.diagnostics.alignment.rejectedFrameIds).toContain(2);
   expect(result.diagnostics.fusedFrameIds).not.toContain(2);
   expect(result.diagnostics.fusedFrameIds).toHaveLength(4);
+});
+
+test("reconstruction independently rejects conflicting depth after tracked trajectory compaction", () => {
+  const capture = started({ validateOverlap: false, maximumFrames: 6 });
+  const bad = wallFrame(0.16, 800, { wallZ: -2.35 });
+  // A retained photo must not turn its trajectory links into geometric proof.
+  bad.colorImage = new Uint8Array([120, 120, 120, 255]);
+  bad.colorWidth = bad.colorHeight = 1;
+  capture.consider(bad);
+  for (let i = 3; i < 9; i++) capture.consider(wallFrame(i * 0.08, 400 + i * 400));
+  expect(capture.snapshot()).toMatchObject({ connected: true, capacityReached: false, frameCount: 6, removed: 3 });
+  const badIndex = capture.frames.indexOf(bad);
+  expect(badIndex).toBeGreaterThanOrEqual(0);
+  const result = fuseRgbdKeyframes(capture.frames, scanFusionOptions({ stats: { depthType: "smooth" } }, "surface", { maxDimension: 48 }));
+  expect(result.mesh).toBeTruthy();
+  expect(result.diagnostics.alignment.rejectedFrameIds).toContain(badIndex);
+  expect(result.diagnostics.fusedFrameIds).not.toContain(badIndex);
+  expect(result.diagnostics.fusedFrameIds).toHaveLength(5);
 });
 
 test("bootstrap requires independent, agreeing views and stationary frames do not confirm coverage", () => {

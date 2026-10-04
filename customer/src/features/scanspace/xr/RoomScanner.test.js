@@ -483,6 +483,34 @@ function captureHarness() {
   return { scanner, frame, view, move, setEmulated: value => { emulated = value; }, setDepth: value => { depth = value; } };
 }
 
+test("live capture and resume keep saving new views beyond the 60-view buffer", () => {
+  const { scanner, frame, move } = captureHarness();
+  const anchors = scanner.keyframes.slice();
+  for (let index = 2; index < 68; index++) {
+    move(index * 0.08);
+    scanner.frame(500 + index * 500, frame);
+    expect(scanner.stats.frameQuality).toBe("connected");
+    expect(scanner.keyframes.length).toBeLessThanOrEqual(MAX_FUSION_KEYFRAMES);
+  }
+  expect(scanner.stats.adaptiveCapture).toMatchObject({ capacityReached: false, connected: true, removed: 8 });
+  expect(scanner.stats.captureFeedback.code).not.toBe("capacity");
+  expect(scanner.keyframes.slice(0, 2)).toEqual(anchors);
+  expect(scanner.keyframes.at(-1).camera[0]).toBeCloseTo(67 * 0.08);
+  scanner.paused = true;
+  move(68 * 0.08);
+  scanner.frame(34500, frame);
+  expect(scanner.keyframes.at(-1).camera[0]).toBeCloseTo(67 * 0.08);
+  scanner.togglePause();
+  scanner.frame(35000, frame);
+  const raw = scanner.result();
+  expect(raw.keyframes).toHaveLength(MAX_FUSION_KEYFRAMES);
+  expect(raw.keyframes.at(-1).camera[0]).toBeCloseTo(68 * 0.08);
+  expect(raw.stats.adaptiveCapture).toMatchObject({ connected: true, capacityReached: false });
+  expect(scanner.stats.errors).toEqual([]);
+  expect(scanner.stats.previewRebuilds).toBeGreaterThan(0);
+  expect(scanner.previewNeedsRebuild).toBe(false);
+});
+
 test.each(["hit-test", "planes", "preview", "recovery-marker", "render"])(
   "a transient %s error leaves depth acquisition running",
   (stage) => {

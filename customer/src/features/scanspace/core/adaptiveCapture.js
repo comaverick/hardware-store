@@ -407,25 +407,62 @@ export class AdaptiveCapture {
     for (const neighbors of this.links.values()) neighbors.delete(frame.captureId);
     this.frames = this.frames.filter(value => value !== frame);
   }
+  redundantTrackedFrame() {
+    // Balance the spacing along the retained trajectory, rather than discarding
+    // the oldest section or repeatedly thinning one fixed timeline slot. Keep
+    // translated pairs at both ends so startup and the current area retain
+    // independent depth support. Small test/replay buffers still keep both ends.
+    const protectedEnds = this.maximumFrames >= 4 ? 2 : 1;
+    const candidates = this.frames.map((frame, index) => ({ frame, index }))
+      .slice(protectedEnds, -protectedEnds);
+    const withoutPhotos = candidates.filter(({ frame }) => !frame.colorImage?.length);
+    const eligible = withoutPhotos.length ? withoutPhotos : candidates;
+    const poses = this.frames.map(camera);
+    const span = (left, right) => distance(poses[left], poses[right]) +
+      angle(this.frames[left], this.frames[right]) * 0.3;
+    let selected = null, bestCost = Infinity, bestQuality = Infinity;
+    for (const { frame, index } of eligible) {
+      const localSpan = span(index - 1, index) + span(index, index + 1);
+      // Removing a corner or a direction reversal loses more of the trajectory
+      // than removing a view along a straight, densely sampled pass.
+      const cost = localSpan + 4 * Math.max(0, localSpan - span(index - 1, index + 1));
+      const quality = (frame.measuredDepthCount ?? frame.validCount ?? 0) /
+        Math.max(1, frame.depths.length);
+      if (cost < bestCost - 1e-6 || (Math.abs(cost - bestCost) <= 1e-6 && quality < bestQuality)) {
+        selected = frame;
+        bestCost = cost;
+        bestQuality = quality;
+      }
+    }
+    return selected;
+  }
   commit(frame, edges) {
     this.frames.push(frame);
     this.links.set(frame.captureId, new Set(edges));
     edges.forEach(id => this.links.get(id)?.add(frame.captureId));
     if (this.frames.length > this.maximumFrames) {
-      const candidates = this.frames.slice(1, -1).filter(value => !value.colorImage?.length)
-        .sort((a, b) => {
-          const novelty = value => Math.min(...this.frames.filter(other => other !== value)
-            .map(other => distance(camera(value), camera(other)) + angle(value, other) * 0.3));
-          return novelty(a) - novelty(b);
-        });
-      const removable = candidates.find(value => graphConnected(this.frames, this.links, value.captureId));
+      const removable = !this.validateOverlap ? this.redundantTrackedFrame() :
+        this.frames.slice(1, -1).filter(value => !value.colorImage?.length)
+          .sort((a, b) => {
+            const novelty = value => Math.min(...this.frames.filter(other => other !== value)
+              .map(other => distance(camera(value), camera(other)) + angle(value, other) * 0.3));
+            return novelty(a) - novelty(b);
+          }).find(value => graphConnected(this.frames, this.links, value.captureId));
       if (!removable) {
         this.remove(frame);
         this.capacityReached = true;
         this.events.capacityStops++;
         return false;
       }
+      const neighbors = [...(this.links.get(removable.captureId) || [])];
       this.remove(removable);
+      if (!this.validateOverlap) {
+        // Native trajectory links describe capture continuity. Splice the
+        // neighbors when thinning that path; they remain diagnostic metadata,
+        // never proof of depth overlap. Strict mode keeps its measured edges.
+        for (const left of neighbors) for (const right of neighbors)
+          if (left !== right) this.links.get(left)?.add(right);
+      }
       this.events.removed++;
     }
     this.capacityReached = false;
@@ -562,6 +599,7 @@ export class AdaptiveCapture {
       this.reason = "capacity";
       return { accepted: false, committed: [], reason: "capacity" };
     }
+    this.capacityReached = false;
     this.state = "tracking";
     this.reason = "connected";
     this.uncertainSince = null;

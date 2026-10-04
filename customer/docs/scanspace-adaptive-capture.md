@@ -24,8 +24,15 @@ measurements cannot be recovered from old exports, and unseen surfaces remain op
   eight seconds. After startup, usable novel views are retained immediately.
   Capture links in `xr-tracking` mode describe native trajectory continuity;
   they do not certify geometric depth agreement.
-- The 60-view limit remains. Once the retained trajectory reaches capacity, save
-  this section rather than silently replacing earlier captured areas.
+- The scanner retains at most 60 depth views and keeps acquiring new viewpoints.
+  At capacity it removes a redundant interior view, balancing position and turn
+  spacing along the whole retained trajectory. The initial and latest translated
+  pairs stay pinned, as do photo views while other depth candidates are available.
+  Corners and direction reversals receive higher retention priority. Native
+  trajectory links are spliced around the removed view; reconstruction still
+  checks actual depth overlap independently. The preview is rebuilt in batches,
+  and review/export always rebuild from the exact retained views. Longer scans
+  have a more sparsely sampled path, so overlapping passes remain useful.
 - The live progress panel separates accepted room-direction sweep from confirmed
   overlap on observed surfaces. Unseen regions remain "Not seen", completed
   lower/wall/upper regions stay marked as covered, and the weakest area becomes
@@ -94,9 +101,12 @@ puts the preview and save controls side by side. Expanded details may scroll.
 Test a continuous sideways sweep, stationary hold, quick turn, out-and-back
 shake, tracking loss/return, and a scan longer than 60 views. Confirm that recovery
 does not stop depth acquisition, ambiguous frames never paint confirmed coverage,
-and capture resumes after validated overlap. Check an upper surface, floor/wall
-join, and object silhouette from the front and both sides in the final preview.
+and capture resumes after usable native tracking returns. Check an upper surface,
+floor/wall join, and object silhouette from the front and both sides in the final preview.
 Exercise both Keep scanning and Save partial scan after a failed review.
+Capture more than 60 novel views, review, then select Keep scanning. New areas
+should keep adding saved views without the section-capacity warning; the depth
+buffer must remain bounded and the earlier, middle and latest areas represented.
 
 Repeat brief motion skips, a depth interruption, and an actual coordinate reset.
 Capture should resume on the next usable tracked view; turning to new areas must
