@@ -20,6 +20,14 @@ measurements cannot be recovered from old exports, and unseen surfaces remain op
   camera jump skips that observation. The next usable tracked view resumes capture
   without needing to match an older saved surface. An XR reference-space reset
   still stops the scan and requires a new session.
+- When depth is temporarily missing, the scanner probes each tracked XR callback
+  until a real depth update arrives. A depth object is only read during its own
+  active XR frame. Fixed-interval retries can miss intermittent frame updates;
+  normal grid sampling and RGB timing resume after the signal returns. Null
+  probes skip geometry, image readback and plane updates. Depth API exceptions
+  retain a bounded retry interval. Persistent absence still produces a warning
+  and keeps the captured views available to review; it is never filled with
+  fabricated depth.
 - Pending views are used only during startup and remain bounded to six views for
   eight seconds. After startup, usable novel views are retained immediately.
   Capture links in `xr-tracking` mode describe native trajectory continuity;

@@ -909,6 +909,53 @@ test("a persistent depth outage escalates, retries cheaply, and clears when vali
   expect(scanner.stats.captureFeedback.code).not.toBe("depth-stalled");
 });
 
+test("depth recovery checks intervening XR frames so a brief depth update is not missed", () => {
+  const { scanner, frame, move } = captureHarness();
+  const originalReads = frame.getDepthInformation.mock.calls.length;
+  let available = false;
+  frame.getDepthInformation.mockImplementation(() => available
+    ? { width: 320, height: 240, getDepthInMeters: () => 2 } : null);
+  move(0.16);
+  scanner.frame(1200, frame);
+  expect(scanner.stats.depthFailureKind).toBe("depth-missing");
+  // This depth update arrives between the old timed retries and is valid only
+  // for its own XR frame. Reusing that XR object later would be invalid.
+  for (let index = 1; index <= 12; index++) {
+    available = index === 8;
+    scanner.frame(1200 + index * 20, frame);
+  }
+  expect(frame.getDepthInformation).toHaveBeenCalledTimes(originalReads + 9);
+  expect(scanner.stats.depthRecoveryState).toBe("active");
+  expect(scanner.stats.depthRecoveries).toBe(1);
+  expect(scanner.keyframes).toHaveLength(3);
+  expect(scanner.keyframes.at(-1).timestamp).toBe(1360);
+  expect(scanner.stats.captureFeedback.code).not.toBe("depth-stalled");
+  expect(scanner.stats.errors).toEqual([]);
+});
+
+test("missing depth continues probing without adding geometry or bypassing pause and tracking loss", () => {
+  const { scanner, frame, move, setEmulated } = captureHarness();
+  const savedIds = scanner.keyframes.map(view => view.captureId);
+  frame.getDepthInformation.mockReturnValue(null);
+  move(0.16);
+  scanner.frame(1400, frame);
+  const reads = frame.getDepthInformation.mock.calls.length;
+  for (let index = 1; index <= 8; index++) scanner.frame(1400 + index * 20, frame);
+  expect(frame.getDepthInformation).toHaveBeenCalledTimes(reads + 8);
+  expect(scanner.keyframes.map(view => view.captureId)).toEqual(savedIds);
+  scanner.paused = true;
+  scanner.frame(1600, frame);
+  expect(frame.getDepthInformation).toHaveBeenCalledTimes(reads + 8);
+  scanner.paused = false;
+  setEmulated(true);
+  scanner.frame(1640, frame);
+  expect(frame.getDepthInformation).toHaveBeenCalledTimes(reads + 8);
+  setEmulated(false);
+  scanner.frame(1660, frame);
+  expect(frame.getDepthInformation).toHaveBeenCalledTimes(reads + 9);
+  expect(scanner.keyframes.map(view => view.captureId)).toEqual(savedIds);
+});
+
 test("the watchdog reports stopped XR callbacks instead of leaving the last prompt frozen", () => {
   const { scanner, frame } = captureHarness();
   scanner.lastFrameAt = 1200;

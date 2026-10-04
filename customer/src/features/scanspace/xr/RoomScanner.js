@@ -1048,12 +1048,14 @@ export class RoomScanner {
           linearSpeed: this.cameraMotion?.linearSpeed || 0, angularSpeed: this.cameraMotion?.angularSpeed || 0,
         });
         const elapsedSinceCapture = time - (this.lastCapture || 0);
-        // During a depth outage only cheap sensor reads are attempted. Normal
-        // processing and quality gates resume on the first valid depth frame.
-        const cheapDepthRetry = ["depth-missing", "depth-read-error", "xr-frame-stalled"]
-          .includes(this.stats.depthFailureKind);
-        const retryInterval = this.depthFailureSince != null && cheapDepthRetry
-          ? Math.min(profile.interval, DEPTH_RETRY_INTERVAL_MS) : profile.interval;
+        // Depth availability belongs to the current XR frame. Timed polling can
+        // repeatedly miss an intermittent update, so probe every live callback
+        // while no depth is available. Null reads return before grid sampling,
+        // RGB readback or geometry work. API errors retain their retry backoff.
+        const missingDepth = ["depth-missing", "xr-frame-stalled"].includes(this.stats.depthFailureKind);
+        const retryInterval = this.depthFailureSince == null ? profile.interval :
+          missingDepth ? 0 : this.stats.depthFailureKind === "depth-read-error"
+            ? Math.min(profile.interval, DEPTH_RETRY_INTERVAL_MS) : profile.interval;
         const settledRetryInterval = Math.min(profile.interval,
           Math.max(120, Math.ceil(this.captureProcessingMs * 2) || 120));
         const settledAfterMotion = this.stats.frameQuality === "moving-too-fast" &&
@@ -1065,7 +1067,7 @@ export class RoomScanner {
         if (!this.paused && view && (elapsedSinceCapture >= retryInterval || settledAfterMotion)) {
           this.lastCapture = time;
           this.captureDepthFrame(time, frame, view);
-          try {
+          if (this.stats.depthCurrent) try {
             const planes = frame.detectedPlanes;
             if (planes) {
               for (const plane of this.planes.keys())
