@@ -4,6 +4,20 @@ import { createScanMeshResources, shadeUnobservedBacks, observedSideProgramKey }
 import { paintRoughness, sanitizeScanCustomization } from "../core/scanCustomization";
 import { createFloorFinishTexture, createScanFinishGeometry } from "../core/scanFinishRendering";
 import { getScanDesignSurfaces } from "../core/scanDesignSurfaces";
+import {
+  capturedWallLightReference, createWallLightingTexture, sidedWallPaintProgramKey,
+  wallPaintProgramKey, wallPaintShader,
+} from "../core/scanWallLighting";
+
+const preparedLightReference = [.5, .5, .5], neutralLightReference = [1, 1, 1];
+
+function WallPaint({ finish, map, lightMap, reference = neutralLightReference, vertexColors = false,
+  observedSide = false, attach, side = THREE.FrontSide }) {
+  const shader = useMemo(() => wallPaintShader(reference, observedSide), [reference, observedSide]);
+  return <meshStandardMaterial attach={attach} color={finish.color} map={map} lightMap={lightMap} vertexColors={vertexColors}
+    roughness={paintRoughness(finish.finish)} metalness={0} side={side} toneMapped={false}
+    onBeforeCompile={shader} customProgramCacheKey={observedSide ? sidedWallPaintProgramKey : wallPaintProgramKey} />;
+}
 
 function CapturedMaterial({ mesh, resources, sided, low, attach }) {
   return resources.texture ? (
@@ -20,6 +34,11 @@ function CapturedMaterial({ mesh, resources, sided, low, attach }) {
 function CapturedSurface({ mesh, low, geometryOnly, applied, surfaces, design }) {
   const resources = useMemo(() => createScanMeshResources(mesh), [mesh]);
   const hasFinishes = !!(applied && surfaces?.labels.length);
+  const hasWallFinish = !!applied?.walls;
+  const wallReference = useMemo(() => hasWallFinish ? capturedWallLightReference(mesh, surfaces) : neutralLightReference,
+    [hasWallFinish, mesh, surfaces]);
+  const capturedWallProps = { finish: applied?.walls, map: resources.texture, reference: wallReference,
+    vertexColors: true, observedSide: !!mesh.observedSideOriented, side: THREE.DoubleSide };
   const finishGeometry = useMemo(() => hasFinishes || design
     ? createScanFinishGeometry(resources.geometry, mesh, surfaces || {
       labels: new Uint8Array(mesh.indices.length / 3), floorAxes: [[1, 0, 0], [0, 0, 1]],
@@ -68,7 +87,7 @@ function CapturedSurface({ mesh, low, geometryOnly, applied, surfaces, design })
         <>
           <CapturedMaterial key="captured-group" attach="material-0" {...{ mesh, resources, sided, low }} />
           {[[1, "walls"], [2, "floor"], [3, "ceiling"]].map(([index, kind]) =>
-            applied[kind] ? (
+            applied[kind] ? kind === "walls" ? <WallPaint key={kind} attach={`material-${index}`} {...capturedWallProps} /> : (
               <meshStandardMaterial key={kind} {...sided} attach={`material-${index}`}
                 color={kind === "floor" ? "#ffffff" : applied[kind].color}
                 map={kind === "floor" ? floorTexture : null}
@@ -87,7 +106,8 @@ function CapturedSurface({ mesh, low, geometryOnly, applied, surfaces, design })
       {hasFinishes ? <>
         <CapturedMaterial key="details" attach="material-0" {...{ mesh, resources, sided, low }} />
         {[[1, "walls"], [2, "floor"], [3, "ceiling"]].map(([index, kind]) => applied[kind]
-          ? <meshStandardMaterial key={kind} {...sided} attach={`material-${index}`}
+          ? kind === "walls" ? <WallPaint key={kind} attach={`material-${index}`} {...capturedWallProps} />
+          : <meshStandardMaterial key={kind} {...sided} attach={`material-${index}`}
             color={kind === "floor" ? "#ffffff" : applied[kind].color}
             map={kind === "floor" ? floorTexture : null}
             roughness={kind === "floor" ? .8 : paintRoughness(applied[kind].finish)}
@@ -100,6 +120,7 @@ function CapturedSurface({ mesh, low, geometryOnly, applied, surfaces, design })
 
 function DesignWall({ wall, finish }) {
   const resources = useMemo(() => createScanMeshResources(wall), [wall]);
+  const lightingTexture = useMemo(() => createWallLightingTexture(wall), [wall]);
   const detailTexture = useMemo(() => {
     if (!wall.texture || !wall.detailMask?.some(Boolean)) return null;
     const pixels = wall.texture.data.slice();
@@ -111,10 +132,11 @@ function DesignWall({ wall, finish }) {
   }, [wall]);
   useEffect(() => () => { resources.geometry.dispose(); resources.texture?.dispose(); detailTexture?.dispose(); },
     [resources, detailTexture]);
+  useEffect(() => () => lightingTexture?.dispose(), [lightingTexture]);
   return <group name={wall.id}>
     <mesh geometry={resources.geometry} frustumCulled={false} name="prepared-wall">
-      {finish ? <meshStandardMaterial key="paint" color={finish.color}
-        roughness={paintRoughness(finish.finish)} metalness={0} side={THREE.FrontSide} />
+      {finish ? <WallPaint key="paint" finish={finish} lightMap={lightingTexture}
+        reference={lightingTexture ? preparedLightReference : neutralLightReference} />
         : <meshBasicMaterial key="photo" map={resources.texture} side={THREE.FrontSide} toneMapped={false} />}
     </mesh>
     <mesh geometry={resources.geometry} frustumCulled={false} name="prepared-wall-back">

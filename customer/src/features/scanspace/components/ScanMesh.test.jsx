@@ -91,7 +91,11 @@ test("paint and reset use the prepared wall while Geometry retains the measured 
     expect(wall.geometry.attributes.position.array).toBe(mesh.designSurfaces.walls[0].positions);
     expect(wall.material.color.getHexString()).toBe("53665b");
     expect(wall.material.roughness).toBe(.5);
-    expect(wall.material.onBeforeCompile).toBe(THREE.Material.prototype.onBeforeCompile);
+    expect(wall.material.onBeforeCompile).not.toBe(THREE.Material.prototype.onBeforeCompile);
+    const lightingTexture = wall.material.lightMap;
+    expect(lightingTexture).not.toBeNull();
+    expect(lightingTexture.colorSpace).toBe(THREE.NoColorSpace);
+    expect(wall.material.toneMapped).toBe(false);
     expect(wall.material.side).toBe(THREE.FrontSide);
     const back = scene.getObjectByName("prepared-wall-back");
     expect(back.material.side).toBe(THREE.BackSide);
@@ -108,10 +112,13 @@ test("paint and reset use the prepared wall while Geometry retains the measured 
     expect(floorEdge.material[2].map.channel).toBe(1);
     expect(floorEdge.material[2].map.rotation).toBeCloseTo(Math.PI / 2);
     expect(floorEdge.geometry.attributes.uv.array).toBe(mesh.designSurfaces.fragments.uvs);
+    expect(scene.getObjectByName("prepared-wall").material.lightMap).toBe(lightingTexture);
     scene = await update(null);
     wall = scene.getObjectByName("prepared-wall");
     expect(wall.material.isMeshBasicMaterial).toBe(true);
     expect(wall.material.map).not.toBeNull();
+    expect(wall.material.map).not.toBe(lightingTexture);
+    expect(wall.material.map.colorSpace).toBe(THREE.SRGBColorSpace);
     expect(wall.material.side).toBe(THREE.FrontSide);
     const resetEdge = scene.getObjectByName("captured-boundary-details");
     expect(resetEdge.material.isMeshBasicMaterial).toBe(true);
