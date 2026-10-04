@@ -25,6 +25,7 @@ import {
   stabilizeMeasuredWallSectors,
   textureColorDifference,
   textureProjectionStretch,
+  texturedMesh,
   wallConsensusKeyframes,
   projectWorld,
 } from "./fusion";
@@ -178,6 +179,33 @@ function planeKeyframe(
       : null,
   });
 }
+
+test("corrected photographed floor keeps real image detail while generic estimates and occluded rays remain untextured", () => {
+  const source = planeKeyframe(), depth = filterDepth(source);
+  const pose = new Matrix4().makeRotationX(-Math.PI / 2);
+  for (let i = 0; i < source.positions.length; i += 3) {
+    const p = new Vector3(...source.positions.subarray(i, i + 3)).applyMatrix4(pose);
+    source.positions.set(p.toArray(), i);
+  }
+  const frame = { ...source, transformMatrix: new Float32Array(pose.elements),
+    viewTransformMatrix: new Float32Array(pose.elements), filteredDepth: depth.filtered, measuredMask: depth.measuredMask };
+  const mesh = {
+    positions: new Float32Array([-.5,-2,.5, .5,-2,.5, 0,-2,-.5]),
+    colors: new Uint8Array(9).fill(90), indices: new Uint32Array([0,1,2]),
+    estimatedTriangleMask: new Uint8Array([1]), surfacePatchIds: new Int32Array([0]),
+    planarConsolidation: { planes: [{ kind: "floor", normal: [0,1,0], offset: -2, photographedFloor: true }] },
+  };
+  const result = texturedMesh(mesh, [frame]);
+  expect(result.textureCoverage).toBe(100);
+  expect(result.untexturedEstimatedTriangles).toBe(0);
+  expect(result.estimatedTriangleMask[0]).toBe(1);
+  const generic = texturedMesh({ ...mesh, planarConsolidation: { planes: [] } }, [frame]);
+  expect(generic.textureCoverage).toBe(0);
+  expect(generic.untexturedEstimatedTriangles).toBe(1);
+  const blocked = texturedMesh(mesh, [{ ...frame, filteredDepth: new Float32Array(256).fill(1) }]);
+  expect(blocked.textureCoverage).toBe(0);
+  expect(blocked.untexturedEstimatedTriangles).toBe(1);
+});
 
 test("fusion thinning preserves every bounded color view before depth-only frames", () => {
   const colorIndices = [4, 19, 37, 52];
@@ -937,7 +965,7 @@ test("allows validated multi-view surface fusion without a room heading sweep", 
   expect(result.mesh?.kind).toBe("projective-tsdf-surface-net");
   expect(result.mesh?.triangleCount).toBeGreaterThan(0);
   expect(result.diagnostics.completionMode).toBe("surface");
-  expect(result.diagnostics.algorithmVersion).toBe(55);
+  expect(result.diagnostics.algorithmVersion).toBe(58);
   expect(result.diagnostics.planarConsolidation.planes.length).toBeGreaterThan(0);
   expect(result.diagnostics.globalSurfaceConsensus).toBeUndefined();
   expect(result.diagnostics.measuredSurfaceQuality.assessed).toBe(true);

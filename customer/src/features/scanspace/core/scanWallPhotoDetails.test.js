@@ -72,3 +72,26 @@ test("photographic texture and substantial measured relief still protect neutral
   expect(cells.get("10,10").detail).toBe(true);
   expect(cells.get("11,11").detail).toBe(false);
 });
+
+test("a framed picture with disconnected flowers and glare stays protected as a whole",()=>{
+  const cells=new Map();
+  for(let y=0;y<40;y++)for(let x=0;x<45;x++) {
+    const picture=x>=8&&x<=35&&y>=8&&y<=30;
+    const border=picture&&(x===8||x===35||y===8||y===30);
+    const glare=picture&&x>18&&x<26&&y>14&&y<21;
+    cells.set(`${x},${y}`,{x,y,rgb:picture ? border ? [150,110,45] : glare ? lit :
+      (x+y)%7===0 ? [220,180,50] : [50,55,65] : lit,
+      photoFrame:{frameId:1},textureDetail:border});
+  }
+  classifyWallPhotoDetails(cells,.04);
+  expect(cells.get("22,18").detail).toBe(true);
+  expect(cells.get("12,20").framedPicture).toBe(true);
+  expect(cells.get("7,20").detail).toBe(false);
+  expect(cells.get("36,20").detail).toBe(false);
+});
+test("depth-only bumps on a photographed blank wall cannot become artwork anchors",()=>{
+  const cells=grid(()=>lit);
+  for(const p of cells.values()){p.photoFrame={frameId:1};p.foreground=true;p.foregroundOffset=.12;}
+  classifyWallPhotoDetails(cells,.04);
+  expect([...cells.values()].some(p=>p.detail)).toBe(false);
+});

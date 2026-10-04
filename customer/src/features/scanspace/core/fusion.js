@@ -1,6 +1,7 @@
 import { consolidatePlanarSurfaces } from "./planarSurface.js";
 import { refineJointTrajectory, recoverFrameComponents } from "./trajectoryAlignment.js";
 import { discoverStructuralPlanes, regularizeStructuralDepth } from "./structuralDepth.js";
+import { alignFinishedScan } from "./scanCoordinates";
 import { repairCeilingRegions } from "./ceilingRecovery.js";
 import { createColorGapRepair } from "./colorGapRepair.js";
 import { blendRepairColors } from "./repairColors.js";
@@ -4415,10 +4416,14 @@ export function texturedMesh(mesh, frames, precomputedCalibration = null, option
     faceNormal.z /= faceNormalLength;
     const candidates = [];
     const isEstimated = !!mesh.estimatedTriangleMask?.[index / 3];
+    const photographedFloor = mesh.planarConsolidation?.planes?.[mesh.surfacePatchIds?.[index / 3]]?.photographedFloor;
     atlas.frames.forEach((frame) => {
       // A filled crack has no original camera ray of its own. A nearby image
       // can show a different surface even when its projected depth is close.
-      if (isEstimated) return;
+      // A rebuilt photographed floor already has independent native depth
+      // ownership. Its corrected shape remains an estimate, while its photo
+      // must still pass every center/corner visibility check below.
+      if (isEstimated && !photographedFloor) return;
       const colorProjection = projectColorWorld(
         frame,
         center.x,
@@ -4861,7 +4866,7 @@ export function texturedMesh(mesh, frames, precomputedCalibration = null, option
     const triangle = record.triangle;
     const best = record.candidates[record.selected] || null;
     if (best) texturedTriangles++;
-    if (record.estimated) untexturedEstimatedTriangles++;
+    if (record.estimated && !best) untexturedEstimatedTriangles++;
     if (best?.recoveredTexture) recoveredTextureTriangles++;
     if (best && !best.qualityPreferred) softTextureFallbackTriangles++;
     // The atlas was photographed from one side of this thin measured sheet.
@@ -4941,13 +4946,12 @@ export function texturedMesh(mesh, frames, precomputedCalibration = null, option
   };
 }
 
-function meshBounds(positions, floorY) {
+function meshBounds(positions) {
   const bounds = {
     min: { x: Infinity, y: Infinity, z: Infinity },
     max: { x: -Infinity, y: -Infinity, z: -Infinity },
   };
   for (let index = 0; index < positions.length; index += 3) {
-    positions[index + 1] -= floorY;
     ["x", "y", "z"].forEach((axis, offset) => {
       bounds.min[axis] = Math.min(bounds.min[axis], positions[index + offset]);
       bounds.max[axis] = Math.max(bounds.max[axis], positions[index + offset]);
@@ -5662,11 +5666,14 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
           proposedMaxBoundaryDisplacementMeters: stages.structuralRebuild.maxBoundaryDisplacementMeters,
           proposedPhotographedCeilingPlanes: stages.structuralRebuild.photographedCeilingPlanes,
           proposedRemovedBentCeilingTriangles: stages.structuralRebuild.removedBentCeilingTriangles,
+          proposedPhotographedFloorPlanes: stages.structuralRebuild.photographedFloorPlanes,
+          proposedRemovedBentFloorTriangles: stages.structuralRebuild.removedBentFloorTriangles,
           reconstructedArea: 0, reconstructedTriangles: 0,
           removedTriangles: 0, removedCompetingTriangles: 0,
           correctedBoundaryVertices: 0, splitBoundaryEdges: 0,
           maxBoundaryDisplacementMeters: 0,
           photographedCeilingPlanes: 0, removedBentCeilingTriangles: 0,
+          photographedFloorPlanes: 0, removedBentFloorTriangles: 0,
           estimatedArea: 0, estimatedTriangles: 0, estimatedHoleCount: 0,
           bridgedArea: 0, bridgedCells: 0, bridgedRuns: 0,
           planes: [] };
@@ -5794,7 +5801,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
     vertexCount: textured.positions.length / 3,
     triangleCount: textured.indices.length / 3,
     floorY,
-    bounds: meshBounds(textured.positions, floorY),
+    bounds: meshBounds(textured.positions),
     observer: { x: options.observer?.x || 0, y: 1.6, z: options.observer?.z || 0 },
   };
   if (surfaceCompletion) {
@@ -5812,11 +5819,12 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       stages.designSurfaces = { walls: 0, fallback: true, reason: error.message };
     }
   }
+  const finished = alignFinishedScan(mesh, stages, floorY);
   return {
-    mesh,
+    mesh: finished.mesh,
     observations: buildAcceptedObservations(usable),
     diagnostics: {
-      ...stages,
+      ...finished.diagnostics,
       reason: "Projective RGB-D fusion completed.",
       keyframes: usable.length,
       rejectedKeyframes: prepared.length - usable.length,

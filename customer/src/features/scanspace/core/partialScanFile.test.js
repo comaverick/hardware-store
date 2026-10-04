@@ -101,7 +101,7 @@ test("portable designs retain flat walls and measured source geometry through a 
   const fallback = parsePartialScan(JSON.stringify(damaged));
   expect(fallback.mesh.designSurfaces).toBeNull();
   expect(fallback.mesh.positions).toEqual(scan.mesh.positions);
-  for (const version of [51,52,53,54]) {
+  for (const version of [51,52,53,54,55,56,57]) {
     const previousJoin = JSON.parse(encoded);
     previousJoin.scan.mesh.designSurfaces.sourceAlgorithmVersion = version;
     const rebuiltFallback = parsePartialScan(JSON.stringify(previousJoin));
@@ -109,6 +109,17 @@ test("portable designs retain flat walls and measured source geometry through a 
     expect(rebuiltFallback.mesh.positions).toEqual(scan.mesh.positions);
     expect(rebuiltFallback.mesh.indices).toEqual(scan.mesh.indices);
   }
+});
+
+test("portable geometry retains its floor reference and aligned plane coordinate marker",()=>{
+  const scan=measuredScan();
+  scan.mesh.floorY=-.27; scan.mesh.coordinateMode="floor-aligned-v1";
+  scan.captureQuality={structuralDepth:{coordinateMode:"floor-aligned-v1",planes:[{kind:"floor",normal:[0,1,0],offset:0}]}};
+  const decoded=parsePartialScan(serializePartialScan(scan));
+  expect(decoded.mesh.floorY).toBe(-.27);
+  expect(decoded.mesh.coordinateMode).toBe("floor-aligned-v1");
+  expect(decoded.captureQuality.structuralDepth.coordinateMode).toBe("floor-aligned-v1");
+  expect(decoded.captureQuality.structuralDepth.planes[0].offset).toBe(0);
 });
 
 test("portable adjusted boundaries retain their photos, source ownership, and estimate mask", () => {

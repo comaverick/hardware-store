@@ -3,6 +3,7 @@
 // a single triangulation removes that viewpoint-dependent layering instead.
 import { structuralRepairMinimumArea } from './structuralCriteria';
 import { independentFrameIds } from './structuralDepth';
+import { floorSurfaceOwnership } from './floorSurfaceOwnership';
 const dot = (a, b) => a.reduce((s, v, i) => s + v * b[i], 0);
 const sub = (a, b) => a.map((v, i) => v - b[i]);
 const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
@@ -153,18 +154,23 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
     preservedBoundaryCells: 0,
     preservedBoundaryArea: 0,
     preservedAttachmentEdges: 0,
+    joinedFloorAttachmentEdges: 0,
     maxBoundaryDisplacementMeters: 0,
     boundaryCorrectionLimitMeters: Math.min(.05, replacementBandMeters),
+    nativeFloorBoundaryCorrectionLimitMeters: .12,
     minimumCellViews,
     replacementBandMeters,
     photographedCeilingPlanes: 0,
     removedBentCeilingTriangles: 0,
+    photographedFloorPlanes: 0,
+    removedBentFloorTriangles: 0,
   };
   const patches = [];
   for (const plane of planes) {
     if (plane.kind === 'wall' || plane.supportingFrameIds.length < 3 || plane.area < structuralRepairMinimumArea(plane.kind)) continue;
-    const ownership = ceilingOwnership(plane, frames, helpers);
-    const flatEvidence = p => {
+    const floorOwnership = floorSurfaceOwnership(plane, frames, helpers);
+    const ownership = floorOwnership?.owns || ceilingOwnership(plane, frames, helpers);
+    const flatEvidence = floorOwnership?.flatEvidence || (p => {
       const ids = [];
       for (const frame of frames) {
         if (frame.textureOnly || !frame.ceilingFlatEvidenceMask) continue;
@@ -184,7 +190,7 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
             projection && Math.abs(depth-projection.depth) <= .08) ids.push(frame.frameId);
       }
       return independentCount(ids) >= 2;
-    };
+    });
     // The ceiling plane and each coarse footprint already have three depth
     // observers. Two translated rays plus two photographs can support a finer
     // interior cell; requiring three rays in every 4 cm cell fragments a valid
@@ -192,12 +198,13 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
     const minimumInteriorViews = ownership ? 2 : minimumCellViews;
     const cell = ownership ? Math.min(.04, plane.cellSize) : plane.cellSize,
       occupied = new Map();
-    for (const [k, views] of plane.cells) if (views.size >= minimumCellViews && (!ownership ||
-        independentCount(views) >= minimumCellViews)) {
+    const footprintViews = floorOwnership ? 2 : minimumCellViews;
+    for (const [k, views] of plane.cells) if (views.size >= footprintViews && (!ownership ||
+        independentCount(views) >= footprintViews)) {
       const [x, y] = k.split(',').map(Number), ratio = plane.cellSize / cell;
       for (let a = Math.round(x * ratio); a < Math.round((x + 1) * ratio); a++)
         for (let b = Math.round(y * ratio); b < Math.round((y + 1) * ratio); b++)
-          occupied.set(key(a, b), { estimated: false });
+          occupied.set(key(a, b), { estimated: !!floorOwnership });
     }
     const coordinates = [...occupied.keys()].map(k => k.split(',').map(Number));
     if (!coordinates.length) continue;
@@ -230,7 +237,7 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
           contradicting.push(f);
       }
       return {
-        agrees: independentCount(agreeing.map(frame => frame.frameId)),
+        agrees: floorOwnership ? floorOwnership.evidence(p).agrees : independentCount(agreeing.map(frame => frame.frameId)),
         contradicts: independentCount(contradicting.map(frame => frame.frameId))
       };
     };
@@ -337,6 +344,7 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
       grid: gridComponents(occupied),
       matchingPatchId,
       ownership,
+      floorOwnership: !!floorOwnership,
       flatEvidence,
     });
   }
@@ -353,6 +361,8 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
   const tolerance = 1e-5;
   const pointKey = p => p.map(v => Math.round(v / tolerance)).join(',');
   const distance = (a, b) => Math.hypot(...sub(a, b));
+  const boundaryLimit = patch => patch.floorOwnership ? diagnostics.nativeFloorBoundaryCorrectionLimitMeters :
+    diagnostics.boundaryCorrectionLimitMeters;
   // A replacement and its retained neighbors must use the same boundary.
   // Record the ORIGINAL boundary positions as well as their bounded proposals:
   // the original coordinates identify shared edges, including texture seams.
@@ -378,7 +388,7 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
     const proposed = p.map((v, i) => v - patch.plane.normal[i] * residual);
     if (patch.ownership && !patch.ownership(p, proposed)) return;
     const movement = distance(p, proposed);
-    if (movement > diagnostics.boundaryCorrectionLimitMeters + 1e-7) {
+    if (movement > boundaryLimit(patch) + 1e-7) {
       diagnostics.rejectedBoundaryCorrections++;
       return;
     }
@@ -395,15 +405,16 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
     }
     seams.set(k, seam);
   };
-  const replacementAt = (p, n, l, center) => patches.find(({ plane, occupied, cell, ownership }) => {
+  const replacementAt = (p, n, l, center) => patches.find(({ plane, occupied, cell, ownership, floorOwnership }) => {
     const residual = Math.max(...p.map(q => Math.abs(dot(plane.normal, q) - plane.offset)));
     if (ownership) {
-      // Larger removal is local to the previously verified photographed ceiling;
-      // the generic floor/ceiling correction and boundary caps stay unchanged.
-      if (residual > .72) return false;
+      // Native ownership uses separate floor and ceiling displacement bands.
+      // Generic corrections and non-floor shared boundaries keep their
+      // smaller band; independently owned floor seams use the floor band.
+      if (residual > (floorOwnership ? .12 : .72)) return false;
       // Ownership is checked on each clipped polygon below. Requiring every
-      // original corner would retain a large bent triangle across a valid
-      // ceiling boundary simply because its far corner belongs to trim.
+      // original corner would retain a bent triangle across a valid patch
+      // boundary simply because its far corner belongs to trim.
     } else {
       if (Math.abs(dot(n, plane.normal)) / l < .985 || residual > replacementBandMeters) return false;
     }
@@ -454,6 +465,18 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
     return [[a[0] + dx * start, a[1] + dy * start, a[2] + dz * start], [a[0] + dx * end, a[1] + dy * end, a[2] + dz * end]];
   };
   const preserveCellsAlong = (patch, a, b) => {
+    if (patch.floorOwnership && [a, a.map((v, i) => (v + b[i]) / 2), b].every(p => {
+      const residual = dot(patch.plane.normal, p) - patch.plane.offset;
+      return Math.abs(residual) <= boundaryLimit(patch) + 1e-7 &&
+        patch.ownership(p, p.map((v, i) => v - patch.plane.normal[i] * residual));
+    })) {
+      // This actual shared source edge has independent native floor support
+      // and uses the same 12 cm band as its floor rebuild. Keeping a whole cell
+      // around it would leave a crack where the retained curl/wall meets the
+      // new floor. Unsupported or larger attachments still keep their collar.
+      diagnostics.joinedFloorAttachmentEdges++;
+      return false;
+    }
     const first = patch.plane.axes.map(axis => dot(axis, a) / patch.cell), last = patch.plane.axes.map(axis => dot(axis, b) / patch.cell);
     const cuts = [0, 1], epsilon = tolerance / patch.cell;
     for (let axis = 0; axis < 2; axis++) {
@@ -472,6 +495,7 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
         for (const y of [Math.floor(q[1] - epsilon), Math.floor(q[1] + epsilon)])
           if (patch.occupied.has(key(x, y))) protectedCells.get(patch).add(key(x, y));
     }
+    return true;
   };
   // A retained curl can attach along an edge INSIDE a replacement cell. The new
   // grid need not contain that edge, so numerical welding cannot reconnect it.
@@ -483,20 +507,20 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
     const xs = [Math.min(...coordinates.map(q => q[0])), Math.max(...coordinates.map(q => q[0])) + 1];
     const ys = [Math.min(...coordinates.map(q => q[1])), Math.max(...coordinates.map(q => q[1])) + 1];
     const corners = xs.flatMap(x => ys.map(y => patch.world(x, y)));
-    const padding = patch.ownership ? .72 : .15;
+    const padding = patch.floorOwnership ? .12 : patch.ownership ? .72 : .15;
     return [patch, { min: [0, 1, 2].map(i => Math.min(...corners.map(p => p[i])) - padding - patch.cell),
       max: [0, 1, 2].map(i => Math.max(...corners.map(p => p[i])) + padding + patch.cell) }];
   }));
   for (const record of sourceRecords) {
     const nearby = patches.filter(patch => record.patch !== patch && (patch.ownership || Math.abs(dot(record.n, patch.plane.normal)) / record.l >= .35) &&
-      Math.max(...record.p.map(p => Math.abs(dot(patch.plane.normal, p) - patch.plane.offset))) <= (patch.ownership ? .72 : .15) &&
+      Math.max(...record.p.map(p => Math.abs(dot(patch.plane.normal, p) - patch.plane.offset))) <= (patch.floorOwnership ? .12 : patch.ownership ? .72 : .15) &&
       [0, 1, 2].every(i => Math.max(...record.p.map(p => p[i])) >= attachmentBounds.get(patch).min[i] && Math.min(...record.p.map(p => p[i])) <= attachmentBounds.get(patch).max[i]));
     if (!nearby.length) continue;
     for (let i = 0; i < 3; i++) {
       const a = record.p[i], b = record.p[(i + 1) % 3], candidates = new Set(), steps = Math.max(1, Math.ceil(distance(a, b) / (attachmentCell * .5)));
       const direct = attachmentDirect.get([pointKey(a), pointKey(b)].sort().join('/'));
       if (direct && nearby.includes(direct.patch)) {
-        preserveCellsAlong(direct.patch, a, b); diagnostics.preservedAttachmentEdges++;
+        if (preserveCellsAlong(direct.patch, a, b)) diagnostics.preservedAttachmentEdges++;
         continue;
       }
       for (let step = 0; step <= steps; step++) {
@@ -508,7 +532,7 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
       for (const edge of candidates) if (nearby.includes(edge.patch)) {
         const segment = overlapSegment(a, b, edge.a, edge.b);
         if (!segment) continue;
-        preserveCellsAlong(edge.patch, ...segment); preserved = true;
+        if (preserveCellsAlong(edge.patch, ...segment)) preserved = true;
       }
       if (preserved) diagnostics.preservedAttachmentEdges++;
     }
@@ -574,7 +598,7 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
     diagnostics.removedTriangles++;
     if (replacement.ownership && (Math.abs(dot(n, plane.normal)) / l < .985 ||
         p.some(q => Math.abs(dot(plane.normal, q) - plane.offset) > replacementBandMeters)))
-      diagnostics.removedBentCeilingTriangles++;
+      diagnostics[replacement.floorOwnership ? 'removedBentFloorTriangles' : 'removedBentCeilingTriangles']++;
     if (p.some(q => Math.abs(dot(plane.normal, q) - plane.offset) > 1e-5))
       diagnostics.removedCompetingTriangles++;
     faces.push({ sourceFace: t / 3, source: p, polygons: pieces, replacement });
@@ -735,7 +759,8 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
     occupied,
     world,
     cell,
-    ownership
+    ownership,
+    floorOwnership
   } of patches) {
     const patchId = storedPlanes.length,
       lookup = new Map();
@@ -743,6 +768,7 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
       normal: plane.normal,
       offset: plane.offset,
       kind: plane.kind,
+      photographedFloor: !!floorOwnership,
       supportingFrameIds: plane.supportingFrameIds,
       inputArea: occupied.size * cell * cell,
       retainedArea: occupied.size * cell * cell,
@@ -787,7 +813,7 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
       if (info.estimated) diagnostics.estimatedArea += cell * cell;
     }
     diagnostics.reconstructedArea += occupied.size * cell * cell;
-    if (ownership) diagnostics.photographedCeilingPlanes++;
+    if (ownership) diagnostics[plane.kind === 'floor' ? 'photographedFloorPlanes' : 'photographedCeilingPlanes']++;
     diagnostics.planes.push({
       kind: plane.kind,
       area: occupied.size * cell * cell,
@@ -795,7 +821,7 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
       grid: gridComponents(occupied),
       cellSize: cell,
       minimumInteriorDepthViews: ownership ? 2 : minimumCellViews,
-      minimumFootprintDepthViews: minimumCellViews,
+      minimumFootprintDepthViews: floorOwnership ? 2 : minimumCellViews,
     });
   }
   const result = {

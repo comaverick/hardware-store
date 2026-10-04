@@ -122,6 +122,25 @@ function wallReliefCells(frames, plane, axes, cells, minimumViews, minimumBaseli
 
 // Per-view fits must explain a broad patch, not just a ribbon on a curtain or
 // the top of a desk. Consensus is then required from translated camera poses.
+function fitStructuralPlane(records, seed, kind) {
+  if (kind !== 'wall') return fitPlane(records, seed);
+  // WebXR's Y axis is gravity-aligned. A vertical structural wall has a
+  // horizontal normal; allowing a height slope turns opposing depth bias into
+  // two intersecting copies of the same wall. Preserve its measured yaw.
+  let weight = 0, x = 0, z = 0;
+  for (const r of records) { weight += r.area; x += r.center[0] * r.area; z += r.center[2] * r.area; }
+  x /= weight; z /= weight;
+  let xx = 0, zz = 0, xz = 0;
+  for (const r of records) {
+    const dx = r.center[0] - x, dz = r.center[2] - z;
+    xx += dx * dx * r.area; zz += dz * dz * r.area; xz += dx * dz * r.area;
+  }
+  const angle = .5 * Math.atan2(2 * xz, xx - zz);
+  let n = [-Math.sin(angle), 0, Math.cos(angle)];
+  if (dot(n, seed.n) < 0) n = n.map(v => -v);
+  return { n, d: n[0] * x + n[2] * z };
+}
+
 function planeCandidate(samples, kind, floorY, seed) {
   const source = samples.filter(s => kind === 'floor' ? Math.abs(s.p[1] - floorY) < .3 && Math.abs(s.n[1]) > .9 : kind === 'ceiling' ? s.p[1] > floorY + 1.9 && Math.abs(s.n[1]) > .9 : Math.abs(s.n[1]) < .23 && s.p[1] > floorY + .2);
   if (source.length < 90) return null;
@@ -136,7 +155,7 @@ function planeCandidate(samples, kind, floorY, seed) {
       r = source[random()].p;
     const normal = cross(sub(q, p), sub(r, p));
     if (length(normal) < .08) continue;
-    const n = canonical(unit(normal));
+    const n = canonical(unit(kind === 'wall' ? [q[2] - p[2], 0, p[0] - q[0]] : normal));
     if (kind === 'wall' ? Math.abs(n[1]) > .12 : Math.abs(n[1]) < .985) continue;
     const d = dot(n, p),
       inliers = source.filter(s => Math.abs(dot(n, s.p) - d) < .03 && Math.abs(dot(n, s.n)) > .94);
@@ -153,7 +172,7 @@ function planeCandidate(samples, kind, floorY, seed) {
       p: [s.p],
       area: 1
     }));
-    const fitted = fitPlane(records, best);
+    const fitted = fitStructuralPlane(records, best, kind);
     best = {
       ...fitted,
       inliers: source.filter(s => Math.abs(dot(fitted.n, s.p) - fitted.d) < .035 && Math.abs(dot(fitted.n, s.n)) > .94)
@@ -175,6 +194,7 @@ function planeCandidate(samples, kind, floorY, seed) {
   return {
     ...best,
     kind,
+    axes, footprint: cells,
     area: cells.size * .0144
   };
 }
@@ -196,11 +216,26 @@ export function discoverStructuralPlanes(frames, {
       });
     }
   });
-  const planes = [],
+  const planeSources = new Map(), planes = [],
     used = new Set();
   for (const seed of candidates.slice().sort((a, b) => b.area - a.area)) {
     if (used.has(seed)) continue;
-    const group = candidates.filter(c => !used.has(c) && c.kind === seed.kind && dot(c.n, seed.n) > .993 && Math.abs(dot(seed.n, c.inliers[Math.floor(c.inliers.length / 2)].p) - seed.d) < (seed.kind === 'wall' ? .09 : .14));
+    const group = candidates.filter(c => {
+      if (used.has(c) || c.kind !== seed.kind || dot(c.n, seed.n) <= .993) return false;
+      const distance = Math.abs(dot(seed.n, c.inliers[Math.floor(c.inliers.length / 2)].p) - seed.d);
+      if (distance < (seed.kind === 'wall' ? .09 : .14)) return true;
+      if (seed.kind !== 'wall' || distance >= .18 ||
+          (dot(seed.n, c.frame.camera) - seed.d) * (dot(seed.n, seed.frame.camera) - seed.d) <= 0) return false;
+      // A second fit through the SAME observed wall footprint is depth bias,
+      // not another wall. Disjoint recesses and opposite partition sides must
+      // keep their own planes even when their equations are close together.
+      let overlap = 0;
+      for (const s of c.inliers) {
+        const k = seed.axes.map(a => Math.floor(dot(a, s.p) / .12)).join(',');
+        if (seed.footprint.has(k)) overlap++;
+      }
+      return overlap / c.inliers.length >= .6;
+    });
     const candidatesById = new Map(group.map(candidate => [candidate.frame.frameId, candidate]));
     const independent = [...independentFrameIds(candidatesById.keys(), framesById, minimumCameraBaseline)]
       .map(id => candidatesById.get(id));
@@ -210,7 +245,7 @@ export function discoverStructuralPlanes(frames, {
       center: s.p,
       area: 1 / c.inliers.length
     })));
-    const fit = fitPlane(records, seed),
+    const fit = fitStructuralPlane(records, seed, seed.kind),
       axes = basis(fit.n),
       cells = new Map();
     for (const c of group) for (const s of c.inliers) {
@@ -255,7 +290,7 @@ export function discoverStructuralPlanes(frames, {
       }
     }
     group.forEach(c => used.add(c));
-    planes.push({
+    const plane = {
       normal: fit.n,
       offset: fit.d,
       kind: seed.kind,
@@ -266,7 +301,44 @@ export function discoverStructuralPlanes(frames, {
       minimumCellViews,
       supportingFrameIds: independent.map(c => c.frame.frameId),
       area: supported * .0144
-    });
+    };
+    planes.push(plane); planeSources.set(plane, { records, group });
+  }
+  for (let i = 0; i < planes.length; i++) {
+    let a = planes[i];
+    if (a.kind !== 'wall') continue;
+    for (let j = i+1; j < planes.length; j++) {
+      const b = planes[j];
+      if (b.kind !== 'wall' || dot(a.normal,b.normal)<.997) continue;
+      const referenceNormal = a.normal, referenceOffset = a.offset;
+      const side = p => median(p.supportingFrameIds.map(id => dot(referenceNormal,framesById.get(id).camera)-referenceOffset));
+      if (side(a)*side(b)<=0) continue;
+      let overlap = 0, total = 0; const distances = [];
+      for (const [k,ids] of b.cells) {
+        if (ids.size<minimumCellViews) continue;
+        const [x,y]=k.split(',').map(Number);
+        const p=b.normal.map((v,h)=>v*b.offset+b.axes[0][h]*(x+.5)*b.cellSize+b.axes[1][h]*(y+.5)*b.cellSize);
+        total++; distances.push(Math.abs(dot(a.normal,p)-a.offset));
+        if (structuralSupportAt(a,p,minimumCellViews)) overlap++;
+      }
+      distances.sort((x,y)=>x-y);
+      if (!total || overlap/total<.5 || median(distances)>.14 || distances[Math.floor(distances.length*.9)]>.18) continue;
+      const records=[...planeSources.get(a).records,...planeSources.get(b).records];
+      const group=[...planeSources.get(a).group,...planeSources.get(b).group];
+      const fit=fitStructuralPlane(records,{n:a.normal,d:a.offset},'wall'), axes=basis(fit.n), cells=new Map();
+      for (const c of group) for (const s of c.inliers) {
+        if (Math.abs(dot(fit.n,s.p)-fit.d)>.1) continue;
+        const k=axes.map(axis=>Math.floor(dot(axis,s.p)/.12)).join(',');
+        if (!cells.has(k)) cells.set(k,new Set());
+        cells.get(k).add(c.frame.frameId);
+      }
+      for (const [k,ids] of cells) cells.set(k,independentFrameIds(ids,framesById,minimumCameraBaseline));
+      a={...a,normal:fit.n,offset:fit.d,axes,cells,
+        supportingFrameIds:[...independentFrameIds(group.map(c=>c.frame.frameId),framesById,minimumCameraBaseline)],
+        reliefCells:wallReliefCells(frames,fit,axes,cells,minimumCellViews,minimumCameraBaseline),
+        area:[...cells.values()].filter(ids=>ids.size>=minimumCellViews).length*.0144};
+      planes[i]=a; planeSources.set(a,{records,group}); planes.splice(j--,1);
+    }
   }
   return planes;
 }

@@ -344,6 +344,8 @@ function encodeMesh(mesh) {
       0,
     ),
     observer: mesh.observer || null,
+    floorY: Number.isFinite(mesh.floorY) ? mesh.floorY : null,
+    coordinateMode: mesh.coordinateMode || null,
     // A texture-backed export renders through the same camera atlas as the
     // live result. Only mark the mesh as portable when that atlas had to be
     // omitted and its sRGB pixels were baked into linear vertex colors.
@@ -555,6 +557,8 @@ function decodeMesh(mesh) {
   const decoded = {
     version: 3,
     kind: "portable-measured-mesh",
+    ...(Number.isFinite(mesh.floorY) ? { floorY: mesh.floorY } : {}),
+    ...(mesh.coordinateMode === "floor-aligned-v1" ? { coordinateMode: mesh.coordinateMode } : {}),
     positions,
     normals,
     colors,

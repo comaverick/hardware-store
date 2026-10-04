@@ -1,8 +1,63 @@
 import { linearScanBytes, scanLuminance } from "./scanSurfaceLighting";
+import { classifyFoldedPhotoPanels } from "./scanPhotoPanels";
 
 const key = (x, y) => `${x},${y}`;
 const neighbors = [[-1, 0], [1, 0], [0, -1], [0, 1]];
 const linear = rgb => rgb.map(value => linearScanBytes[Math.max(0, Math.min(255, Math.round(value)))]);
+
+// Glare and pale flowers can split a picture's contrast into several islands.
+// Propose a rectangle from observed horizontal runs, then require contrast on
+// all four sides and real color/texture anchors inside it. A shadow or an L-shaped
+// object cannot supply those boundaries. Do not grow through curtain pleats.
+function framedPhotoRegions(cells, contrasted, detail, cellSize) {
+  const rows = new Map(), protectedCells = new Set();
+  for (const p of contrasted.values()) if (!p.foldedPanel) {
+    if (!rows.has(p.y)) rows.set(p.y, []);
+    rows.get(p.y).push(p.x);
+  }
+  const contrastedAt = (x,y) => contrasted.has(key(x,y)) && !cells.get(key(x,y))?.foldedPanel;
+  for (const [y, xs] of rows) {
+    xs.sort((a,b) => a-b);
+    const runs = [];
+    for (const x of xs) {
+      if (!runs.length || x-runs[runs.length-1].at(-1)>3) runs.push([]);
+      runs[runs.length-1].push(x);
+    }
+    for (const run of runs) {
+      const low=run[0], high=run.at(-1), width=high-low+1;
+      if (width*cellSize<.24 || run.length/width<.75 || protectedCells.has(key(low,y))) continue;
+      const density = row => {
+        let count=0; for(let x=low;x<=high;x++) count+=contrastedAt(x,row);
+        return count/width;
+      };
+      let bottom=y, top=y;
+      while(density(bottom-1)>=.35 && (top-bottom+2)*cellSize<=3) bottom--;
+      while(density(top+1)>=.35 && (top-bottom+2)*cellSize<=3) top++;
+      const height=top-bottom+1, size=width*height;
+      if(height*cellSize<.24 || size>cells.size*.55 || Math.max(width/height,height/width)>3) continue;
+      let covered=0, anchors=0, left=0, right=0;
+      const anchorSides=[0,0,0,0];
+      for(let row=bottom;row<=top;row++) for(let x=low;x<=high;x++) {
+        covered+=contrastedAt(x,row); anchors+=detail.has(key(x,row));
+        if(x===low) left+=contrastedAt(x,row);
+        if(x===high) right+=contrastedAt(x,row);
+        if(detail.has(key(x,row))) {
+          if(row===bottom) anchorSides[0]++;
+          if(row===top) anchorSides[1]++;
+          if(x===low) anchorSides[2]++;
+          if(x===high) anchorSides[3]++;
+        }
+      }
+      if(covered/size<.65 || anchors<Math.max(6,size*.1) || left/height<.5 || right/height<.5 ||
+          density(bottom)<.5 || density(top)<.5 ||
+          anchorSides.filter((n,i)=>n/(i<2?width:height)>=.15).length<3) continue;
+      for(let row=bottom;row<=top;row++) for(let x=low;x<=high;x++) {
+        const k=key(x,row),p=cells.get(k);
+        if(p && !p.foldedPanel) {p.detail=true;p.framedPicture=true;detail.set(k,p);protectedCells.add(k);}
+      }
+    }
+  }
+}
 
 // Compare reflectance color after allowing for a change in illumination. An
 // otherwise matching wall must remain editable even in a deep, sharp shadow.
@@ -30,13 +85,15 @@ export function wallPhotoTextureDetail(samples) {
 }
 
 export function classifyWallPhotoDetails(cells, cellSize) {
+  classifyFoldedPhotoPanels(cells, cellSize);
   const palette = new Map();
-  const hasBackgroundSamples = [...cells.values()].some(p => p.rgb && !p.foreground);
+  const hasBackgroundSamples = [...cells.values()].some(p => p.rgb && !p.foreground && !p.foldedPanel);
   for (const p of cells.values()) {
     p.detail = false;
+    p.framedPicture = false;
     // Consistent shallow depth bias can mark every cell foreground. Its wall
     // color still supplies the reference; actual relief stays protected below.
-    if (!p.rgb || (p.foreground && hasBackgroundSamples)) continue;
+    if (!p.rgb || p.foldedPanel || (p.foreground && hasBackgroundSamples)) continue;
     const bin = p.rgb.map(value => Math.round(value / 32)).join(",");
     if (!palette.has(bin)) palette.set(bin, { sum: [0, 0, 0], weight: 0 });
     const entry = palette.get(bin), weight = p.area || 1;
@@ -47,7 +104,7 @@ export function classifyWallPhotoDetails(cells, cellSize) {
   const background = dominant ? dominant.sum.map(value => value / dominant.weight) : [210, 210, 200];
   const detail = new Map();
   for (const [k, p] of cells) if (p.rgb && (differentReflectance(p.rgb, background) ||
-      p.textureDetail || (p.foreground && p.foregroundOffset >= .1))) {
+      p.textureDetail || (!p.photoFrame && p.foreground && p.foregroundOffset >= .1))) {
     p.detail = true;
     detail.set(k, p);
   }
@@ -85,9 +142,11 @@ export function classifyWallPhotoDetails(cells, cellSize) {
     if (sides.some((count, i) => count / (i < 2 ? width : height) < .65)) continue;
     for (let x = minX; x <= maxX; x++) for (let y = minY; y <= maxY; y++) {
       const k = key(x, y), p = cells.get(k);
-      if (p) { p.detail = true; detail.set(k, p); }
+      if (p) { p.detail = true; p.framedPicture = true; detail.set(k, p); }
     }
   }
+
+  framedPhotoRegions(cells, contrasted, detail, cellSize);
 
   const remaining = new Set(detail.keys());
   while (remaining.size) {
@@ -123,5 +182,6 @@ export function classifyWallPhotoDetails(cells, cellSize) {
     for (let x = minX; x <= maxX; x++) for (let y = minY; y <= maxY; y++)
       if (!outside.has(key(x, y)) && cells.has(key(x, y))) cells.get(key(x, y)).detail = true;
   }
+  for (const p of cells.values()) if (p.foldedPanel) p.detail = true;
   return background;
 }

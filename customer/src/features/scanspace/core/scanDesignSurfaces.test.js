@@ -90,6 +90,26 @@ test("a bounded interior meshing gap is estimated from its observed footprint", 
   expect(surfaceTopologyDiagnostics(design.walls[0]).componentCount).toBe(1);
 });
 
+function supportedSlopedFloor(offset=0) {
+  const length=Math.hypot(1,.05),plane={kind:"floor",normal:[0,1/length,-.05/length],offset:offset/length,
+    axes:[[1,0,0],[0,.05/length,1/length]],cellSize:.12,cells:new Map(),supportingFrameIds:[0,1,2]};
+  for(let x=0;x<12;x++)for(let y=0;y<9;y++)plane.cells.set(`${x},${y}`,new Set([0,1,2]));
+  return plane;
+}
+
+test("wall cleanup cannot consume an independently supported sloped floor near the wall",()=>{
+  const {mesh,plane,frames,helpers}=fixture(),floor=supportedSlopedFloor(.2);
+  const start=mesh.positions.length/3,first=mesh.indices.length/3;
+  mesh.positions=new Float32Array([...mesh.positions,.3,.205,.1, .9,.205,.1, .9,.215,.3, .3,.215,.3]);
+  mesh.normals=new Float32Array([...mesh.normals,0,1,0, 0,1,0, 0,1,0, 0,1,0]);
+  mesh.colors=new Uint8Array([...mesh.colors,...new Array(12).fill(230)]);
+  mesh.indices=new Uint32Array([...mesh.indices,start,start+1,start+2,start,start+2,start+3]);
+  const textureFrames=[{...frames[0],colorImage:new Uint8Array(16).fill(255),colorWidth:2,colorHeight:2,
+    transformMatrix:new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, .6,.6,1,1])}];
+  const design=buildScanDesignSurfaces(mesh,[plane,floor],frames,{...helpers,textureFrames,sampleColor:()=>[235,230,220]});
+  expect(Array.from(design.removedSourceFaces).slice(first)).toEqual([0,0]);
+});
+
 test("mesh-only fallback does not flatten a distinct raised object or invent a room rectangle", () => {
   const { mesh, plane } = fixture();
   expect(buildScanDesignSurfaces(mesh, [plane])).toBeNull(); // layers too far from the wall
@@ -104,6 +124,29 @@ test("no usable wall plane leaves the captured scan available", () => {
   const { mesh, frames, helpers } = fixture();
   expect(buildScanDesignSurfaces(mesh, [{ kind: "floor", normal: [0, 1, 0], offset: 0 }], frames, helpers)).toBeNull();
   expect(buildScanDesignSurfaces(mesh, [{ kind: "wall", normal: [NaN, 0, 1], offset: 0 }], frames, helpers)).toBeNull();
+});
+
+test.each([1,-1])("an upper vertical distortion cannot extend a prepared wall above measured wall ownership (height axis %s)",heightDirection=>{
+  const {mesh,plane,frames,helpers}=fixture();
+  if (heightDirection < 0) {
+    plane.axes[1] = [0,-1,0];
+    plane.cells = new Map([...plane.cells].map(([k,ids]) => {
+      const [x,y] = k.split(",").map(Number);
+      return [`${x},${-y-1}`,ids];
+    }));
+  }
+  const first=mesh.indices.length/3, n=mesh.positions.length/3;
+  mesh.positions=new Float32Array([...mesh.positions,0,1.4,-.1, 1,1.4,-.1, 1,1.9,-.1, 0,1.9,-.1]);
+  mesh.colors=new Uint8Array([...mesh.colors,...new Array(12).fill(200)]);
+  mesh.normals=new Float32Array([...mesh.normals,0,0,1, 0,0,1, 0,0,1, 0,0,1]);
+  mesh.indices=new Uint32Array([...mesh.indices,n,n+1,n+2, n,n+2,n+3]);
+  const before=mesh.positions.slice();
+  const design=buildScanDesignSurfaces(mesh,[plane],frames,helpers);
+  const wallTop = Math.max(...Array.from(design.walls[0].positions).filter((_,i)=>i%3===1));
+  expect(wallTop).toBeLessThanOrEqual(1.24+.001);
+  expect(wallTop).toBeGreaterThanOrEqual(1.2-.001);
+  expect(Array.from(design.removedSourceFaces).slice(first)).toEqual([0,0]);
+  expect(mesh.positions).toEqual(before);
 });
 
 test("mixed wall/object triangles are clipped with their original photograph coordinates", () => {
@@ -159,6 +202,22 @@ test("photographed plain-wall depth bias does not leave white foreground blocks 
   expect(design.diagnostics.removedTriangles).toBe(mesh.indices.length / 3);
   expect(design.fragments.indices).toHaveLength(0);
   expect(design.walls[0].detailMask.some(Boolean)).toBe(false);
+});
+
+test("scattered photographed wall depth bumps are flattened instead of being preserved as objects", () => {
+  const { mesh, plane, frames, helpers } = fixture();
+  for (let i = 2; i < mesh.positions.length; i += 3) mesh.positions[i] = .12;
+  const before = mesh.positions.slice();
+  for (const frame of frames) for (let y = 8; y < 20; y++) for (let x = 8; x < 20; x++)
+    if ((x + y) % 2 === 0) frame.filteredDepth[y * frame.columns + x] = .87;
+  const textureFrames = [{ ...frames[0], colorImage: new Uint8Array(16).fill(255), colorWidth: 2, colorHeight: 2,
+    transformMatrix: new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, .6,.6,1,1]) }];
+  const design = buildScanDesignSurfaces(mesh, [plane], frames, { ...helpers, textureFrames,
+    sampleColor: () => [235, 230, 220] });
+  expect(design.removedSourceFaces.every(Boolean)).toBe(true);
+  expect(design.fragments.indices).toHaveLength(0);
+  expect(design.walls[0].detailMask.some(Boolean)).toBe(false);
+  expect(mesh.positions).toEqual(before);
 });
 
 test("a shadow on a noisy wall is flattened with the wall and remains in its paint lighting", () => {
@@ -277,6 +336,21 @@ test("flattening a connected wall keeps its captured floor junction closed in si
   expect(Array.from(design.walls[0].positions).filter((_, i) => i % 3 === 2).every(z => z === 0)).toBe(true);
 });
 
+test("joining a supported sloped floor to the wall keeps all of its deformed vertices on that floor",()=>{
+  const {mesh,plane,frames,helpers}=wallFloorJunction(),floor=supportedSlopedFloor();
+  for(let i=0;i<mesh.positions.length;i+=3) if(i>=12 || mesh.positions[i+1]===0)
+    mesh.positions[i+1]=.05*mesh.positions[i+2];
+  const before=mesh.positions.slice(),design=buildScanDesignSurfaces(mesh,[plane,floor],frames,helpers);
+  const fragments=design.fragments;
+  expect(fragments.indices.length).toBeGreaterThan(0);
+  for(let f=0;f<fragments.indices.length;f+=3) if(fragments.sourceFaces[f/3]>=2)
+    for(let c=0;c<3;c++) {
+      const i=fragments.indices[f+c]*3;
+      expect(fragments.positions[i+1]).toBeCloseTo(.05*fragments.positions[i+2],6);
+    }
+  expect(mesh.positions).toEqual(before);
+});
+
 test("boundary adjustment does not reach across a disconnected nearby surface", () => {
   const { mesh, plane, frames, helpers } = wallFloorJunction({ disconnected: true });
   const design = buildScanDesignSurfaces(mesh, [plane], frames, helpers);
@@ -323,6 +397,27 @@ test("depth-supported duplicate wall sheets behind the wall are replaced without
   for (let i = 2; i < foreground.positions.length; i += 3) foreground.positions[i] = .28;
   expect(buildScanDesignSurfaces(foreground, [plane], frames, helpers).removedSourceFaces.some(Boolean)).toBe(false);
   expect(buildScanDesignSurfaces(duplicate, [plane])).toBeNull();
+});
+
+test.each([true,false])("a curled wall crossing the normal cleanup band needs photographed native wall normals (%s)",normalSupport=>{
+  const {mesh,plane,frames,helpers}=fixture();
+  const start=mesh.positions.length/3, first=mesh.indices.length/3;
+  mesh.positions=new Float32Array([...mesh.positions,.4,.4,.16, .8,.4,.29, .8,.8,.29, .4,.8,.16]);
+  mesh.normals=new Float32Array([...mesh.normals,0,0,1, 0,0,1, 0,0,1, 0,0,1]);
+  mesh.colors=new Uint8Array([...mesh.colors,...new Array(12).fill(230)]);
+  mesh.indices=new Uint32Array([...mesh.indices,start,start+1,start+2,start,start+2,start+3]);
+  if(!normalSupport) for(const f of frames) {
+    f.originalPositions=new Float32Array(f.columns*f.rows*3);
+    for(let y=0;y<f.rows;y++)for(let x=0;x<f.columns;x++)
+      f.originalPositions.set([(x+.5)*.04,0,(y+.5)*.04],(y*f.columns+x)*3);
+  }
+  const textureFrames=[{...frames[0],colorImage:new Uint8Array(16).fill(255),colorWidth:2,colorHeight:2,
+    transformMatrix:new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, .6,.6,1,1])}];
+  const before=mesh.positions.slice(),design=buildScanDesignSurfaces(mesh,[plane],frames,
+    {...helpers,textureFrames,sampleColor:()=>[235,230,220]});
+  expect(Array.from(design.removedSourceFaces).slice(first)).toEqual(normalSupport?[1,1]:[0,0]);
+  if(normalSupport) expect(design.fragments.sourceFaces.some(f=>f>=first)).toBe(false);
+  expect(mesh.positions).toEqual(before);
 });
 
 test.each([false, true])("background clipping preserves photo UVs and does not cap an opening (opening: %s)", opening => {

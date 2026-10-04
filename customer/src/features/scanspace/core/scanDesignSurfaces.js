@@ -4,7 +4,7 @@ import { classifyWallPhotoDetails, wallPhotoTextureDetail } from "./scanWallPhot
 // An editable surface is an approximation of the room envelope. It never
 // replaces the measured mesh or supplies new measured area/depth to capture.
 export const SCAN_DESIGN_SURFACE_VERSION = 2;
-export const SCAN_DESIGN_ALGORITHM_VERSION = 55;
+export const SCAN_DESIGN_ALGORITHM_VERSION = 58;
 export const MAX_SCAN_DESIGN_BYTES = 8 * 1024 * 1024;
 const MAX_CELLS = 24000;
 const MAX_WALLS = 8;
@@ -191,7 +191,7 @@ function makeEvidence(frames, helpers, plane) {
     return counts.get(k);
   }
   return p => {
-    const agreeing = [], through = [], foreground = [];
+    const agreeing = [], through = [], foreground = [], offsets = [];
     for (const frame of frames) {
       const uv = helpers.project(frame, ...p);
       if (!uv || uv.u < 0 || uv.v < 0 || uv.u >= 1 || uv.v >= 1) continue;
@@ -202,17 +202,52 @@ function makeEvidence(frames, helpers, plane) {
       const difference = depth - uv.depth;
       const hit = helpers.unproject?.(frame, index, depth);
       const residual = hit ? dot(plane.normal, hit) - plane.offset : -difference;
-      if (Math.abs(residual) <= .18) agreeing.push(frame.frameId);
+      if (Math.abs(residual) <= .18) { agreeing.push(frame.frameId); offsets.push(residual); }
       if (difference > .22 && frame.freeSpaceMask?.[index] &&
           (!frame.depthConfidence || frame.depthConfidence[index] >= 140)) through.push(frame.frameId);
       if (residual > .018 && residual < .18) foreground.push({ id: frame.frameId, residual });
     }
     const ids = independentFrameIds(foreground.map(f => f.id), framesById, .06);
-    const offsets = foreground.filter(f => ids.has(f.id)).map(f => f.residual);
-    const middle = median(offsets), scatter = median(offsets.map(value => Math.abs(value - middle)));
+    const relief = foreground.filter(f => ids.has(f.id)).map(f => f.residual);
+    const middle = median(relief), scatter = median(relief.map(value => Math.abs(value - middle)));
     return { support: count(agreeing), opening: count(through) >= 2 && count(agreeing) < 2,
-      foreground: offsets.length >= 3 && middle > .018 && scatter < .008,
+      surfaceOffset: offsets.length >= 2 ? median(offsets) : null,
+      foreground: relief.length >= 3 && middle > .018 && scatter < .008,
       foregroundOffset: middle };
+  };
+}
+
+// A curled source triangle may cross the ordinary foreground limit while its
+// projected cell still shows an independently observed plain wall. Confirm the
+// wall's native local orientation there before replacing that extra fragment.
+function makeWallNormalEvidence(frames, helpers, plane) {
+  const frameMap = new Map(frames.map(f => [f.frameId, f])), cache = new Map();
+  return p => {
+    const k = p.map(v => Math.round(v * 100000)).join(",");
+    if (cache.has(k)) return cache.get(k);
+    const observers = [];
+    for (const f of frames) {
+      if (f.textureOnly) continue;
+      const uv = helpers.project?.(f, ...p);
+      if (!uv || Math.min(uv.u, uv.v) < 0 || Math.max(uv.u, uv.v) >= 1) continue;
+      const x = Math.floor(uv.u * f.columns), y = Math.floor(uv.v * f.rows);
+      if (x < 1 || y < 1 || x >= f.columns - 1 || y >= f.rows - 1) continue;
+      const i = y * f.columns + x, ids = [i, i - 1, i + 1, i - f.columns, i + f.columns];
+      const depth = f.originalFilteredDepth || f.filteredDepth;
+      if (ids.some(id => !f.measuredMask?.[id] || !depth?.[id])) continue;
+      const points = ids.map(id => f.originalPositions?.length
+        ? Array.from(f.originalPositions.subarray(id * 3, id * 3 + 3))
+        : helpers.unproject?.(f, id, depth[id]));
+      if (points.some(q => !q || !q.every(Number.isFinite))) continue;
+      const horizontal = points[2].map((v, a) => v - points[1][a]);
+      const vertical = points[4].map((v, a) => v - points[3][a]);
+      const normal = cross(horizontal, vertical), length = Math.hypot(...normal);
+      if (length < 1e-8 || Math.abs(dot(normal, plane.normal)) / length < .8 ||
+          Math.abs(dot(plane.normal, points[0]) - plane.offset) > .18) continue;
+      observers.push(f.frameId);
+    }
+    const count = independentFrameIds(observers, frameMap, .06).size;
+    cache.set(k, count); return count;
   };
 }
 
@@ -280,6 +315,20 @@ function capturedWallSetback(sourcePlane, normal, offset, frames) {
   return Math.max(-.06, center);
 }
 
+function supportedFloorAt(point, planes) {
+  return planes.find(p => p.kind === "floor" && Math.abs(p.normal[1]) > .9 &&
+    p.axes?.length === 2 && p.cells instanceof Map && p.supportingFrameIds?.length >= 3 &&
+    Math.abs(dot(p.normal, point) - p.offset) < 1e-4 && structuralSupportAt(p, point, 2));
+}
+
+function onFloor(point, floor) {
+  const result = point.slice();
+  // Wall fits use gravity-aligned horizontal normals. Adjusting height keeps
+  // the shared wall target while seating the edge on the actual sloped floor.
+  result[1] = (floor.offset - floor.normal[0] * point[0] - floor.normal[2] * point[2]) / floor.normal[1];
+  return result;
+}
+
 function buildWall(mesh, sourcePlane, frames, helpers, cell, junctionPlanes = []) {
   const length = Math.hypot(...sourcePlane.normal);
   let normal = sourcePlane.normal.map(x => x / length), offset = sourcePlane.offset / length;
@@ -293,18 +342,37 @@ function buildWall(mesh, sourcePlane, frames, helpers, cell, junctionPlanes = []
   const world = (x, y) => normal.map((n, i) => n * offset + axes[0][i] * x * cell + axes[1][i] * y * cell);
   const plane = { normal, offset, axes }, cells = new Map(), candidates = [], openings = new Set();
   const meshOnly = !frames.length || !helpers.project;
+  const supportedHeights = !meshOnly && sourcePlane.cells instanceof Map && sourcePlane.axes
+    ? [...sourcePlane.cells].filter(([,ids]) => ids.size >= 2).map(([k]) => {
+      const [x,y] = k.split(",").map(Number), size = sourcePlane.cellSize || .12;
+      return sourcePlane.normal[1] * sourcePlane.offset +
+        sourcePlane.axes[0][1] * (x + (sourcePlane.axes[0][1] > 0 ? 1 : 0)) * size +
+        sourcePlane.axes[1][1] * (y + (sourcePlane.axes[1][1] > 0 ? 1 : 0)) * size;
+    }) : [];
+  const wallTop = supportedHeights.length ? Math.max(...supportedHeights) + cell : Infinity;
   for (let face = 0; face < mesh.indices.length / 3; face++) {
     const points = [0, 1, 2].map(corner => vertex(mesh, mesh.indices[face * 3 + corner], axes));
     const faceNormal = unit(cross(points[1].p.map((x, i) => x - points[0].p[i]), points[2].p.map((x, i) => x - points[0].p[i])));
     if (!mesh.normals) points.forEach(p => { p.n = faceNormal; });
+    const center = [0,1,2].map(axis => points.reduce((sum, p) => sum + p.p[axis] / 3, 0));
+    const floor = supportedFloorAt(center, junctionPlanes);
+    // A sloped reconstructed floor projects to a narrow polygon on the wall.
+    // It still belongs to the floor; wall cleanup must not replace it with a
+    // vertical photo cell and leave a hole beside that wall.
+    if (floor && Math.abs(dot(faceNormal, floor.normal)) > .995 &&
+        points.every(p => Math.abs(dot(floor.normal, p.p) - floor.offset) < 1e-4)) continue;
     // Depth-supported walls also own displaced background sheets behind them.
     // Keep the foreground limit narrow: curtains/furniture in front of a wall
     // must not be swallowed by the cleanup. Opening evidence still vetoes cells.
     if (points.some(p => {
       const residual = dot(normal, p.p) - offset;
-      return meshOnly ? Math.abs(residual) > .035 : residual < -.38 || residual > .18;
+      return meshOnly ? Math.abs(residual) > .035 : residual < -.38 || residual > .35;
     })) continue;
-    candidates.push({ face, points });
+    const extended = !meshOnly && points.some(p => dot(normal, p.p) - offset > .18);
+    candidates.push({ face, points, extended });
+    // Extra curls can be removed inside a confirmed wall, but cannot enlarge
+    // its footprint or turn a foreground object into another wall cell.
+    if (extended) continue;
     // Folded background edges still need replacement inside an established
     // footprint. They must not extend the footprint by themselves.
     if (Math.abs(dot(faceNormal, normal)) < .35) continue;
@@ -319,6 +387,9 @@ function buildWall(mesh, sourcePlane, frames, helpers, cell, junctionPlanes = []
   }
   const evidence = makeEvidence(frames, helpers, plane);
   for (const [k, p] of cells) {
+    // Upper folds near a wall cannot extend that wall beyond its independently
+    // observed vertical footprint and turn photographed ceiling into paint.
+    if (world(p.x+.5,p.y+.5)[1] > wallTop) { cells.delete(k); continue; }
     p.rgb = p.sum.map(x => x / p.coverage); delete p.sum;
     const observed = evidence(world(p.x + .5, p.y + .5));
     if (observed?.opening) { openings.add(k); cells.delete(k); continue; }
@@ -326,6 +397,7 @@ function buildWall(mesh, sourcePlane, frames, helpers, cell, junctionPlanes = []
     p.foreground = !!observed?.foreground;
     p.foregroundOffset = observed?.foregroundOffset || 0;
     p.support = observed?.support || 0;
+    p.depthOffset = observed?.surfaceOffset ?? null;
   }
   // Coarse plane cells carry independently observed background coverage. Use
   // their exact footprint, including sparse meshing cracks, not the room bbox.
@@ -343,19 +415,23 @@ function buildWall(mesh, sourcePlane, frames, helpers, cell, junctionPlanes = []
         const k2 = key(x, y);
         if (cells.has(k2)) return;
         const observed = evidence(world(x + .5, y + .5));
+        if (world(x+.5,y+.5)[1] > wallTop) return;
         if (observed?.opening) { openings.add(k2); return; }
         if (observed?.support < 2) return;
         cells.set(k2, { x, y, coverage: 0, rgb: null, estimated: true, support: observed.support,
-          foreground: observed.foreground, foregroundOffset: observed.foregroundOffset });
+          foreground: observed.foreground, foregroundOffset: observed.foregroundOffset,
+          depthOffset: observed.surfaceOffset });
       });
       eachTriangleCell([corners[0], corners[2], corners[3]], cell, (x, y) => {
         const k2 = key(x, y);
         if (cells.has(k2)) return;
         const observed = evidence(world(x + .5, y + .5));
+        if (world(x+.5,y+.5)[1] > wallTop) return;
         if (observed?.opening) { openings.add(k2); return; }
         if (observed?.support < 2) return;
         cells.set(k2, { x, y, coverage: 0, rgb: null, estimated: true, support: observed.support,
-          foreground: observed.foreground, foregroundOffset: observed.foregroundOffset });
+          foreground: observed.foreground, foregroundOffset: observed.foregroundOffset,
+          depthOffset: observed.surfaceOffset });
       });
       if (cells.size > MAX_CELLS) return null;
     }
@@ -398,23 +474,23 @@ function buildWall(mesh, sourcePlane, frames, helpers, cell, junctionPlanes = []
   // A coherent detail such as a picture should use one photograph wherever
   // it has coverage. Per-cell choices otherwise leave exposure/pose seams.
   const details = new Map([...cells].filter(([, p]) => p.detail));
-  for (const region of gridComponents(details)) {
-    const scores = new Map();
-    for (const k of region) for (const choice of cells.get(k).photoChoices) {
-      if (!scores.has(choice.frame)) scores.set(choice.frame, { count: 0, score: 0 });
-      const value = scores.get(choice.frame); value.count++; value.score += choice.score;
-    }
-    const chosen = [...scores].filter(([, value]) => value.count >= region.length * .9)
-      .sort((a, b) => b[1].score - a[1].score)[0]?.[0];
-    if (chosen) for (const k of region) {
-      const p = cells.get(k);
-      if (p.photoChoices.some(choice => choice.frame === chosen)) p.detailPhotoFrame = chosen;
+  function chooseDetailPhotographs(regions) {
+    for (const region of gridComponents(regions)) {
+      const scores = new Map();
+      for (const k of region) for (const choice of cells.get(k).photoChoices) {
+        if (!scores.has(choice.frame)) scores.set(choice.frame, { count: 0, score: 0 });
+        const value = scores.get(choice.frame); value.count++; value.score += choice.score;
+      }
+      const chosen = [...scores].filter(([, value]) => value.count >= region.length * .9)
+        .sort((a, b) => b[1].score - a[1].score)[0]?.[0];
+      if (chosen) for (const k of region) {
+        const p = cells.get(k);
+        if (p.photoChoices.some(choice => choice.frame === chosen)) p.detailPhotoFrame = chosen;
+      }
     }
   }
-  for (const p of cells.values()) {
-    const minimumScore = (p.photoChoices[0]?.score || 0) * .65;
-    p.photoFrame = p.detailPhotoFrame || preferredFrames.find(frame =>
-      p.photoChoices.some(choice => choice.frame === frame && choice.score >= minimumScore)) || null;
+  chooseDetailPhotographs(details);
+  function sampleCellPhoto(p) {
     const projected = p.photoFrame && (helpers.projectColor || helpers.project)(p.photoFrame, ...world(p.x + .5, p.y + .5));
     if (projected) p.rgb = helpers.sampleColor?.(p.photoFrame, projected) || p.rgb;
     if (p.photoFrame && helpers.sampleColor) {
@@ -425,18 +501,46 @@ function buildWall(mesh, sourcePlane, frames, helpers, cell, junctionPlanes = []
       }
       p.textureDetail = wallPhotoTextureDetail(samples);
     }
-    delete p.photoChoices; delete p.detailPhotoFrame; delete p.detail;
   }
-  const background = photoDetails(cells, cell);
+  for (const p of cells.values()) {
+    const minimumScore = (p.photoChoices[0]?.score || 0) * .65;
+    p.photoFrame = p.detailPhotoFrame || preferredFrames.find(frame =>
+      p.photoChoices.some(choice => choice.frame === frame && choice.score >= minimumScore)) || null;
+    sampleCellPhoto(p);
+    delete p.detailPhotoFrame; delete p.detail;
+  }
+  let background = photoDetails(cells, cell);
+  chooseDetailPhotographs(new Map([...cells].filter(([,p]) => p.detail && !p.foldedPanel)));
+  for (const p of cells.values()) {
+    if (p.detailPhotoFrame && p.detailPhotoFrame !== p.photoFrame) {
+      p.photoFrame = p.detailPhotoFrame; sampleCellPhoto(p);
+    }
+    delete p.photoChoices; delete p.detailPhotoFrame;
+  }
+  background = photoDetails(cells, cell);
+  const stableRaised = new Set();
+  for (const region of gridComponents(new Map([...cells].filter(([,p]) => p.foreground && p.foregroundOffset >= .1)))) {
+    const points=region.map(k=>cells.get(k)), width=Math.max(...points.map(p=>p.x))-Math.min(...points.map(p=>p.x))+1,
+      height=Math.max(...points.map(p=>p.y))-Math.min(...points.map(p=>p.y))+1;
+    if (region.length * cell * cell < .04 || region.length/(width*height)<.8) continue;
+    const offsets = region.map(k => cells.get(k).foregroundOffset), center = median(offsets);
+    if (offsets.filter(v => Math.abs(v-center)<.015).length < region.length*.9) continue;
+    region.forEach(k => stableRaised.add(k));
+  }
   // Consistent centimetre-scale depth bias on an ordinary photographed wall
   // is not an object. Keep substantial relief, or localized visible detail
   // with relief; shallow pictures stay visible in the planar photo overlay.
   // When photographs are unavailable, retain the conservative depth fallback.
-  for (const p of cells.values()) {
-    p.foreground = p.foreground && (!p.photoFrame || p.foregroundOffset >= .1 ||
-      (p.detail && p.foregroundOffset >= .055));
+  for (const [k,p] of cells) {
+    p.foreground = p.foreground && (!p.photoFrame || stableRaised.has(k) ||
+      (p.detail && !p.framedPicture && p.foregroundOffset >= .055));
     if (p.foreground) p.estimated = true; // inferred background behind an object
   }
+  // Cloth is a photographed foreground surface, not a flat editable wall.
+  // Keep its captured geometry/UVs and exclude it from the planar replacement.
+  const preserved = new Map([...cells].filter(([,p]) => p.foldedPanel));
+  for (const k of preserved.keys()) cells.delete(k);
+  if (cells.size * cell * cell < .2) return null;
   const width = Math.max(2, Math.min(768, Math.ceil((max[0] - min[0]) * cell * 192))),
     height = Math.max(2, Math.min(768, Math.ceil((max[1] - min[1]) * cell * 192)));
   const texture = { width, height, data: new Uint8Array(width * height * 4) }, detailMask = new Uint8Array(width * height);
@@ -495,10 +599,11 @@ function buildWall(mesh, sourcePlane, frames, helpers, cell, junctionPlanes = []
     positions: new Float32Array(positions), normals: new Float32Array(normals), uvs: new Float32Array(uvs),
     colors: new Uint8Array(positions.length).fill(255), indices: new Uint32Array(indices),
     estimatedTriangleMask: new Uint8Array(estimated), texture, detailMask,
-    area: cells.size * cell * cell, estimatedArea: coordinates.filter(p => p.estimated).length * cell * cell,
+    area: cells.size * cell * cell, estimatedArea: [...cells.values()].filter(p => p.estimated).length * cell * cell,
     footprint, openingMask, supportingFrameIds: sourcePlane.supportingFrameIds || [],
     componentCount: gridComponents(cells).length, junctionVertexCount,
-    source: meshOnly ? "mesh-footprint" : "independent-depth-footprint" }, cells, candidates, openings, background };
+    source: meshOnly ? "mesh-footprint" : "independent-depth-footprint" }, cells, candidates, openings, preserved, background,
+    nativeWallSupport: makeWallNormalEvidence(frames, helpers, plane) };
 }
 
 function appendFragment(fragments, triangle, sourceFace, estimated = false) {
@@ -515,7 +620,7 @@ function appendFragment(fragments, triangle, sourceFace, estimated = false) {
 // displacement through the existing connected surface instead, with the wall
 // edge fixed and the distant capture fixed. Photographs remain on that surface;
 // no unphotographed transition polygons are created.
-function relaxCapturedSeams(mesh, removed, fragments, targets, splits, built, pointKey, radius = .35) {
+function relaxCapturedSeams(mesh, removed, fragments, targets, splits, built, pointKey, planes, radius = .35) {
   const nodes = new Map();
   function node(point) {
     const k = pointKey(point);
@@ -577,10 +682,11 @@ function relaxCapturedSeams(mesh, removed, fragments, targets, splits, built, po
     p.fixed = true; p.distance = 0; p.seed = target.map((value, i) => value - p.point[i]);
     push({ node: p, distance: 0 });
   }
-  const protectedForeground = p => built.some(({ wall, cells }) => {
+  const protectedForeground = p => built.some(({ wall, cells, preserved }) => {
     const q = wall.axes.map(axis => dot(axis, p.point)), cell = cells.get(key(Math.floor(q[0] / wall.cellSize), Math.floor(q[1] / wall.cellSize)));
     const residual = dot(wall.normal, p.point) - wall.offset;
-    return cell?.foreground && residual > .012 && residual >= cell.foregroundOffset - .025;
+    return preserved.has(key(Math.floor(q[0] / wall.cellSize), Math.floor(q[1] / wall.cellSize))) ||
+      (cell?.foreground && residual > .012 && residual >= cell.foregroundOffset - .025);
   });
   while (heap.length) {
     const entry = pop(), p = entry.node;
@@ -623,7 +729,10 @@ function relaxCapturedSeams(mesh, removed, fragments, targets, splits, built, po
   const positions = new Map();
   for (const p of affected) {
     const delta = Array.from(values.subarray(p.index * 3, p.index * 3 + 3));
-    if (Math.hypot(...delta) > 1e-7) positions.set(p.k, p.point.map((value, i) => value + delta[i]));
+    if (Math.hypot(...delta) > 1e-7) {
+      const target = p.point.map((value, i) => value + delta[i]), floor = supportedFloorAt(p.point, planes);
+      positions.set(p.k, floor ? onFloor(target, floor) : target);
+    }
   }
   return positions;
 }
@@ -632,7 +741,7 @@ function relaxCapturedSeams(mesh, removed, fragments, targets, splits, built, po
 // wall. Adding a ribbon between the old and new edges makes hundreds of fins
 // with no photographed interior. Edge deformation keeps the original UVs and
 // joins the actual surface, including across camera-atlas vertex duplicates.
-function reconnectWallBoundaries(mesh, built, removed, owners, fragments, clippedEdges) {
+function reconnectWallBoundaries(mesh, built, removed, owners, fragments, clippedEdges, planes) {
   const wallLattices = new Map();
   for (const { wall } of built) {
     const lattice = new Map(), [min, max] = wall.extent;
@@ -674,7 +783,7 @@ function reconnectWallBoundaries(mesh, built, removed, owners, fragments, clippe
   const targets = new Map(), splits = new Map();
   const geometricEdgeKey = (a, b) => [pointKey(a.p), pointKey(b.p)].sort().join("/");
   for (const { a, b, surface } of joins) {
-    const { wall, cells, openings } = surface, cell = wall.cellSize, cuts = [0, 1];
+    const { wall, cells, openings, preserved } = surface, cell = wall.cellSize, cuts = [0, 1];
     for (let axis = 0; axis < 2; axis++) {
       const delta = b.q[axis] - a.q[axis];
       if (Math.abs(delta) < 1e-9) continue;
@@ -685,7 +794,7 @@ function reconnectWallBoundaries(mesh, built, removed, owners, fragments, clippe
     cuts.sort((x, y) => x - y);
     const blocked = p => [[0,0],[-1e-5,0],[1e-5,0],[0,-1e-5],[0,1e-5]].some(([dx,dy]) => {
       const k = key(Math.floor(p.q[0] / cell + dx), Math.floor(p.q[1] / cell + dy));
-      return openings.has(k) || cells.get(k)?.foreground;
+      return openings.has(k) || preserved.has(k) || cells.get(k)?.foreground;
     });
     for (let i = 1; i < cuts.length; i++) {
       if (cuts[i] - cuts[i - 1] < 1e-8) continue;
@@ -706,7 +815,9 @@ function reconnectWallBoundaries(mesh, built, removed, owners, fragments, clippe
       };
       for (const p of [left, right]) {
         if (blocked(p)) continue;
-        const targetPoint = project(p);
+        let targetPoint = project(p);
+        const floor = supportedFloorAt(p.p, planes);
+        if (floor && Math.abs(wall.normal[1]) < 1e-6) targetPoint = onFloor(targetPoint, floor);
         if (Math.hypot(...targetPoint.map((value, axis) => value - p.p[axis])) < 1e-7) continue;
         const k = pointKey(p.p), previous = targets.get(k);
         // A corner shared by two prepared walls must have a single target.
@@ -725,7 +836,7 @@ function reconnectWallBoundaries(mesh, built, removed, owners, fragments, clippe
   const stored = { ...fragments, positions: new Float32Array(fragments.positions),
     normals: new Float32Array(fragments.normals), colors: new Uint8Array(fragments.colors),
     uvs: new Float32Array(fragments.uvs) };
-  const deformations = relaxCapturedSeams(mesh, removed, stored, targets, splits, built, pointKey);
+  const deformations = relaxCapturedSeams(mesh, removed, stored, targets, splits, built, pointKey, planes);
   let changedFaces = 0;
   function remap(triangle, face) {
     const polygon = [];
@@ -862,8 +973,8 @@ export function buildScanDesignSurfaces(mesh, planes, frames = [], helpers = {},
   const removed = new Uint8Array(mesh.indices.length / 3);
   const owners = new Uint8Array(removed.length), clippedEdges = [];
   const fragments = { positions: [], normals: [], colors: [], uvs: [], indices: [], sourceFaces: [], estimatedTriangleMask: [] };
-  for (const surface of built) for (const { face, points } of surface.candidates) {
-    const { wall, cells, openings } = surface;
+  for (const surface of built) for (const { face, points, extended } of surface.candidates) {
+    const { wall, cells, openings, preserved } = surface;
     if (removed[face]) continue;
     const retained = []; let replacedArea = 0;
     eachTriangleCell(points, cell, (x, y, polygon, area) => {
@@ -871,7 +982,10 @@ export function buildScanDesignSurfaces(mesh, planes, frames = [], helpers = {},
       const center = [0, 1, 2].map(axis => polygon.reduce((sum, v) => sum + v.p[axis], 0) / polygon.length);
       const residual = dot(wall.normal, center) - wall.offset;
       const actualForeground = p?.foreground && residual > .012 && residual >= p.foregroundOffset - .025;
-      if ((p && !actualForeground) || openings.has(key(x, y))) replacedArea += area;
+      const extraOwned = !extended || (p?.photoFrame && !p.detail && !p.foreground && p.support >= 3 &&
+        surface.nativeWallSupport(wall.normal.map((n, axis) => n * wall.offset +
+          wall.axes[0][axis] * (x + .5) * wall.cellSize + wall.axes[1][axis] * (y + .5) * wall.cellSize)) >= 2);
+      if (((p && !actualForeground) || openings.has(key(x, y))) && extraOwned) replacedArea += area;
       else retained.push(polygon);
     });
     if (replacedArea < 1e-9) continue;
@@ -888,7 +1002,7 @@ export function buildScanDesignSurfaces(mesh, planes, frames = [], helpers = {},
           const ks = [-1e-5, 1e-5].map(delta => key(
             Math.floor(mid.q[0] / cell + (axis === 0 ? delta : 0)),
             Math.floor(mid.q[1] / cell + (axis === 1 ? delta : 0))));
-          if (ks.filter(k => cells.has(k)).length === 1 && !ks.some(k => openings.has(k) || cells.get(k)?.foreground))
+          if (ks.filter(k => cells.has(k)).length === 1 && !ks.some(k => openings.has(k) || preserved.has(k) || cells.get(k)?.foreground))
             clippedEdges.push({ a, b, face, surface });
         }
       }
@@ -898,7 +1012,7 @@ export function buildScanDesignSurfaces(mesh, planes, frames = [], helpers = {},
       }
     }
   }
-  const boundaryRepair = reconnectWallBoundaries(mesh, built, removed, owners, fragments, clippedEdges);
+  const boundaryRepair = reconnectWallBoundaries(mesh, built, removed, owners, fragments, clippedEdges, planes);
   const backgroundCleanup = trimWallBackground(mesh, built, removed, fragments);
   const design = { version: SCAN_DESIGN_SURFACE_VERSION, mode: "estimated-planar-design-surface", sourceAlgorithmVersion: SCAN_DESIGN_ALGORITHM_VERSION,
     sourceKey: scanDesignSourceKey(mesh), removedSourceFaces: removed, walls: built.map(p => p.wall),
@@ -908,6 +1022,7 @@ export function buildScanDesignSurfaces(mesh, planes, frames = [], helpers = {},
       estimatedTriangleMask: new Uint8Array(fragments.estimatedTriangleMask) },
     diagnostics: { walls: built.length, area: built.reduce((sum, p) => sum + p.wall.area, 0),
       estimatedArea: built.reduce((sum, p) => sum + p.wall.estimatedArea, 0),
+      preservedFoldedPhotoArea: built.reduce((sum, p) => sum + p.preserved.size * cell * cell, 0),
       removedTriangles: removed.reduce((sum, x) => sum + x, 0), fragmentTriangles: fragments.indices.length / 3,
       ...boundaryRepair, ...backgroundCleanup,
       wallPlacement: built.map(({ wall }) => ({ id: wall.id, setbackMeters: wall.setbackMeters })),

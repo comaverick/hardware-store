@@ -51,6 +51,32 @@ test('independent broad floor and ceiling measurements establish separate struct
   expect(planes.every(p=>p.supportingFrameIds.length>=3)).toBe(true);
 });
 
+test('opposing height bias through one photographed wall produces one gravity-aligned plane',()=>{
+  const frames=[0,1,2,3,4,5].map(i=>wall(i, (x,y)=>x*.21+(i<3?.065:-.065)*(y-1.2)));
+  const originals=frames.map(f=>f.positions.slice());
+  const planes=discoverStructuralPlanes(frames,{floorY:0,minimumCellViews:2}).filter(p=>p.kind==='wall');
+  expect(planes).toHaveLength(1);
+  expect(planes[0].normal[1]).toBe(0);
+  expect(planes[0].normal[0]/planes[0].normal[2]).toBeCloseTo(-.21,2);
+  frames.forEach((f,i)=>expect(f.positions).toEqual(originals[i]));
+});
+
+test('close parallel recesses with separate footprints are not collapsed',()=>{
+  const first=[0,1,2].map(i=>wall(i));
+  const second=[3,4,5].map(i=>wall(i,()=>.14));
+  for(const f of second) for(let i=0;i<f.positions.length;i+=3) f.positions[i]+=3;
+  const planes=discoverStructuralPlanes([...first,...second],{floorY:0,minimumCellViews:2}).filter(p=>p.kind==='wall');
+  expect(planes).toHaveLength(2);
+  expect(planes.map(p=>p.offset).sort((a,b)=>a-b)[1]).toBeCloseTo(.14);
+});
+
+test('independently observed opposite sides of a thin partition remain separate',()=>{
+  const first=[0,1,2].map(i=>wall(i)), second=[3,4,5].map(i=>wall(i,()=>.14));
+  for(const f of second) f.camera[2]=-1;
+  const planes=discoverStructuralPlanes([...first,...second],{floorY:0,minimumCellViews:2}).filter(p=>p.kind==='wall');
+  expect(planes).toHaveLength(2);
+});
+
 test('a supported warped depth sample moves along its original ray without mutating the capture',()=>{
   const frames=[0,1,2,3].map(i=>grid(i));
   const warped=grid(4,()=>.03),before=warped.positions.slice();

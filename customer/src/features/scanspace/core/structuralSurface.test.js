@@ -27,6 +27,74 @@ function fixture({hole=false, wall=false}={}) {
 }
 const helpers={project:(f,x,y,z)=>({u:x/1.2,v:-z/1.2,depth:1-y}),linearByte:v=>v};
 
+test('photographed original floor evidence replaces curled copies on one plane without changing native capture',()=>{
+  const {mesh,plane,frames}=fixture(),source=mesh.positions.slice(),n=mesh.positions.length/3;
+  const raised=mesh.positions.map((v,i)=>i%3===1?v+.08+.02*Math.sin(mesh.positions[i-1]*5):v);
+  mesh.positions=new Float32Array([...mesh.positions,...raised]);
+  mesh.indices=new Uint32Array([...mesh.indices,...mesh.indices.map(i=>i+n)]);
+  mesh.colors=new Uint8Array(mesh.positions.length).fill(160);
+  mesh.surfacePatchIds=new Int32Array(mesh.indices.length/3).fill(0);
+  for(const frame of frames) {
+    frame.originalPositions=new Float32Array(1200);
+    for(let y=0;y<20;y++)for(let x=0;x<20;x++) frame.originalPositions.set([(x+.5)*.06,0,-(y+.5)*.06],(y*20+x)*3);
+    frame.colorWidth=20;frame.colorHeight=20;frame.colorImage=new Uint8Array(1600).fill(160);
+  }
+  const native=frames[0].originalPositions.slice(),result=rebuildStructuralSurfaces(mesh,[plane],frames,helpers);
+  expect(result.structuralRebuild.photographedFloorPlanes).toBe(1);
+  expect(result.structuralRebuild.removedBentFloorTriangles).toBeGreaterThan(0);
+  expect(result.structuralRebuild.removedBentCeilingTriangles).toBe(0);
+  expect(result.structuralRebuild.maxBoundaryDisplacementMeters).toBeLessThanOrEqual(.12);
+  expect(result.structuralRebuild.estimatedArea).toBeGreaterThan(0);
+  expect(result.planarConsolidation.planes.some(p => p.kind === 'floor' && p.photographedFloor)).toBe(true);
+  expect(frames[0].originalPositions).toEqual(native);
+  expect(source[1]).toBe(0);
+});
+
+test.each([[.02,0],[.08,0],[.08,.08]])('a native floor joins a biased edge while preserving a measured level (%s m, native %s m)', (height,nativeHeight) => {
+  const {mesh,plane,frames}=fixture();
+  for (let i=1;i<mesh.positions.length;i+=3) mesh.positions[i]=height;
+  for (const frame of frames) {
+    frame.originalPositions=new Float32Array(1200);
+    for(let y=0;y<20;y++) for(let x=0;x<20;x++)
+      frame.originalPositions.set([(x+.5)*.06,nativeHeight,-(y+.5)*.06],(y*20+x)*3);
+    frame.filteredDepth.fill(1-nativeHeight);
+    frame.colorWidth=20; frame.colorHeight=20; frame.colorImage=new Uint8Array(1600).fill(160);
+  }
+  const observed={...helpers,project:(f,x,y,z)=>({u:.025+x/1.26,v:.025-z/1.26,depth:1-y})};
+  const plain=rebuildStructuralSurfaces(mesh,[plane],frames,observed),base=mesh.positions.length/3;
+  // A retained curl shares a measured perimeter edge. Its far corner is
+  // outside the photographed footprint and must keep its measured position.
+  mesh.positions=new Float32Array([...mesh.positions,.36,height,-1.2,.84,height,-1.2,
+    .6,height+.03,-1.26]);
+  mesh.indices=new Uint32Array([...mesh.indices,base,base+1,base+2]);
+  mesh.colors=new Uint8Array(mesh.positions.length).fill(90);
+  mesh.surfacePatchIds=new Int32Array([...mesh.surfacePatchIds,-1]);
+  const original=mesh.positions.slice(),native=frames[0].originalPositions.slice();
+  const result=conformSurfaceTopology(rebuildStructuralSurfaces(mesh,[plane],frames,observed));
+  expect(result.structuralRebuild.maxBoundaryDisplacementMeters).toBeLessThanOrEqual(.12+1e-7);
+  if(nativeHeight===0) {
+    expect(result.structuralRebuild.joinedFloorAttachmentEdges).toBeGreaterThan(0);
+    expect(result.structuralRebuild.preservedBoundaryCells).toBe(0);
+    expect(result.structuralRebuild.reconstructedArea).toBeCloseTo(plain.structuralRebuild.reconstructedArea,5);
+    expect(surfaceTopologyDiagnostics(result).componentCount).toBe(1);
+    expect(surfaceTopologyDiagnostics(result).nonManifoldEdges).toBe(0);
+    const lower=[];
+    for(let t=0;t<result.indices.length;t+=3) {
+      const p=Array.from(result.indices.subarray(t,t+3)).map(i=>Array.from(result.positions.subarray(i*3,i*3+3)));
+      if(p.some(q=>q[2]<-1.25)) lower.push(...p.filter(q=>Math.abs(q[2]+1.2)<1e-6));
+    }
+    expect(lower.length).toBeGreaterThan(0);
+    expect(lower.every(p=>Math.abs(p[1])<1e-6)).toBe(true);
+  } else {
+    expect(result.structuralRebuild.joinedFloorAttachmentEdges).toBe(0);
+    expect(result.structuralRebuild.reconstructedArea).toBe(0);
+    expect(Math.min(...Array.from(result.positions).filter((_,i)=>i%3===1))).toBeCloseTo(nativeHeight,5);
+  }
+  expect(Math.max(...Array.from(result.positions).filter((_,i)=>i%3===1))).toBeCloseTo(height+.03,5);
+  expect(mesh.positions).toEqual(original);
+  expect(frames[0].originalPositions).toEqual(native);
+});
+
 function photographedCeiling({ stationary = false, detail = false } = {}) {
   const { mesh, plane, frames } = fixture();
   plane.kind = 'ceiling'; plane.offset = 2.6; plane.ceilingPhotoRegionId = 1;

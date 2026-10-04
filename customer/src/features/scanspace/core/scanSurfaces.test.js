@@ -47,6 +47,16 @@ test("wall depth noise remains paintable while raised objects retain their captu
   expect(Array.from(identifyScanSurfaces(scan).labels).slice(4)).toEqual([1, 1, 0, 0, 0, 0, 0, 0]);
 });
 
+test("a photographed floor's bounded depth noise remains finishable while furniture and tall spikes stay captured",()=>{
+  const scan=roomScan();
+  for(let v=0;v<4;v++) scan.mesh.positions[v*3+1]=.1;
+  scan.mesh.texture={width:1,height:1,data:new Uint8Array([200,180,160,255])};
+  scan.mesh.uvs=new Float32Array(scan.mesh.positions.length/3*2);
+  expect(Array.from(identifyScanSurfaces(scan).labels).slice(0,10)).toEqual([2,2,3,3,1,1,0,0,0,0]);
+  scan.mesh.positions[1]=.25;
+  expect(identifyScanSurfaces(scan).labels[0]).toBe(0);
+});
+
 test("nearby photo-textured wall layers receive paint while picture details stay captured", () => {
   const scan = roomScan();
   for (let vertex = 8; vertex < 12; vertex++) scan.mesh.positions[vertex * 3 + 2] = .12;

@@ -14,6 +14,7 @@ import {
 import { auditCapture } from "../core/adaptiveCapture";
 import { sanitizeScanCustomization } from "../core/scanCustomization";
 import { identifyScanSurfaces } from "../core/scanSurfaces";
+import { planesForScanMesh } from "../core/scanCoordinates";
 import { buildScanDesignSurfaces, getScanDesignSurfaces, SCAN_DESIGN_ALGORITHM_VERSION } from "../core/scanDesignSurfaces";
 
 const hasCheckedPreview = scan => {
@@ -160,8 +161,8 @@ export default function PartialScanReview({
   const displayScan = useMemo(() => {
     const result = renderedScan || scan;
     if (!result.imported || result.rawCapture || !result.mesh || getScanDesignSurfaces(result.mesh)) return result;
-    const candidates = result.captureQuality?.structuralDepth?.planes || result.captureQuality?.planarConsolidation?.planes;
-    const design = buildScanDesignSurfaces(result.mesh, Array.isArray(candidates) ? candidates : []);
+    const candidates = result.captureQuality?.structuralDepth || result.captureQuality?.planarConsolidation;
+    const design = buildScanDesignSurfaces(result.mesh, planesForScanMesh(result, candidates));
     return design ? { ...result, mesh: { ...result.mesh, designSurfaces: design } } : result;
   }, [renderedScan, scan]);
   const surfaces = useMemo(() => identifyScanSurfaces(displayScan), [displayScan]);

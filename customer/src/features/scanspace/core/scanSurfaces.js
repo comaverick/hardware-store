@@ -1,5 +1,6 @@
 import { getScanDesignSurfaces } from "./scanDesignSurfaces";
 import { classifyWallPhotoDetails, wallPhotoTextureDetail } from "./scanWallPhotoDetails";
+import { planesForScanMesh } from "./scanCoordinates";
 
 const kinds = [null, "walls", "floor", "ceiling"];
 const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
@@ -9,10 +10,10 @@ const unit = vector => {
 };
 
 function measuredPlanes(scan) {
-  const sources = [scan.captureQuality?.structuralDepth?.planes,
-    scan.mesh?.planarConsolidation?.planes, scan.captureQuality?.planarConsolidation?.planes];
+  const sources = [scan.captureQuality?.structuralDepth,
+    scan.mesh?.planarConsolidation, scan.captureQuality?.planarConsolidation];
   const result = [];
-  for (const source of sources) for (const plane of Array.isArray(source) ? source : []) {
+  for (const source of sources) for (const plane of planesForScanMesh(scan, source)) {
     const label = { wall: 1, floor: 2, ceiling: 3 }[plane?.kind];
     if (!label || !Array.isArray(plane.normal) || plane.normal.length !== 3 ||
       !plane.normal.every(Number.isFinite) || !Number.isFinite(plane.offset)) continue;
@@ -130,15 +131,19 @@ function preserveWallPhotoDetails(mesh, labels, planeIds, planes, centers, areas
       if (!rgb?.every(Number.isFinite)) continue;
       const p = centers.subarray(face * 3, face * 3 + 3);
       const x = Math.floor(dot(tangent, p) / .1), y = Math.floor(p[1] / .1), key = `${x},${y}`;
-      if (!cells.has(key)) cells.set(key, { x, y, faces: [], area: 0, sum: [0, 0, 0] });
+      if (!cells.has(key)) cells.set(key, { x, y, faces: [], area: 0, sum: [0, 0, 0], depthSum: 0 });
       const cell = cells.get(key), area = areas[face];
       cell.faces.push(face); cell.area += area;
+      cell.depthSum += (dot(plane.normal,p)-plane.offset)*area;
       cell.textureDetail ||= facePhotoHasTexture(mesh, face);
       rgb.forEach((value, channel) => {
         cell.sum[channel] += value * area;
       });
     }
-    for (const cell of cells.values()) cell.rgb = cell.sum.map(value => value / cell.area);
+    for (const cell of cells.values()) {
+      cell.rgb = cell.sum.map(value => value / cell.area);
+      cell.depthOffset = cell.depthSum / cell.area;
+    }
     classifyWallPhotoDetails(cells, .1);
     for (const cell of cells.values()) if (cell.detail)
       for (const face of cell.faces) labels[face] = 0;
@@ -169,8 +174,8 @@ export function identifyScanSurfaces(scan) {
     minY = Math.min(minY, mesh.positions[a + 1], mesh.positions[b + 1], mesh.positions[c + 1]);
     maxY = Math.max(maxY, mesh.positions[a + 1], mesh.positions[b + 1], mesh.positions[c + 1]);
   }
-  const floorY = Number.isFinite(scan.rawCapture?.floorY) ? scan.rawCapture.floorY
-    : Number.isFinite(scan.cloud?.floorY) ? scan.cloud.floorY : minY;
+  const floorY = Number.isFinite(scan.mesh?.floorY) || Number.isFinite(scan.rawCapture?.floorY) ||
+    Number.isFinite(scan.cloud?.floorY) ? 0 : minY;
   const known = measuredPlanes(scan);
   const planes = known.length ? known : fallbackPlanes(mesh, centers, normals, areas, floorY, maxY);
   const labels = new Uint8Array(faceCount);
@@ -184,7 +189,8 @@ export function identifyScanSurfaces(scan) {
       const plane = planes[planeId];
       // Textured scans can have several noisy layers of the same wall. Include
       // those layers; the photo-detail mask below protects shallow objects.
-      const limit = plane.label === 1 && mesh.texture?.data?.length && mesh.uvs?.length ? .16 : .065;
+      const photographed = mesh.texture?.data?.length && mesh.uvs?.length;
+      const limit = photographed && plane.label === 1 ? .16 : photographed && plane.label === 2 ? .12 : .065;
       if (Math.abs(dot(normal, plane.normal)) < (plane.label === 1 ? .6 : .72)) continue;
       const residual = Math.abs(dot(plane.normal, center) - plane.offset);
       if (residual > limit || residual >= best) continue;
