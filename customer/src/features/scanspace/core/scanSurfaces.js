@@ -1,4 +1,5 @@
 import { getScanDesignSurfaces } from "./scanDesignSurfaces";
+import { classifyWallPhotoDetails, wallPhotoTextureDetail } from "./scanWallPhotoDetails";
 
 const kinds = [null, "walls", "floor", "ceiling"];
 const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
@@ -93,69 +94,53 @@ function facePhotoColor(mesh, face) {
     sum + mesh.colors[mesh.indices[face * 3 + corner] * 3 + channel], 0) / 3);
 }
 
+function facePhotoHasTexture(mesh, face) {
+  const texture = mesh.texture;
+  if (!texture?.data?.length || !mesh.uvs?.length) return false;
+  const corners = [0, 1, 2].map(corner => mesh.indices[face * 3 + corner]);
+  // A second phase avoids aliasing repeated monochrome artwork into a single
+  // apparent shadow edge. All samples remain inside this triangle's atlas UVs.
+  for (const phase of [[.15, .5, .85], [.2, .45, .7]]) {
+    const samples = [];
+    for (const v of phase) for (const u of phase) {
+      const weights = [(1 - v) * (1 - u), (1 - v) * u, v];
+      const uv = [0, 1].map(axis => corners.reduce((sum, vertex, i) => sum + mesh.uvs[vertex * 2 + axis] * weights[i], 0));
+      const x = Math.max(0, Math.min(texture.width - 1, Math.floor(uv[0] * texture.width)));
+      const y = Math.max(0, Math.min(texture.height - 1, Math.floor(uv[1] * texture.height)));
+      const offset = (y * texture.width + x) * 4;
+      samples.push(Array.from(texture.data.subarray(offset, offset + 3)));
+    }
+    if (wallPhotoTextureDetail(samples)) return true;
+  }
+  return false;
+}
+
 // A photograph can contain artwork even when its shallow depth falls inside
-// the wall's noise band. Preserve differently colored or detailed photo cells
+// the wall's noise band. Preserve reflectance changes and photo details
 // instead of letting an entire detected plane erase their captured appearance.
 function preserveWallPhotoDetails(mesh, labels, planeIds, planes, centers, areas) {
   for (let planeId = 0; planeId < planes.length; planeId++) {
     const plane = planes[planeId];
     if (plane.label !== 1) continue;
     const tangent = unit([-plane.normal[2], 0, plane.normal[0]]);
-    const cells = new Map(), palette = new Map();
-    let totalArea = 0;
+    const cells = new Map();
     for (let face = 0; face < labels.length; face++) {
       if (labels[face] !== 1 || planeIds[face] !== planeId) continue;
       const rgb = facePhotoColor(mesh, face);
       if (!rgb?.every(Number.isFinite)) continue;
       const p = centers.subarray(face * 3, face * 3 + 3);
       const x = Math.floor(dot(tangent, p) / .1), y = Math.floor(p[1] / .1), key = `${x},${y}`;
-      if (!cells.has(key)) cells.set(key, { x, y, faces: [], area: 0, sum: [0, 0, 0], squares: [0, 0, 0] });
+      if (!cells.has(key)) cells.set(key, { x, y, faces: [], area: 0, sum: [0, 0, 0] });
       const cell = cells.get(key), area = areas[face];
-      cell.faces.push(face); cell.area += area; totalArea += area;
+      cell.faces.push(face); cell.area += area;
+      cell.textureDetail ||= facePhotoHasTexture(mesh, face);
       rgb.forEach((value, channel) => {
         cell.sum[channel] += value * area;
-        cell.squares[channel] += value * value * area;
       });
-      const colorKey = rgb.map(value => Math.round(value / 48)).join(",");
-      if (!palette.has(colorKey)) palette.set(colorKey, { area: 0, sum: [0, 0, 0] });
-      const color = palette.get(colorKey);
-      color.area += area;
-      rgb.forEach((value, channel) => { color.sum[channel] += value * area; });
     }
-    const dominant = [...palette.values()].sort((a, b) => b.area - a.area)[0];
-    if (!dominant || dominant.area < totalArea * .18) continue;
-    const wallColor = dominant.sum.map(value => value / dominant.area);
-    const detailed = new Set();
-    for (const [key, cell] of cells) {
-      const mean = cell.sum.map(value => value / cell.area);
-      const difference = Math.hypot(...mean.map((value, channel) => value - wallColor[channel]));
-      const variation = Math.sqrt(cell.squares.reduce((sum, value, channel) =>
-        sum + Math.max(0, value / cell.area - mean[channel] ** 2), 0));
-      if (difference > 135 || (variation > 45 && difference > 55)) detailed.add(key);
-    }
-    // Preserve the light parts and frame inside a coherent photo-detail patch,
-    // too. Color alone would paint pale highlights within a dark picture.
-    const remaining = new Set(detailed), rectangles = [];
-    while (remaining.size) {
-      const pending = [remaining.values().next().value], region = [];
-      remaining.delete(pending[0]);
-      while (pending.length) {
-        const cell = cells.get(pending.pop());
-        region.push(cell);
-        for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
-          const key = `${cell.x + dx},${cell.y + dy}`;
-          if (remaining.delete(key)) pending.push(key);
-        }
-      }
-      const minX = Math.min(...region.map(cell => cell.x)), maxX = Math.max(...region.map(cell => cell.x));
-      const minY = Math.min(...region.map(cell => cell.y)), maxY = Math.max(...region.map(cell => cell.y));
-      const width = maxX - minX + 1, height = maxY - minY + 1;
-      if (region.length >= 6 && width >= 3 && height >= 3 &&
-        region.length / (width * height) > .35 && width * height * .01 < totalArea * .65)
-        rectangles.push({ minX: minX - 1, maxX: maxX + 1, minY: minY - 1, maxY: maxY + 1 });
-    }
-    for (const [key, cell] of cells) if (detailed.has(key) || rectangles.some(rectangle =>
-      cell.x >= rectangle.minX && cell.x <= rectangle.maxX && cell.y >= rectangle.minY && cell.y <= rectangle.maxY))
+    for (const cell of cells.values()) cell.rgb = cell.sum.map(value => value / cell.area);
+    classifyWallPhotoDetails(cells, .1);
+    for (const cell of cells.values()) if (cell.detail)
       for (const face of cell.faces) labels[face] = 0;
   }
 }
@@ -215,8 +200,8 @@ export function identifyScanSurfaces(scan) {
       planeIds[face] = planeId;
     }
   }
-  preserveWallPhotoDetails(mesh, labels, planeIds, planes, centers, areas);
   const design = getScanDesignSurfaces(mesh);
+  if (!design) preserveWallPhotoDetails(mesh, labels, planeIds, planes, centers, areas);
   if (design) {
     // Foreground fragments and uncertain old wall regions keep their photo.
     // Paint targets the continuous design sheet instead of scattered faces.

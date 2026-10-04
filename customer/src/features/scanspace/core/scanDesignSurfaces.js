@@ -1,9 +1,10 @@
 import { independentFrameIds, structuralSupportAt } from "./structuralDepth";
+import { classifyWallPhotoDetails, wallPhotoTextureDetail } from "./scanWallPhotoDetails";
 
 // An editable surface is an approximation of the room envelope. It never
 // replaces the measured mesh or supplies new measured area/depth to capture.
 export const SCAN_DESIGN_SURFACE_VERSION = 2;
-export const SCAN_DESIGN_ALGORITHM_VERSION = 53;
+export const SCAN_DESIGN_ALGORITHM_VERSION = 54;
 export const MAX_SCAN_DESIGN_BYTES = 8 * 1024 * 1024;
 const MAX_CELLS = 24000;
 const MAX_WALLS = 8;
@@ -235,33 +236,7 @@ function fillEnclosedGaps(cells, evidence, world, cell, meshOnly) {
 }
 
 function photoDetails(cells, cell) {
-  const palette = new Map();
-  for (const p of cells.values()) if (p.rgb && !p.foreground) {
-    const k = p.rgb.map(x => Math.round(x / 32)).join(",");
-    if (!palette.has(k)) palette.set(k, { rgb: [0, 0, 0], count: 0 });
-    const color = palette.get(k); color.count++;
-    p.rgb.forEach((value, axis) => { color.rgb[axis] += value; });
-  }
-  const dominant = [...palette.values()].sort((a, b) => b.count - a.count)[0];
-  const background = dominant ? dominant.rgb.map(x => x / dominant.count) : [210, 210, 200];
-  const detail = new Map();
-  for (const [k, p] of cells) if (p.rgb && Math.hypot(...p.rgb.map((x, i) => x - background[i])) > 105)
-    detail.set(k, p);
-  // Fill the pale highlights inside a coherent photo/frame, with no expanded
-  // 10 cm halo. The mask lives on the continuous surface, not in its topology.
-  for (const region of gridComponents(detail)) {
-    const points = region.map(k => detail.get(k)), xs = points.map(p => p.x), ys = points.map(p => p.y);
-    const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
-    const width = maxX - minX + 1, height = maxY - minY + 1;
-    if (width * cell < .12 || height * cell < .12 ||
-        region.length / (width * height) < .28 || width * height > cells.size * .55) continue;
-    for (let x = minX; x <= maxX; x++) for (let y = minY; y <= maxY; y++) {
-      const p = cells.get(key(x, y));
-      if (p) p.detail = true;
-    }
-  }
-  for (const p of detail.values()) p.detail = true;
-  return background;
+  return classifyWallPhotoDetails(cells, cell);
 }
 
 // A fitted capture plane can sit between shallow competing depth sheets.
@@ -442,6 +417,14 @@ function buildWall(mesh, sourcePlane, frames, helpers, cell, junctionPlanes = []
       p.photoChoices.some(choice => choice.frame === frame && choice.score >= minimumScore)) || null;
     const projected = p.photoFrame && (helpers.projectColor || helpers.project)(p.photoFrame, ...world(p.x + .5, p.y + .5));
     if (projected) p.rgb = helpers.sampleColor?.(p.photoFrame, projected) || p.rgb;
+    if (p.photoFrame && helpers.sampleColor) {
+      const samples = [];
+      for (const y of [.15, .5, .85]) for (const x of [.15, .5, .85]) {
+        const uv = (helpers.projectColor || helpers.project)(p.photoFrame, ...world(p.x + x, p.y + y));
+        samples.push(uv && helpers.sampleColor(p.photoFrame, uv));
+      }
+      p.textureDetail = wallPhotoTextureDetail(samples);
+    }
     delete p.photoChoices; delete p.detailPhotoFrame; delete p.detail;
   }
   const background = photoDetails(cells, cell);

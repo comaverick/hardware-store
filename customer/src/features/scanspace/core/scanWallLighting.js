@@ -1,39 +1,7 @@
 import * as THREE from "three";
 import { shadeUnobservedBacks } from "./renderMesh";
-
-const linearBytes = Float32Array.from({ length: 256 }, (_, byte) => {
-  const value = byte / 255;
-  return value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4;
-});
-const luminance = rgb => .2126 * rgb[0] + .7152 * rgb[1] + .0722 * rgb[2];
-
-// A single scan cannot separate arbitrary paint patterns from illumination.
-// Assume the editable wall has one base paint, and normalize against its lit
-// pixels rather than its mean (which would brighten large shadowed areas).
-function paintReference(samples) {
-  if (!samples.length) return null;
-  const sorted = samples.map(luminance).sort((a, b) => a - b);
-  const lit = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * .9))];
-  if (lit < .004) return null; // no usable exposure evidence
-  const lower = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * .6))];
-  const rgb = [0, 0, 0]; let weight = 0;
-  for (const sample of samples) {
-    const value = luminance(sample);
-    if (value < lower || value > lit || value < .004) continue;
-    for (let channel = 0; channel < 3; channel++) rgb[channel] += sample[channel];
-    weight += value;
-  }
-  return weight ? rgb.map(value => Math.max(.004, value / weight * lit)) : [lit, lit, lit];
-}
-
-function relativeLight(rgb, reference) {
-  const light = rgb.map((value, i) => value / reference[i]);
-  const value = luminance(light);
-  // Keep subtle local warm/cool light, without carrying strong old-paint
-  // chroma or color-atlas outliers into the selected finish.
-  return light.map(channel => Math.min(2, Math.max(0, value)) *
-    Math.min(1.12, Math.max(.88, channel / Math.max(value, .00001))));
-}
+import { capturedLightReference as paintReference, linearScanBytes as linearBytes,
+  relativeCapturedLight as relativeLight } from "./scanSurfaceLighting";
 
 export function estimateWallLighting(wall) {
   const source = wall.texture;

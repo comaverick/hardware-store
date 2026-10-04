@@ -1,7 +1,6 @@
 import * as THREE from "three";
-import { floorFinishes } from "./scanCustomization";
 
-export function createScanFinishGeometry(original, mesh, surfaces, removedSourceFaces) {
+export function createScanFinishGeometry(original, mesh, surfaces, removedSourceFaces, floorLighting) {
   const geometry = new THREE.BufferGeometry();
   for (const [name, attribute] of Object.entries(original.attributes))
     geometry.setAttribute(name, attribute);
@@ -29,37 +28,13 @@ export function createScanFinishGeometry(original, mesh, surfaces, removedSource
         basis[1] * mesh.positions[vertex * 3 + 1] + basis[2] * mesh.positions[vertex * 3 + 2];
     }
   geometry.setAttribute("uv1", new THREE.BufferAttribute(uv, 2));
+  if (floorLighting) {
+    // Captured light uses a separate, nonrepeating channel. Rotating a plank
+    // pattern must not move a shadow, including on the adjusted floor edges.
+    const lightingUv = Float32Array.from(uv, (value, index) =>
+      (value - floorLighting.origin[index % 2]) / floorLighting.size[index % 2]);
+    geometry.setAttribute("uv2", new THREE.BufferAttribute(lightingUv, 2));
+  }
   geometry.boundingSphere = original.boundingSphere?.clone() || null;
   return geometry;
-}
-
-export function createFloorFinishTexture(selection) {
-  const finish = floorFinishes.find(value => value.id === selection?.finishId);
-  if (!finish) return null;
-  const size = 256, pixels = new Uint8Array(size * size * 4);
-  const rgb = [1, 3, 5].map(offset => parseInt(finish.color.slice(offset, offset + 2), 16));
-  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
-    const noise = ((Math.imul(x + 19, 374761393) ^ Math.imul(y + 31, 668265263)) >>> 0) % 17 / 17 - .5;
-    const grain = finish.pattern === "plank"
-      ? Math.sin(y * .38 + Math.sin(x * .025) * 1.8) * 8 + Math.sin(y * 1.9) * 3 + noise * 6
-      : Math.sin(x * .027 + y * .021) * 4 + noise * 4;
-    const seam = finish.pattern === "tile" ? x < 2 || y < 2 : x < 1 || y < 4;
-    const pixel = (y * size + x) * 4;
-    for (let channel = 0; channel < 3; channel++)
-      pixels[pixel + channel] = Math.max(0, Math.min(255,
-        seam ? rgb[channel] * (finish.pattern === "tile" ? .8 : .68) : rgb[channel] + grain));
-    pixels[pixel + 3] = 255;
-  }
-  const texture = new THREE.DataTexture(pixels, size, size, THREE.RGBAFormat);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.channel = 1;
-  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
-  texture.minFilter = THREE.LinearMipmapLinearFilter;
-  texture.magFilter = THREE.LinearFilter;
-  texture.generateMipmaps = true;
-  texture.repeat.set(finish.pattern === "tile" ? 1 / .6 : 1 / 1.2,
-    finish.pattern === "tile" ? 1 / .6 : 1 / .18);
-  texture.rotation = selection.direction === "crosswise" ? Math.PI / 2 : 0;
-  texture.needsUpdate = true;
-  return texture;
 }

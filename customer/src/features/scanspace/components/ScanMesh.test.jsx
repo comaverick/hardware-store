@@ -4,8 +4,20 @@ import * as THREE from "three";
 import ScanMesh from "./ScanMesh";
 import { buildScanDesignSurfaces } from "../core/scanDesignSurfaces";
 import { identifyScanSurfaces } from "../core/scanSurfaces";
+import { createFloorFinishMaterial, loadFloorFinishMaterial } from "../core/scanFloorMaterial";
+
+jest.mock("../core/scanFloorMaterial", () => {
+  const actual = jest.requireActual("../core/scanFloorMaterial");
+  return { ...actual, loadFloorFinishMaterial: jest.fn() };
+});
 
 extend(THREE);
+
+beforeEach(() => {
+  loadFloorFinishMaterial.mockImplementation(selection => Promise.resolve(
+    createFloorFinishMaterial(selection, [{ width: 1024, height: 1024 },
+      { width: 1024, height: 1024 }, { width: 1024, height: 1024 }])));
+});
 
 test("applied finishes attach to mesh groups and survive inspection and reset", async () => {
   const mesh = {
@@ -43,13 +55,25 @@ test("applied finishes attach to mesh groups and survive inspection and reset", 
       ceiling: { color: "#e5d3a4", finish: "Eggshell" } };
     rendered = await update(design);
     expect(rendered.material[2].map.channel).toBe(1);
-    expect(rendered.material[2].map.rotation).toBeCloseTo(Math.PI / 2);
+    expect(rendered.material[2].map.rotation).toBeCloseTo(Math.PI);
+    expect(rendered.material[2].normalMap.channel).toBe(1);
+    expect(rendered.material[2].roughnessMap.channel).toBe(1);
+    expect(rendered.material[2].normalMap.rotation).toBe(rendered.material[2].map.rotation);
+    const floorLighting = rendered.material[2].lightMap;
+    expect(floorLighting.channel).toBe(2);
+    expect(floorLighting.colorSpace).toBe(THREE.NoColorSpace);
+    expect(rendered.material[2].toneMapped).toBe(false);
+    const lightingUv = rendered.geometry.attributes.uv2.array;
     expect(rendered.material[3].color.getHexString()).toBe("e5d3a4");
     expect(rendered.material[3].roughness).toBe(.78);
     const repainted = { ...design, walls: { color: "#d9b09a", finish: "Matte" } };
     rendered = await update(repainted);
     expect(rendered.material[1].color.getHexString()).toBe("d9b09a");
     expect(rendered.material[1].roughness).toBe(1);
+    rendered = await update({ ...repainted, floor: { finishId: "stone", direction: "lengthwise" } });
+    expect(rendered.material[2].map.rotation).toBe(0);
+    expect(rendered.material[2].lightMap).toBe(floorLighting);
+    expect(rendered.geometry.attributes.uv2.array).toBe(lightingUv);
     rendered = await update(repainted, true);
     expect(Array.isArray(rendered.material)).toBe(false);
     expect(rendered.material.color.getHexString()).toBe("b9c2c0");
@@ -60,9 +84,51 @@ test("applied finishes attach to mesh groups and survive inspection and reset", 
     expect(rendered.material.isMeshBasicMaterial).toBe(true);
     expect(rendered.material.vertexColors).toBe(true);
     expect(rendered.geometry.index.array).toBe(mesh.indices);
+    rendered = await update(design);
+    expect(rendered.material[2].map.isTexture).toBe(true);
+    expect(rendered.material[2].normalMap.channel).toBe(1);
   } finally {
     await act(async () => root.unmount());
     global.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment;
+  }
+});
+
+test("late floor selections and failed texture loads keep the current floor or captured photograph", async () => {
+  const mesh = { positions: new Float32Array([0,0,0, 1,0,0, 0,0,1]),
+    indices: new Uint32Array([0,1,2]), colors: new Uint8Array(9).fill(255), portableColors: true };
+  const surfaces = { labels: new Uint8Array([2]), floorAxes: [[1,0,0], [0,0,1]] };
+  const photos = [{ width: 1024, height: 1024 }, { width: 1024, height: 1024 }, { width: 1024, height: 1024 }];
+  const old = createFloorFinishMaterial({ finishId: "walnut", direction: "lengthwise" }, photos);
+  const current = createFloorFinishMaterial({ finishId: "stone", direction: "crosswise" }, photos);
+  let resolveOld;
+  loadFloorFinishMaterial.mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve; }));
+  loadFloorFinishMaterial.mockResolvedValueOnce(current);
+  const root = createRoot(document.createElement("canvas"));
+  await root.configure({ gl: { render() {}, setPixelRatio() {}, setSize() {} },
+    size: { width: 100, height: 100 }, frameloop: "never" });
+  const previous = global.IS_REACT_ACT_ENVIRONMENT;
+  global.IS_REACT_ACT_ENVIRONMENT = true;
+  let store;
+  async function update(floor) {
+    await act(async () => { store = root.render(<ScanMesh {...{ mesh, surfaces }} customization={floor && { version: 1, floor }} />); });
+    return store.getState().scene.children[0].material;
+  }
+  try {
+    let material = await update({ finishId: "walnut", direction: "lengthwise" });
+    expect(material[2].isMeshBasicMaterial).toBe(true);
+    material = await update({ finishId: "stone", direction: "crosswise" });
+    expect(material[2].map).toBe(current.map);
+    await act(async () => { resolveOld(old); });
+    expect(old.disposed).toBe(true);
+    expect(store.getState().scene.children[0].material[2].map).toBe(current.map);
+    loadFloorFinishMaterial.mockRejectedValueOnce(new Error("local texture unavailable"));
+    material = await update({ finishId: "oak", direction: "lengthwise" });
+    expect(current.disposed).toBe(true);
+    expect(material[2].isMeshBasicMaterial).toBe(true);
+    await update(null);
+  } finally {
+    await act(async () => { root.unmount(); });
+    global.IS_REACT_ACT_ENVIRONMENT = previous;
   }
 });
 
@@ -110,8 +176,12 @@ test("paint and reset use the prepared wall while Geometry retains the measured 
       floor: { finishId: "walnut", direction: "crosswise" } });
     const floorEdge = scene.getObjectByName("captured-boundary-details");
     expect(floorEdge.material[2].map.channel).toBe(1);
-    expect(floorEdge.material[2].map.rotation).toBeCloseTo(Math.PI / 2);
+    expect(floorEdge.material[2].map.rotation).toBeCloseTo(Math.PI);
     expect(floorEdge.geometry.attributes.uv.array).toBe(mesh.designSurfaces.fragments.uvs);
+    const primaryFloor = floorEdge.parent.children[0];
+    expect(floorEdge.material[2].lightMap).toBe(primaryFloor.material[2].lightMap);
+    expect(floorEdge.material[2].lightMap.channel).toBe(2);
+    expect(floorEdge.geometry.attributes.uv2).toBeDefined();
     expect(scene.getObjectByName("prepared-wall").material.lightMap).toBe(lightingTexture);
     scene = await update(null);
     wall = scene.getObjectByName("prepared-wall");

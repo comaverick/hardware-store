@@ -109,3 +109,36 @@ test("pale highlights inside a detailed picture are preserved with the rest of t
   expect(surfaces.labels[(9 * 20 + 9) * 2]).toBe(0);
   expect(surfaces.labels[(1 * 20 + 1) * 2]).toBe(1);
 });
+
+test("shadowed parts of a portable wall remain paintable without changing the captured photo", () => {
+  const positions = [], indices = [], uvs = [];
+  for (let y = 0; y < 20; y++) for (let x = 0; x < 20; x++) {
+    const start = positions.length / 3;
+    positions.push(x / 10, y / 10, 0, (x + 1) / 10, y / 10, 0,
+      (x + 1) / 10, (y + 1) / 10, 0, x / 10, (y + 1) / 10, 0);
+    indices.push(start, start + 1, start + 2, start, start + 2, start + 3);
+    for (let corner = 0; corner < 4; corner++) uvs.push(x >= 5 && x < 12 && y >= 5 && y < 12 ? .75 : .25, .5);
+  }
+  const scan = {
+    mesh: { positions: new Float32Array(positions), indices: new Uint32Array(indices), uvs: new Float32Array(uvs),
+      texture: { width: 2, height: 1, data: new Uint8Array([235, 230, 220, 255, 110, 108, 103, 255]) } },
+    captureQuality: { structuralDepth: { planes: [{ kind: "wall", normal: [0, 0, 1], offset: 0 }] } },
+  };
+  const before = scan.mesh.texture.data.slice();
+  expect(identifyScanSurfaces(scan).labels.every(label => label === 1)).toBe(true);
+  expect(scan.mesh.texture.data).toEqual(before);
+});
+
+test("portable monochrome pictures retain their photographed texture on a flush wall", () => {
+  const scan = roomScan();
+  for (let vertex = 20; vertex < 24; vertex++) scan.mesh.positions[vertex * 3 + 2] = 0;
+  const width = 32, height = 32, data = new Uint8Array(width * height * 4);
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    const value = x === 0 ? 235 : (x + y) % 8 < 4 ? 230 : 30;
+    data.set([value, value, value, 255], (y * width + x) * 4);
+  }
+  scan.mesh.texture = { width, height, data };
+  scan.mesh.uvs = new Float32Array(scan.mesh.positions.length / 3 * 2).fill(.01);
+  scan.mesh.uvs.set([.1, .1, .95, .1, .95, .95, .1, .95], 20 * 2);
+  expect(Array.from(identifyScanSurfaces(scan).labels).slice(-2)).toEqual([0, 0]);
+});

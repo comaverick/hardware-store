@@ -1,5 +1,6 @@
 import { buildScanDesignSurfaces, getScanDesignSurfaces } from "./scanDesignSurfaces";
 import { surfaceTopologyDiagnostics } from "./surfaceTopology";
+import { estimateWallLighting } from "./scanWallLighting";
 
 function fixture({ opening = false, foreground = false, gap = false, stationary = false } = {}) {
   const positions = [], indices = [], colors = [], normals = [];
@@ -158,6 +159,40 @@ test("photographed plain-wall depth bias does not leave white foreground blocks 
   expect(design.diagnostics.removedTriangles).toBe(mesh.indices.length / 3);
   expect(design.fragments.indices).toHaveLength(0);
   expect(design.walls[0].detailMask.some(Boolean)).toBe(false);
+});
+
+test("a shadow on a noisy wall is flattened with the wall and remains in its paint lighting", () => {
+  const { mesh, plane, frames, helpers } = fixture({ foreground: true });
+  const before = mesh.positions.slice();
+  const textureFrames = [{ ...frames[0], colorImage: new Uint8Array(16).fill(255), colorWidth: 2, colorHeight: 2,
+    transformMatrix: new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, .6,.6,1,1]) }];
+  const design = buildScanDesignSurfaces(mesh, [plane], frames, { ...helpers, textureFrames,
+    sampleColor: (frame, uv) => uv.u > .3 && uv.u < .7 && uv.v > .3 && uv.v < .7
+      ? [110, 108, 103] : [235, 230, 220] });
+  const wall = design.walls[0], at = (u, v) => Math.floor(v * wall.texture.height) * wall.texture.width + Math.floor(u * wall.texture.width);
+  expect(wall.detailMask[at(.5, .5)]).toBe(0);
+  expect(design.fragments.indices).toHaveLength(0);
+  expect(design.removedSourceFaces.every(Boolean)).toBe(true);
+  expect(surfaceTopologyDiagnostics(wall).componentCount).toBe(1);
+  const light = estimateWallLighting(wall);
+  expect(light.data[at(.5, .5) * 4]).toBeLessThan(light.data[at(.2, .5) * 4] * .3);
+  expect(wall.texture.data[at(.5, .5) * 4]).toBe(110);
+  expect(mesh.positions).toEqual(before);
+});
+
+test("monochrome photographic texture stays protected even when its mean resembles wall shadow", () => {
+  const { mesh, plane, frames, helpers } = fixture();
+  const textureFrames = [{ ...frames[0], colorImage: new Uint8Array(16).fill(255), colorWidth: 2, colorHeight: 2,
+    transformMatrix: new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, .6,.6,1,1]) }];
+  const design = buildScanDesignSurfaces(mesh, [plane], frames, { ...helpers, textureFrames,
+    sampleColor: (frame, uv) => {
+      if (!(uv.u > .3 && uv.u < .7 && uv.v > .3 && uv.v < .7)) return [235, 230, 220];
+      const value = Math.round(130 + 100 * Math.cos(uv.u * Math.PI * 60));
+      return [value, value, value];
+    } });
+  const wall = design.walls[0];
+  expect(wall.detailMask.some(Boolean)).toBe(true);
+  expect(surfaceTopologyDiagnostics(wall).componentCount).toBe(1);
 });
 
 test("substantial foreground relief remains captured even when its photograph resembles white paint", () => {
