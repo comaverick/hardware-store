@@ -49,7 +49,7 @@ test.each([false, true])("an imported or unchecked raw file still goes through r
   expect(worker.terminate).toHaveBeenCalledTimes(1);
 });
 
-test.each([48, 49, 50, 51, 52, 53])("a checked raw preview from reconstruction v%s rebuilds the wall preparation", version => {
+test.each([48, 49, 50, 51, 52, 53, 54])("a checked raw preview from reconstruction v%s rebuilds surface preparation", version => {
   const worker = { postMessage: jest.fn(), terminate: jest.fn() };
   createFusionWorker.mockReturnValue(worker);
   const { unmount } = render(<PartialScanReview scan={{ mesh: { triangleCount: 12 }, fusionDiagnostics: { algorithmVersion: version },

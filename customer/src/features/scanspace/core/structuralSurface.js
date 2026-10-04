@@ -7,6 +7,69 @@ const dot = (a, b) => a.reduce((s, v, i) => s + v * b[i], 0);
 const sub = (a, b) => a.map((v, i) => v - b[i]);
 const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 const key = (x, y) => `${x},${y}`;
+
+// Adjacent points repeatedly see the same camera sets. Cache their unchanged
+// baseline result instead of recomputing the distance matrix for every clip.
+function cachedIndependentCount(framesById) {
+  const cache = new Map();
+  return ids => {
+    const k = [...ids].join(',');
+    if (!cache.has(k)) cache.set(k, independentFrameIds(ids, framesById, .06).size);
+    return cache.get(k);
+  };
+}
+
+// A ceiling's photographed region is established before fusion. Reusing that
+// ownership here lets one triangulation replace curled copies of the SAME
+// ceiling, instead of keeping them next to a small, already-flat replacement.
+// Color alone, height alone, and repeated stationary photographs are insufficient.
+function ceilingOwnership(plane, frames, helpers) {
+  if (plane.kind !== 'ceiling' || !plane.ceilingPhotoRegionId || !helpers.project) return null;
+  const id = plane.ceilingPhotoRegionId, palette = plane.ceilingPhotoPalette;
+  const photoFrames = helpers.photoFrames || frames;
+  const photoFramesById = new Map(photoFrames.map(f => {
+    const pose = f.viewTransformMatrix || f.transformMatrix;
+    return [f.frameId, { ...f, camera: pose?.length === 16 ? Array.from(pose.slice(12,15)) : f.camera }];
+  }));
+  const observers = photoFrames.filter(f => f.ceilingRegionMask?.some(value => value === id));
+  if (independentFrameIds(observers.map(f => f.frameId), photoFramesById, .06).size < 2) return null;
+  const independentCount = cachedIndependentCount(photoFramesById);
+  const cache = new Map();
+  function visible(p) {
+    const k = p.map(value => Math.round(value * 100000)).join(',');
+    if (cache.has(k)) return cache.get(k);
+    const ids = [];
+    for (const frame of observers) {
+      const uv = helpers.project(frame, ...p);
+      if (!uv || Math.min(uv.u, uv.v) < 0 || Math.max(uv.u, uv.v) >= 1) continue;
+      const index = Math.floor(uv.v * frame.rows) * frame.columns + Math.floor(uv.u * frame.columns);
+      if (frame.ceilingRegionMask[index] !== id) continue;
+      // A narrow trim/light may fall between depth pixels. Its full-resolution
+      // photograph must agree at the precise proposed point as well.
+      if (palette && frame.colorImage?.length && frame.colorWidth && frame.colorHeight) {
+        const colorView = { ...frame, projectionMatrix: frame.viewProjectionMatrix || frame.projectionMatrix,
+          transformMatrix: frame.viewTransformMatrix || frame.transformMatrix };
+        const colorUV = helpers.projectColor ? helpers.projectColor(frame, ...p) : helpers.project(colorView, ...p);
+        if (!colorUV || Math.min(colorUV.u, colorUV.v) < 0 || Math.max(colorUV.u, colorUV.v) >= 1) continue;
+        const x = Math.round(colorUV.u * (frame.colorWidth - 1)), y = Math.round((1 - colorUV.v) * (frame.colorHeight - 1));
+        const offset = (y * frame.colorWidth + x) * (frame.colorChannels || 4);
+        const color = Array.from(frame.colorImage.subarray(offset, offset + 3));
+        const lum = a => (a[0] + a[1] + a[2]) / 3, light = lum(color), reference = lum(palette);
+        if (light <= reference * .55 || light >= reference * 1.5 ||
+            Math.hypot(...color.map((value, i) => value / (light || 1) * 128 - palette[i] / (reference || 1) * 128)) > 15) continue;
+      }
+      ids.push(frame.frameId);
+    }
+    cache.set(k, ids);
+    return ids;
+  }
+  return (p, target = p) => {
+    const coarse = plane.axes.map(axis => Math.floor(dot(axis, target) / plane.cellSize)).join(',');
+    if (plane.stableCeilingCells?.has(coarse)) return false;
+    const destination = new Set(visible(target));
+    return independentCount(visible(p).filter(frameId => destination.has(frameId))) >= 2;
+  };
+}
 function gridComponents(occupied) {
   const visited = new Set(), components = [];
   for (const k of occupied.keys()) {
@@ -32,9 +95,9 @@ function gridComponents(occupied) {
     disconnectedCells: components.slice(1).reduce((sum, size) => sum + size, 0),
   };
 }
-function outsideCell(polygon, x, y, boundary) {
+function outsideCell(polygon, x, y, boundary, allowInside) {
   let inside = polygon;
-  const outside = [];
+  const outside = [], intersections = [];
   for (const [axis, sign, offset] of [[0, 1, x], [0, -1, -x - 1], [1, 1, y], [1, -1, -y - 1]]) {
     const clipped = [],
       rejected = [];
@@ -51,7 +114,7 @@ function outsideCell(polygon, x, y, boundary) {
             p: a.p.map((v, k) => v + (b.p[k] - v) * t),
             c: a.c.map((v, k) => v + (b.c[k] - v) * t)
           };
-        boundary?.(p);
+        intersections.push(p);
         clipped.push(p);
         rejected.push(p);
       }
@@ -60,10 +123,13 @@ function outsideCell(polygon, x, y, boundary) {
     inside = clipped;
     if (inside.length < 3) break;
   }
+  if (allowInside && (inside.length < 3 || !allowInside(inside))) return [polygon];
+  intersections.forEach(p => boundary?.(p));
   return outside;
 }
 export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options = {}) {
   const framesById = new Map(frames.map(frame => [frame.frameId, frame]));
+  const independentCount = cachedIndependentCount(framesById);
   const minimumCellViews = Math.max(2, Number(options.minimumCellViews) || 3);
   const replacementBandMeters = Math.max(
     0.001,
@@ -91,19 +157,54 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
     boundaryCorrectionLimitMeters: Math.min(.05, replacementBandMeters),
     minimumCellViews,
     replacementBandMeters,
+    photographedCeilingPlanes: 0,
+    removedBentCeilingTriangles: 0,
   };
   const patches = [];
   for (const plane of planes) {
     if (plane.kind === 'wall' || plane.supportingFrameIds.length < 3 || plane.area < structuralRepairMinimumArea(plane.kind)) continue;
-    const cell = plane.cellSize,
+    const ownership = ceilingOwnership(plane, frames, helpers);
+    const flatEvidence = p => {
+      const ids = [];
+      for (const frame of frames) {
+        if (frame.textureOnly || !frame.ceilingFlatEvidenceMask) continue;
+        const uv = helpers.project(frame,...p);
+        if (!uv || Math.min(uv.u,uv.v)<0 || Math.max(uv.u,uv.v)>=1) continue;
+        const i = Math.floor(uv.v*frame.rows)*frame.columns + Math.floor(uv.u*frame.columns);
+        const ray = p.map((value,a) => value-frame.camera[a]), denominator = dot(plane.normal,ray);
+        if (Math.abs(denominator)<1e-8) continue;
+        const scale = (plane.offset-dot(plane.normal,frame.camera))/denominator;
+        if (!(scale>0)) continue;
+        const target = Array.from(frame.camera).map((value,a) => value+ray[a]*scale);
+        if (Math.hypot(...target.map((value,a)=>value-p[a]))>.72) continue;
+        const projection = helpers.project(frame,...target);
+        const recovered = plane.ceilingRecoveryId && frame.ceilingRepairMask?.[i] === plane.ceilingRecoveryId;
+        const depth = (recovered ? frame.filteredDepth : frame.originalFilteredDepth || frame.filteredDepth)[i];
+        if (frame.measuredMask[i] && frame.ceilingFlatEvidenceMask[i] === plane.ceilingPhotoRegionId &&
+            projection && Math.abs(depth-projection.depth) <= .08) ids.push(frame.frameId);
+      }
+      return independentCount(ids) >= 2;
+    };
+    // The ceiling plane and each coarse footprint already have three depth
+    // observers. Two translated rays plus two photographs can support a finer
+    // interior cell; requiring three rays in every 4 cm cell fragments a valid
+    // plane at native depth-pixel boundaries. Missing-gap repairs still need three.
+    const minimumInteriorViews = ownership ? 2 : minimumCellViews;
+    const cell = ownership ? Math.min(.04, plane.cellSize) : plane.cellSize,
       occupied = new Map();
-    for (const [k, views] of plane.cells) if (views.size >= minimumCellViews) occupied.set(k, {
-      estimated: false
-    });
+    for (const [k, views] of plane.cells) if (views.size >= minimumCellViews && (!ownership ||
+        independentCount(views) >= minimumCellViews)) {
+      const [x, y] = k.split(',').map(Number), ratio = plane.cellSize / cell;
+      for (let a = Math.round(x * ratio); a < Math.round((x + 1) * ratio); a++)
+        for (let b = Math.round(y * ratio); b < Math.round((y + 1) * ratio); b++)
+          occupied.set(key(a, b), { estimated: false });
+    }
     const coordinates = [...occupied.keys()].map(k => k.split(',').map(Number));
     if (!coordinates.length) continue;
     const bounds = [Math.min(...coordinates.map(p => p[0])), Math.min(...coordinates.map(p => p[1])), Math.max(...coordinates.map(p => p[0])), Math.max(...coordinates.map(p => p[1]))];
     const world = (x, y) => plane.normal.map((n, i) => n * plane.offset + plane.axes[0][i] * x * cell + plane.axes[1][i] * y * cell);
+    const ownsCell = (x, y) => !ownership || [[.5,.5],[.15,.15],[.85,.15],[.15,.85],[.85,.85]]
+      .every(([dx,dy]) => ownership(world(x + dx, y + dy)));
     const evidence = p => {
       const agreeing = [],
         contradicting = [];
@@ -128,10 +229,9 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
         else if (difference > .13 && (f.freeSpaceMask?.[i] ?? 1) && (f.depthConfidence?.[i] ?? 255) >= 140)
           contradicting.push(f);
       }
-      const independent = independentFrameIds(agreeing.map(frame => frame.frameId), framesById, .06);
       return {
-        agrees: independent.size,
-        contradicts: independentFrameIds(contradicting.map(frame => frame.frameId), framesById, .06).size
+        agrees: independentCount(agreeing.map(frame => frame.frameId)),
+        contradicts: independentCount(contradicting.map(frame => frame.frameId))
       };
     };
     // Test the interior in addition to the center. A narrow opening or object
@@ -139,8 +239,8 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
     for (const [k] of occupied) {
       const [x, y] = k.split(',').map(Number);
       if ([[.5, .5], [.15, .15], [.85, .15], [.15, .85], [.85, .85]].some(([dx, dy]) => {
-        const e = evidence(world(x + dx, y + dy));
-        return e.agrees < minimumCellViews || e.contradicts > Math.max(1, e.agrees * .25);
+        const p = world(x + dx, y + dy), e = evidence(p);
+        return e.agrees < minimumInteriorViews || e.contradicts > Math.max(1, e.agrees * .25) || (ownership && !ownership(p));
       })) occupied.delete(k);
     }
     const visited = new Set();
@@ -164,7 +264,7 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
       if (boundary || group.length * cell * cell > .4) continue;
       if (group.some(([a, b]) => {
         const e = evidence(world(a + .5, b + .5));
-        return e.agrees < minimumCellViews || e.contradicts > 0;
+        return e.agrees < minimumCellViews || e.contradicts > 0 || !ownsCell(a, b);
       })) continue;
       diagnostics.estimatedHoleCount++;
       for (const [a, b] of group) occupied.set(key(a, b), {
@@ -182,7 +282,7 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
         if (!run.length || run.length > 3 || bridgeCells.size + run.length > maxBridgeCells) return;
         for (const [x, y] of run) {
           const e = evidence(world(x + .5, y + .5));
-          if (e.agrees < minimumCellViews || e.contradicts > 0) return;
+          if (e.agrees < minimumCellViews || e.contradicts > 0 || !ownsCell(x, y)) return;
         }
         run.forEach(([x, y]) => bridgeCells.add(key(x, y)));
       };
@@ -236,6 +336,8 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
       cell,
       grid: gridComponents(occupied),
       matchingPatchId,
+      ownership,
+      flatEvidence,
     });
   }
   if (!patches.length) return {
@@ -274,6 +376,7 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
     if (!touchesFootprint(patch, p)) return;
     const residual = dot(patch.plane.normal, p) - patch.plane.offset;
     const proposed = p.map((v, i) => v - patch.plane.normal[i] * residual);
+    if (patch.ownership && !patch.ownership(p, proposed)) return;
     const movement = distance(p, proposed);
     if (movement > diagnostics.boundaryCorrectionLimitMeters + 1e-7) {
       diagnostics.rejectedBoundaryCorrections++;
@@ -292,20 +395,39 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
     }
     seams.set(k, seam);
   };
-  const replacementAt = (p, n, l, center) => patches.find(({ plane, occupied, cell }) => {
-    if (Math.abs(dot(n, plane.normal)) / l < .985) return false;
-    if (Math.max(...p.map(q => Math.abs(dot(plane.normal, q) - plane.offset))) > replacementBandMeters) return false;
+  const replacementAt = (p, n, l, center) => patches.find(({ plane, occupied, cell, ownership }) => {
+    const residual = Math.max(...p.map(q => Math.abs(dot(plane.normal, q) - plane.offset)));
+    if (ownership) {
+      // Larger removal is local to the previously verified photographed ceiling;
+      // the generic floor/ceiling correction and boundary caps stay unchanged.
+      if (residual > .72) return false;
+      // Ownership is checked on each clipped polygon below. Requiring every
+      // original corner would retain a large bent triangle across a valid
+      // ceiling boundary simply because its far corner belongs to trim.
+    } else {
+      if (Math.abs(dot(n, plane.normal)) / l < .985 || residual > replacementBandMeters) return false;
+    }
     const x = Math.floor(dot(plane.axes[0], center) / cell), y = Math.floor(dot(plane.axes[1], center) / cell);
     return occupied.has(key(x, y)) || p.some(q => occupied.has(key(Math.floor(dot(plane.axes[0], q) / cell), Math.floor(dot(plane.axes[1], q) / cell))));
   });
-  const sourceRecords = [], attachmentHash = new Map(), attachmentDirect = new Map(), attachmentEdges = new Set(), attachmentCell = .12;
+  // Match the lookup scale to the finer ceiling tessellation. A 12 cm bucket
+  // contains hundreds of unrelated 2 cm edges; all exact edge/seam tests and
+  // their tolerances stay the same with the narrower lookup.
+  const boundaryHashCell = patches.some(patch => patch.ownership) ? .04 : .12;
+  const sourceRecords = [], attachmentHash = new Map(), attachmentDirect = new Map(), attachmentEdges = new Set(), attachmentCell = boundaryHashCell;
   const attachmentHashKey = p => p.map(v => Math.floor(v / attachmentCell)).join(',');
   for (let t = 0; t < mesh.indices.length; t += 3) {
     const ids = Array.from(mesh.indices.subarray(t, t + 3)), p = ids.map(point);
     const n = cross(sub(p[1], p[0]), sub(p[2], p[0])), l = Math.hypot(...n) || 1;
     const center = [0, 1, 2].map(i => p.reduce((s, q) => s + q[i] / 3, 0)), patch = replacementAt(p, n, l, center);
-    sourceRecords.push({ t, ids, p, n, l, center, patch });
-    if (!patch) continue;
+    const fullyOwned = !patch?.ownership || (p.every(q => patch.ownership(q,
+      q.map((value,i) => value - patch.plane.normal[i] * (dot(patch.plane.normal,q) - patch.plane.offset)))) &&
+      (Math.abs(dot(n,patch.plane.normal))/l >= .3 || patch.flatEvidence(center)));
+    // Retained and partially owned faces can protect their attachment to an
+    // independently owned neighbor. Do not index their own internal edges:
+    // that would preserve a diagonal duplicate through the rebuilt interior.
+    sourceRecords.push({ t, ids, p, n, l, center, patch: fullyOwned ? patch : null });
+    if (!patch || !fullyOwned) continue;
     for (let i = 0; i < 3; i++) {
       const a = p[i], b = p[(i + 1) % 3], edgeKey = [pointKey(a), pointKey(b)].sort().join('/');
       if (attachmentEdges.has(edgeKey)) continue;
@@ -361,12 +483,13 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
     const xs = [Math.min(...coordinates.map(q => q[0])), Math.max(...coordinates.map(q => q[0])) + 1];
     const ys = [Math.min(...coordinates.map(q => q[1])), Math.max(...coordinates.map(q => q[1])) + 1];
     const corners = xs.flatMap(x => ys.map(y => patch.world(x, y)));
-    return [patch, { min: [0, 1, 2].map(i => Math.min(...corners.map(p => p[i])) - .15 - patch.cell),
-      max: [0, 1, 2].map(i => Math.max(...corners.map(p => p[i])) + .15 + patch.cell) }];
+    const padding = patch.ownership ? .72 : .15;
+    return [patch, { min: [0, 1, 2].map(i => Math.min(...corners.map(p => p[i])) - padding - patch.cell),
+      max: [0, 1, 2].map(i => Math.max(...corners.map(p => p[i])) + padding + patch.cell) }];
   }));
   for (const record of sourceRecords) {
-    const nearby = patches.filter(patch => record.patch !== patch && Math.abs(dot(record.n, patch.plane.normal)) / record.l >= .35 &&
-      Math.max(...record.p.map(p => Math.abs(dot(patch.plane.normal, p) - patch.plane.offset))) <= .15 &&
+    const nearby = patches.filter(patch => record.patch !== patch && (patch.ownership || Math.abs(dot(record.n, patch.plane.normal)) / record.l >= .35) &&
+      Math.max(...record.p.map(p => Math.abs(dot(patch.plane.normal, p) - patch.plane.offset))) <= (patch.ownership ? .72 : .15) &&
       [0, 1, 2].every(i => Math.max(...record.p.map(p => p[i])) >= attachmentBounds.get(patch).min[i] && Math.min(...record.p.map(p => p[i])) <= attachmentBounds.get(patch).max[i]));
     if (!nearby.length) continue;
     for (let i = 0; i < 3; i++) {
@@ -424,22 +547,39 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
       occupied,
       cell
     } = replacement;
-    let pieces = [p.map((q, k) => ({
+    const originalPolygon = p.map((q, k) => ({
       p: q,
       c: mesh.colors?.length ? Array.from(mesh.colors.subarray(ids[k] * 3, ids[k] * 3 + 3)) : [],
       q: plane.axes.map(a => dot(a, q) / cell)
-    }))];
-    pieces[0].forEach(vertex => recordBoundary(vertex, replacement, p));
+    }));
+    let pieces = [originalPolygon];
     const xy = pieces[0].map(q => q.q),
       bounds = [Math.floor(Math.min(...xy.map(q => q[0]))), Math.floor(Math.min(...xy.map(q => q[1]))), Math.floor(Math.max(...xy.map(q => q[0]))), Math.floor(Math.max(...xy.map(q => q[1])))];
     for (let y = bounds[1]; y <= bounds[3]; y++) for (let x = bounds[0]; x <= bounds[2]; x++) if (occupied.has(key(x, y))) pieces = pieces.flatMap(polygon => outsideCell(polygon, x, y,
-      vertex => recordBoundary(vertex, replacement, p)));
+      vertex => recordBoundary(vertex, replacement, p), replacement.ownership && (inside => {
+        // A genuine riser can have the same paint as the ceiling. Only native
+        // depth normals may authorize treating a vertical face as a bent copy.
+        const middle = [0,1,2].map(i => inside.reduce((sum,v) => sum+v.p[i]/inside.length,0));
+        if (Math.abs(dot(n,plane.normal))/l < .3 && !replacement.flatEvidence(middle)) return false;
+        return inside.every(vertex => {
+        const residual = dot(plane.normal, vertex.p) - plane.offset;
+        return replacement.ownership(vertex.p, vertex.p.map((value, i) => value - plane.normal[i] * residual));
+      }); })));
+    if (pieces.length === 1 && pieces[0] === originalPolygon) {
+      faces.push({ sourceFace: t / 3, source: p, polygons: [p.map((q, k) => ({
+        p: q, id: ids[k], c: mesh.colors?.length ? Array.from(mesh.colors.subarray(ids[k] * 3, ids[k] * 3 + 3)) : [] }))] });
+      continue;
+    }
+    originalPolygon.forEach(vertex => recordBoundary(vertex, replacement, p));
     diagnostics.removedTriangles++;
+    if (replacement.ownership && (Math.abs(dot(n, plane.normal)) / l < .985 ||
+        p.some(q => Math.abs(dot(plane.normal, q) - plane.offset) > replacementBandMeters)))
+      diagnostics.removedBentCeilingTriangles++;
     if (p.some(q => Math.abs(dot(plane.normal, q) - plane.offset) > 1e-5))
       diagnostics.removedCompetingTriangles++;
     faces.push({ sourceFace: t / 3, source: p, polygons: pieces, replacement });
   }
-  const hashCell = .12, seamHash = new Map();
+  const hashCell = boundaryHashCell, seamHash = new Map();
   // Already coplanar boundaries only need the normal topology pass. Avoid
   // indexing and resplitting every retained edge when no seam actually moves.
   const displacedBoundary = [...seams.values()].some(seam => !seam.rejected && seam.movement > tolerance);
@@ -594,7 +734,8 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
     plane,
     occupied,
     world,
-    cell
+    cell,
+    ownership
   } of patches) {
     const patchId = storedPlanes.length,
       lookup = new Map();
@@ -620,7 +761,8 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
             const uv = helpers.project(f, ...p);
             if (!uv) continue;
             const i = Math.floor(uv.v * f.rows) * f.columns + Math.floor(uv.u * f.columns);
-            if (f.measuredMask[i] && Math.abs(f.filteredDepth[i] - uv.depth) < .1 && f.colors?.length) samples.push(Array.from(f.colors.subarray(i * 3, i * 3 + 3)));
+            if (f.measuredMask[i] && Math.abs(f.filteredDepth[i] - uv.depth) < .1 && f.colors?.length &&
+                (plane.kind !== 'ceiling' || !f.colorMask || f.colorMask[i])) samples.push(Array.from(f.colors.subarray(i * 3, i * 3 + 3)));
           }
           colors.push(...[0, 1, 2].map(i => samples.length ? samples.reduce((s, c) => s + helpers.linearByte(c[i]), 0) / samples.length : 90));
         }
@@ -645,11 +787,15 @@ export function rebuildStructuralSurfaces(mesh, planes, frames, helpers, options
       if (info.estimated) diagnostics.estimatedArea += cell * cell;
     }
     diagnostics.reconstructedArea += occupied.size * cell * cell;
+    if (ownership) diagnostics.photographedCeilingPlanes++;
     diagnostics.planes.push({
       kind: plane.kind,
       area: occupied.size * cell * cell,
       supportingFrameIds: plane.supportingFrameIds,
       grid: gridComponents(occupied),
+      cellSize: cell,
+      minimumInteriorDepthViews: ownership ? 2 : minimumCellViews,
+      minimumFootprintDepthViews: minimumCellViews,
     });
   }
   const result = {

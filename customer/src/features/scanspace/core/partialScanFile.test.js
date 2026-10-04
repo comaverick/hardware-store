@@ -101,7 +101,7 @@ test("portable designs retain flat walls and measured source geometry through a 
   const fallback = parsePartialScan(JSON.stringify(damaged));
   expect(fallback.mesh.designSurfaces).toBeNull();
   expect(fallback.mesh.positions).toEqual(scan.mesh.positions);
-  for (const version of [51,52,53]) {
+  for (const version of [51,52,53,54]) {
     const previousJoin = JSON.parse(encoded);
     previousJoin.scan.mesh.designSurfaces.sourceAlgorithmVersion = version;
     const rebuiltFallback = parsePartialScan(JSON.stringify(previousJoin));

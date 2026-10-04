@@ -97,6 +97,9 @@ test('translated photos repair differing ceiling depth while preserving source r
   expect(result.diagnostics.correctedSamples).toBeGreaterThan(500);
   expect(result.diagnostics.maxDisplacementMeters).toBeGreaterThan(.1);
   expect(result.diagnostics.maxDisplacementMeters).toBeLessThanOrEqual(.72);
+  expect(result.planes[0].ceilingPhotoRegionId).toBe(1);
+  expect(result.frames.every(frame => frame.ceilingRegionMask.some(Boolean))).toBe(true);
+  expect(f.frames.every(frame => frame.ceilingRegionMask === undefined)).toBe(true);
   f.frames.forEach((before, index) => {
     const after = result.frames[index];
     for (const [key, original] of Object.entries(snapshots[index])) expect(before[key]).toEqual(original);
@@ -144,6 +147,7 @@ test('a consistent alternate height is retained despite a continuous matching gr
   const f = fixture({ biases: [.12, .12, .12] }), result = repair(f);
   expect(result.diagnostics.correctedSamples).toBe(0);
   expect(result.diagnostics.planes[0].stableOffsetCells).toBeGreaterThan(10);
+  expect(result.planes[0].stableCeilingCells.size).toBeGreaterThan(10);
   f.frames.forEach((before, index) => expect(result.frames[index].positions).toEqual(before.positions));
 });
 
@@ -184,7 +188,7 @@ test.each([['missing', true], ['filled but unmeasured', false]])(
       let alteredUnmeasured = 0;
       for (let i = 0; i < before.filteredDepth.length; i++) if (!before.measuredMask[i] &&
         (after.measuredMask[i] || after.filteredDepth[i] !== before.filteredDepth[i] ||
-          changed(before, after, i) || after.ceilingRepairMask?.[i])) alteredUnmeasured++;
+          changed(before, after, i) || after.ceilingRepairMask?.[i] || after.ceilingRegionMask?.[i])) alteredUnmeasured++;
       expect(alteredUnmeasured).toBe(0);
     });
   },

@@ -5625,7 +5625,8 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
         ? structuralPlanes.filter(plane => rebuildKinds.includes(plane.kind))
         : structuralPlanes;
       surface = rebuildStructuralSurfaces(surface, rebuildPlanes, usable,
-        { project: projectWorld, linearByte },
+        { project: projectWorld, projectColor: projectColorWorld,
+          photoFrames: [...usable, ...extraTextureFrames], linearByte },
         {
           repairPlanarGaps: options.repairPlanarGaps,
           minimumCellViews: options.structuralRebuildMinimumCellViews ?? 3,
@@ -5659,10 +5660,13 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
           proposedCorrectedBoundaryVertices: stages.structuralRebuild.correctedBoundaryVertices,
           proposedSplitBoundaryEdges: stages.structuralRebuild.splitBoundaryEdges,
           proposedMaxBoundaryDisplacementMeters: stages.structuralRebuild.maxBoundaryDisplacementMeters,
+          proposedPhotographedCeilingPlanes: stages.structuralRebuild.photographedCeilingPlanes,
+          proposedRemovedBentCeilingTriangles: stages.structuralRebuild.removedBentCeilingTriangles,
           reconstructedArea: 0, reconstructedTriangles: 0,
           removedTriangles: 0, removedCompetingTriangles: 0,
           correctedBoundaryVertices: 0, splitBoundaryEdges: 0,
           maxBoundaryDisplacementMeters: 0,
+          photographedCeilingPlanes: 0, removedBentCeilingTriangles: 0,
           estimatedArea: 0, estimatedTriangles: 0, estimatedHoleCount: 0,
           bridgedArea: 0, bridgedCells: 0, bridgedRuns: 0,
           planes: [] };

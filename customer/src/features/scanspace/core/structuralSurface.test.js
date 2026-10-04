@@ -27,6 +27,160 @@ function fixture({hole=false, wall=false}={}) {
 }
 const helpers={project:(f,x,y,z)=>({u:x/1.2,v:-z/1.2,depth:1-y}),linearByte:v=>v};
 
+function photographedCeiling({ stationary = false, detail = false } = {}) {
+  const { mesh, plane, frames } = fixture();
+  plane.kind = 'ceiling'; plane.offset = 2.6; plane.ceilingPhotoRegionId = 1;
+  plane.stableCeilingCells = new Set();
+  for (let i = 1; i < mesh.positions.length; i += 3)
+    mesh.positions[i] = 2.6 + .2 * Math.sin(mesh.positions[i - 1] * 5);
+  const count = mesh.positions.length / 3;
+  const duplicate = mesh.positions.map((v, i) => i % 3 === 1 ? v + .16 : v);
+  mesh.positions = new Float32Array([...mesh.positions, ...duplicate]);
+  mesh.indices = new Uint32Array([...mesh.indices, ...mesh.indices.map(i => i + count)]);
+  for (let t = 0; t < mesh.indices.length; t += 3)
+    [mesh.indices[t + 1], mesh.indices[t + 2]] = [mesh.indices[t + 2], mesh.indices[t + 1]];
+  mesh.colors = new Uint8Array(mesh.positions.length).fill(160);
+  mesh.surfacePatchIds = new Int32Array(mesh.indices.length / 3).fill(0);
+  for (const frame of frames) {
+    frame.camera = [stationary ? 0 : frame.frameId * .12, 1.4, 0];
+    frame.ceilingRegionMask = new Uint8Array(400).fill(1);
+    frame.ceilingFlatEvidenceMask = new Uint8Array(400).fill(1);
+    if (detail) for (let y = 7; y <= 9; y++) for (let x = 7; x <= 9; x++) {
+      frame.ceilingRegionMask[y * 20 + x] = 0;
+      frame.filteredDepth[y * 20 + x] = .8;
+    }
+  }
+  return { mesh, plane, frames, helpers: { ...helpers,
+    project: (f,x,y,z) => ({u:.025+x/1.26,v:.025-z/1.26,depth:1+y-2.6}) } };
+}
+
+test('photographed ownership replaces bent ceiling duplicates on one finer connected grid', () => {
+  const f = photographedCeiling(), source = f.mesh.positions.slice();
+  const result = rebuildStructuralSurfaces(f.mesh, [f.plane], f.frames, f.helpers);
+  expect(result.structuralRebuild.photographedCeilingPlanes).toBe(1);
+  expect(result.structuralRebuild.removedBentCeilingTriangles).toBeGreaterThan(100);
+  expect(result.structuralRebuild.planes[0].cellSize).toBe(.04);
+  expect(result.structuralRebuild.planes[0].grid.count).toBe(1);
+  expect(result.structuralRebuild.reconstructedArea).toBeGreaterThan(.8);
+  expect(result.structuralRebuild.maxBoundaryDisplacementMeters).toBeLessThanOrEqual(.05);
+  expect(f.mesh.positions).toEqual(source);
+  const patchId = result.planarConsolidation.planes.length - 1;
+  for (let t = 0; t < result.indices.length / 3; t++) if (result.surfacePatchIds[t] === patchId)
+    for (let c = 0; c < 3; c++) expect(result.positions[result.indices[t * 3 + c] * 3 + 1]).toBeCloseTo(2.6, 5);
+});
+
+test('stationary ceiling photos cannot authorize removal of bent measured fragments', () => {
+  const f = photographedCeiling({stationary:true});
+  const result = rebuildStructuralSurfaces(f.mesh, [f.plane], f.frames, f.helpers);
+  expect(result.structuralRebuild.photographedCeilingPlanes).toBe(0);
+  expect(result.structuralRebuild.removedBentCeilingTriangles).toBe(0);
+});
+
+test('additional ceiling photographs cannot supply a missing third depth observer', () => {
+  const f = photographedCeiling();
+  const result = rebuildStructuralSurfaces(f.mesh,[f.plane],f.frames.slice(0,2),
+    {...f.helpers,photoFrames:f.frames});
+  expect(result.structuralRebuild.reconstructedArea).toBe(0);
+  expect(result.indices).toBe(f.mesh.indices);
+});
+
+test('refreshed ceiling photographs use their color-camera poses for independence', () => {
+  const f = photographedCeiling();
+  for (const frame of f.frames) frame.viewTransformMatrix = new Float32Array([
+    1,0,0,0, 0,1,0,0, 0,0,1,0, 0,1.4,0,1]);
+  const result = rebuildStructuralSurfaces(f.mesh,[f.plane],f.frames,f.helpers);
+  expect(result.structuralRebuild.photographedCeilingPlanes).toBe(0);
+  expect(result.structuralRebuild.removedBentCeilingTriangles).toBe(0);
+});
+
+test('a verified ceiling fin is removed even when its distorted normal is vertical', () => {
+  const f = photographedCeiling(), base = f.mesh.positions.length/3;
+  const fin = [.44,2.62,-.44, .44,2.96,-.44, .53,2.82,-.53];
+  f.mesh.positions = new Float32Array([...f.mesh.positions,...fin]);
+  f.mesh.indices = new Uint32Array([...f.mesh.indices,base,base+1,base+2]);
+  f.mesh.colors = new Uint8Array(f.mesh.positions.length).fill(160);
+  f.mesh.surfacePatchIds = new Int32Array([...f.mesh.surfacePatchIds,-1]);
+  const result = rebuildStructuralSurfaces(f.mesh,[f.plane],f.frames,f.helpers);
+  let found = false;
+  for(let t=0;t<result.indices.length;t+=3) {
+    const p = Array.from(result.indices.subarray(t,t+3)).flatMap(id=>Array.from(result.positions.subarray(id*3,id*3+3)));
+    if(p.every((v,i)=>Math.abs(v-fin[i])<1e-6)) found=true;
+  }
+  expect(found).toBe(false);
+});
+
+test('a same-painted real ceiling riser retains its measured height and attachment', () => {
+  const f = photographedCeiling(), base = f.mesh.positions.length/3;
+  const lower = 2.6 + .2 * Math.sin(.6 * 5);
+  const riser = [.6,lower,-.48, .6,lower,-.6, .6,2.9,-.48, .6,2.9,-.6];
+  f.mesh.positions = new Float32Array([...f.mesh.positions,...riser]);
+  f.mesh.indices = new Uint32Array([...f.mesh.indices,base,base+1,base+2,base+1,base+3,base+2]);
+  f.mesh.colors = new Uint8Array(f.mesh.positions.length).fill(160);
+  f.mesh.surfacePatchIds = new Int32Array([...f.mesh.surfacePatchIds,-1,-1]);
+  for (const frame of f.frames) for (let y=7;y<=10;y++) for(let x=8;x<=10;x++)
+    frame.ceilingFlatEvidenceMask[y*20+x] = 0;
+  const result = conformSurfaceTopology(rebuildStructuralSurfaces(f.mesh,[f.plane],f.frames,f.helpers));
+  let riserFaces = 0;
+  for (let t=0;t<result.indices.length;t+=3) {
+    const p = Array.from(result.indices.subarray(t,t+3)).map(i=>Array.from(result.positions.subarray(i*3,i*3+3)));
+    if(p.every(q=>Math.abs(q[0]-.6)<1e-6) && p.some(q=>Math.abs(q[1]-2.9)<1e-6) && p.some(q=>q[1]<2.65)) riserFaces++;
+  }
+  expect(riserFaces).toBeGreaterThan(0);
+  expect(result.structuralRebuild.preservedAttachmentEdges).toBeGreaterThan(0);
+  expect(surfaceTopologyDiagnostics(result).components[0].max[1]).toBeGreaterThanOrEqual(2.9-1e-6);
+});
+
+test('a supported coarse ceiling stays connected across sparse native depth pixels', () => {
+  const f = photographedCeiling();
+  for (let y=8;y<12;y++) for(let x=8;x<12;x++) f.frames[2].measuredMask[y*20+x]=0;
+  const result = rebuildStructuralSurfaces(f.mesh,[f.plane],f.frames,f.helpers);
+  expect(result.structuralRebuild.planes[0].grid.count).toBe(1);
+  expect(result.structuralRebuild.planes[0].minimumFootprintDepthViews).toBe(3);
+  expect(result.structuralRebuild.planes[0].minimumInteriorDepthViews).toBe(2);
+});
+
+test('a ceiling triangle crossing the photograph boundary is clipped inside the supported region', () => {
+  const f = photographedCeiling();
+  f.helpers.project = (frame,x,y,z) => ({u:x/1.2,v:-z/1.2,depth:1+y-2.6});
+  f.mesh.positions = new Float32Array([0,2.8,0, 1.2,2.8,0, 0,2.8,-1.2, 1.2,2.8,-1.2]);
+  f.mesh.indices = new Uint32Array([0,1,2,1,3,2]);
+  f.mesh.colors = new Uint8Array(12).fill(160);
+  f.mesh.surfacePatchIds = new Int32Array([0,0]);
+  const result = rebuildStructuralSurfaces(f.mesh, [f.plane], f.frames, f.helpers);
+  expect(result.structuralRebuild.removedBentCeilingTriangles).toBe(2);
+  // The unsampled outer border stays captured; the interior has no old sheet.
+  for (let t = 0; t < result.indices.length; t += 3) {
+    const p = Array.from(result.indices.subarray(t,t+3)).map(i => Array.from(result.positions.subarray(i*3,i*3+3)));
+    if (p.every(v => v[1] > 2.7)) {
+      const x = p.reduce((s,v) => s + v[0]/3,0), z = p.reduce((s,v) => s - v[2]/3,0);
+      expect(x > .1 && x < 1.1 && z > .1 && z < 1.1).toBe(false);
+    }
+  }
+});
+
+test('ceiling ownership preserves fixtures and independently stable alternate levels', () => {
+  const f = photographedCeiling({detail:true});
+  f.plane.stableCeilingCells.add('6,6');
+  const objects = [.44,2.4,-.44, .53,2.4,-.44, .53,2.4,-.53,
+    .75,2.88,-.75, .81,2.88,-.75, .81,2.88,-.81];
+  const base = f.mesh.positions.length / 3;
+  f.mesh.positions = new Float32Array([...f.mesh.positions, ...objects]);
+  f.mesh.indices = new Uint32Array([...f.mesh.indices, base,base+1,base+2, base+3,base+4,base+5]);
+  f.mesh.colors = new Uint8Array(f.mesh.positions.length).fill(160);
+  f.mesh.surfacePatchIds = new Int32Array([...f.mesh.surfacePatchIds, -1,-1]);
+  const result = rebuildStructuralSurfaces(f.mesh, [f.plane], f.frames, f.helpers);
+  expect(result.structuralRebuild.removedBentCeilingTriangles).toBeGreaterThan(0);
+  const hasFace = points => {
+    for (let t = 0; t < result.indices.length; t += 3) {
+      const actual = Array.from(result.indices.subarray(t,t+3)).flatMap(i => Array.from(result.positions.subarray(i*3,i*3+3)));
+      if (actual.every((v,i) => Math.abs(v-points[i]) < 1e-6)) return true;
+    }
+    return false;
+  };
+  expect(hasFace(objects.slice(0,9))).toBe(true);
+  expect(hasFace(objects.slice(9))).toBe(true);
+});
+
 test('a partial ceiling passes every area gate while keeping a measured opening',()=>{
   const {mesh,plane,frames}=fixture({hole:true});
   plane.kind='ceiling'; plane.offset=2.6;

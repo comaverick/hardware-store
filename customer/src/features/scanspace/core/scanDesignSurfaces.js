@@ -4,7 +4,7 @@ import { classifyWallPhotoDetails, wallPhotoTextureDetail } from "./scanWallPhot
 // An editable surface is an approximation of the room envelope. It never
 // replaces the measured mesh or supplies new measured area/depth to capture.
 export const SCAN_DESIGN_SURFACE_VERSION = 2;
-export const SCAN_DESIGN_ALGORITHM_VERSION = 54;
+export const SCAN_DESIGN_ALGORITHM_VERSION = 55;
 export const MAX_SCAN_DESIGN_BYTES = 8 * 1024 * 1024;
 const MAX_CELLS = 24000;
 const MAX_WALLS = 8;

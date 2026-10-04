@@ -195,6 +195,7 @@ export function repairCeilingRegions(frames = [], planes = [], helpers = {}, {
         }
         return false;
       };
+      d.crossesColorBoundary = crossesColorBoundary;
       for (let q = 0; q < queue.length; q++) {
         const i = queue[q],
           x = i % f.columns,
@@ -268,7 +269,7 @@ export function repairCeilingRegions(frames = [], planes = [], helpers = {}, {
     }
     // Dense pixels from one camera contribute one median. Stable offsets can
     // be an actual beam or raised tray, even when its paint matches the ceiling.
-    const noisy = new Set(),
+    const noisy = new Set(), stableCells = new Set(),
       noisyEvidence = new Map();
     for (const [key, views] of cells) {
       const ids = independent([...views].filter(([id, values]) => values.length >= 3).map(([id]) => id));
@@ -281,6 +282,7 @@ export function repairCeilingRegions(frames = [], planes = [], helpers = {}, {
         offsets.filter(v => Math.abs(v - center) <= .025).length >= Math.ceil(offsets.length * .7);
       if (stable) {
         detail.stableOffsetCells++;
+        stableCells.add(key);
         continue;
       }
       if (mad >= .025 || Math.max(...offsets) - Math.min(...offsets) >= .06) {
@@ -295,11 +297,54 @@ export function repairCeilingRegions(frames = [], planes = [], helpers = {}, {
       if (!changes.has(c.d.frame.frameId)) changes.set(c.d.frame.frameId, []);
       changes.get(c.d.frame.frameId).push(c);
     }
+    // The depth repair's local normal/continuity tests deliberately exclude
+    // steep curls. They must not also exclude those pixels from later mesh
+    // ownership: that would preserve exactly the bent sheets being repaired.
+    // Grow only through the same photographed material, along existing rays
+    // into the independently supported footprint. This adds no depth edits.
+    const footprint = new Map([...plane.cells, ...noisyEvidence]);
+    detail.meshOwnershipMasks = [];
+    for (const d of descriptors.filter(d => d.mask.some(Boolean))) {
+      const f = d.frame, eligible = new Uint8Array(d.count);
+      const valid = i => {
+        if (i < 0 || i >= d.count) return false;
+        if (eligible[i]) return eligible[i] === 1;
+        eligible[i] = 2;
+        if (!f.measuredMask[i] || !d.depths[i] || !d.colorMask[i] || !colorEligible(at(d.colors,i))) return false;
+        const p = at(d.positions,i), ray = sub(p,Array.from(f.camera)), den = dot(plane.normal,ray);
+        if (p[1] <= 1.9 || Math.abs(den) / (length(ray) || 1) < .18) return false;
+        const scale = (plane.offset - dot(plane.normal,Array.from(f.camera))) / den;
+        if (!(scale > 0)) return false;
+        const target = Array.from(f.camera).map((value,a) => value + scale * ray[a]), k = cell(target);
+        if (length(sub(target,p)) > cap || stableCells.has(k) || (footprint.get(k)?.size || 0) < 3) return false;
+        eligible[i] = 1; return true;
+      };
+      const queue = Array.from({length:d.count},(_,i) => i).filter(i => d.mask[i]);
+      for (let cursor = 0; cursor < queue.length; cursor++) {
+        const i = queue[cursor], x = i % f.columns, y = Math.floor(i / f.columns);
+        for (const j of [x ? i-1 : -1, x < f.columns-1 ? i+1 : -1,
+          y ? i-f.columns : -1, y < f.rows-1 ? i+f.columns : -1]) {
+          if (d.mask[j] || !valid(j) || length(sub(at(d.colors,j),at(d.colors,i))) > 35 ||
+              d.crossesColorBoundary?.(i,j)) continue;
+          d.mask[j] = 1; queue.push(j);
+        }
+      }
+      detail.meshOwnershipMasks.push({frameId:f.frameId,pixels:queue.length});
+    }
     // A model correction retains the original pixel ray and original arrays.
     // Tag it for this ceiling only; it cannot supply a new free-space veto.
+    const photoMasks = new Map(descriptors.map(d => [d.frame.frameId, d.mask]));
     result = result.map(frame => {
       const edits = changes.get(frame.frameId);
-      if (!edits?.length) return frame;
+      const region = photoMasks.get(frame.frameId);
+      const ceilingRegionMask = frame.ceilingRegionMask?.slice() || new Uint8Array(frame.filteredDepth.length);
+      const ceilingFlatEvidenceMask = frame.ceilingFlatEvidenceMask?.slice() || new Uint8Array(frame.filteredDepth.length);
+      const originalNormals = descriptors.find(d => d.frame.frameId === frame.frameId)?.normals;
+      if (region) for (let i = 0; i < region.length; i++) if (region[i]) {
+        ceilingRegionMask[i] = recoveryId;
+        ceilingFlatEvidenceMask[i] = originalNormals && Math.abs(dot(plane.normal,at(originalNormals,i))) >= .55 ? recoveryId : 0;
+      }
+      if (!edits?.length) return region?.some(Boolean) ? { ...frame, ceilingRegionMask, ceilingFlatEvidenceMask } : frame;
       const filteredDepth = frame.filteredDepth.slice(),
         positions = frame.positions.slice(),
         freeSpaceMask = frame.freeSpaceMask?.slice(),
@@ -322,10 +367,17 @@ export function repairCeilingRegions(frames = [], planes = [], helpers = {}, {
         freeSpaceMask,
         depthConfidence,
         ceilingRepairMask,
+        ceilingRegionMask,
+        ceilingFlatEvidenceMask,
         originalFilteredDepth: frame.originalFilteredDepth || frame.filteredDepth,
         originalPositions: frame.originalPositions || frame.positions
       };
     });
+    // Keep the photographed ownership independently of the corrected rays.
+    // The mesh stage needs it to replace bent duplicate sheets, while retaining
+    // consistently observed separate levels and the source photographs.
+    repairedPlanes[planeIndex] = { ...plane, ceilingPhotoRegionId: recoveryId,
+      ceilingPhotoPalette: palette, stableCeilingCells: stableCells };
     if (noisy.size) {
       const recoveredCells = new Set(noisy),
         recoveredCellViews = new Map([...noisyEvidence].map(([key, ids]) => [key, new Set(ids)]));
@@ -335,7 +387,7 @@ export function repairCeilingRegions(frames = [], planes = [], helpers = {}, {
         recoveredFootprint.set(key, new Set(independent(combined)));
       }
       repairedPlanes[planeIndex] = {
-        ...plane,
+        ...repairedPlanes[planeIndex],
         cells: recoveredFootprint,
         recoveredCells,
         recoveredCellViews,
