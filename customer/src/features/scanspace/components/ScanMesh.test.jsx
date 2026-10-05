@@ -204,3 +204,49 @@ test("paint and reset use the prepared wall while Geometry retains the measured 
     await act(async () => root.unmount()); global.IS_REACT_ACT_ENVIRONMENT = previous;
   }
 });
+
+test("prepared ceilings accept finishes while Geometry keeps the complete captured mesh", async () => {
+  const mesh = {
+    positions: new Float32Array([0, 2.6, 0, 1.2, 2.6, 0, 1.2, 2.6, 1.2, 0, 2.6, 1.2]),
+    normals: new Float32Array([0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0]),
+    colors: new Uint8Array(12).fill(180), indices: new Uint32Array([0, 1, 2, 0, 2, 3]),
+    floorY: 0, portableColors: true,
+  };
+  const frames = [0, 1, 2].map(frameId => ({
+    frameId, camera: [frameId * .12, 1, .6],
+    transformMatrix: new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, frameId * .12, 1, .6, 1]),
+    columns: 30, rows: 30, colorImage: new Uint8Array(64).fill(180), colorWidth: 4, colorHeight: 4,
+    measuredMask: new Uint8Array(900).fill(1), filteredDepth: new Float32Array(900).fill(1.6),
+  }));
+  mesh.designSurfaces = buildScanDesignSurfaces(mesh, [], frames, {
+    project: (f, x, y, z) => ({ u: (x + .1) / 1.4, v: (z + .1) / 1.4, depth: y - 1 }),
+    unproject: (f, i, d) => [(i % 30 + .5) * .04, 1 + d, (Math.floor(i / 30) + .5) * .04],
+    sampleColor: () => [180, 180, 170],
+  });
+  expect(mesh.designSurfaces.ceilings).toHaveLength(1);
+  const root = createRoot(document.createElement("canvas"));
+  await root.configure({ gl: { render() {}, setPixelRatio() {}, setSize() {} },
+    size: { width: 100, height: 100 }, frameloop: "never" });
+  const previous = global.IS_REACT_ACT_ENVIRONMENT;
+  global.IS_REACT_ACT_ENVIRONMENT = true;
+  let store;
+  async function update(customization, geometryOnly = false) {
+    await act(async () => { store = root.render(<ScanMesh {...{ mesh, customization, geometryOnly }} />); });
+    return store.getState().scene;
+  }
+  try {
+    let scene = await update(null), ceiling = scene.getObjectByName("prepared-ceiling");
+    expect(ceiling.material.map).not.toBeNull();
+    expect(ceiling.material.side).toBe(THREE.FrontSide);
+    expect(scene.getObjectByName("prepared-ceiling-back")).toBeUndefined();
+    scene = await update({ version: 1, ceiling: { color: "#e5d3a4", finish: "Eggshell" } });
+    expect(scene.getObjectByName("prepared-ceiling").material.color.getHexString()).toBe("e5d3a4");
+    scene = await update(null, true);
+    expect(scene.getObjectByName("prepared-ceiling")).toBeUndefined();
+    expect(scene.children[0].geometry.attributes.position.array).toBe(mesh.positions);
+    expect(scene.children[0].material.clippingPlanes).toBeNull();
+  } finally {
+    await act(async () => root.unmount());
+    global.IS_REACT_ACT_ENVIRONMENT = previous;
+  }
+});

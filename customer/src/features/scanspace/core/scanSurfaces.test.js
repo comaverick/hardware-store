@@ -1,4 +1,5 @@
 import { identifyScanSurfaces } from "./scanSurfaces";
+import { SCAN_DESIGN_SURFACE_VERSION, SCAN_DESIGN_ALGORITHM_VERSION, scanDesignSourceKey } from "./scanDesignSurfaces";
 
 function roomScan(diagnostics = true) {
   const positions = [], indices = [];
@@ -31,6 +32,21 @@ test.each([true, false])("surface targeting preserves table tops, cabinets, and 
   expect(surfaces.counts).toEqual({ walls: 2, floor: 2, ceiling: 2 });
   expect(scan.mesh.positions).toEqual(originalPositions);
   expect(scan.mesh.indices).toEqual(originalIndices);
+});
+
+test("a prepared ceiling keeps captured walls editable and counts its replacement once", () => {
+  const scan = roomScan(), removed = new Uint8Array(scan.mesh.indices.length / 3);
+  removed[2] = removed[3] = 1;
+  scan.mesh.designSurfaces = {
+    version: SCAN_DESIGN_SURFACE_VERSION, sourceAlgorithmVersion: SCAN_DESIGN_ALGORITHM_VERSION,
+    sourceKey: scanDesignSourceKey(scan.mesh), removedSourceFaces: removed, walls: [],
+    ceilings: [{ indices: new Uint32Array([0, 1, 2, 0, 2, 3]), area: 6 }],
+  };
+  const surfaces = identifyScanSurfaces(scan);
+  expect(Array.from(surfaces.labels)).toEqual([2, 2, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0]);
+  expect(surfaces.counts).toEqual({ walls: 2, floor: 2, ceiling: 2 });
+  expect(surfaces.areas.ceiling).toBe(6);
+  expect(surfaces.areas.walls).toBeCloseTo(5.6);
 });
 
 test("a tilted measured plane stays editable while a distant parallel sheet stays captured", () => {

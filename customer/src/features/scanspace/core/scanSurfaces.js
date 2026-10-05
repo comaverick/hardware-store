@@ -207,13 +207,20 @@ export function identifyScanSurfaces(scan) {
     }
   }
   const design = getScanDesignSurfaces(mesh);
-  if (!design) preserveWallPhotoDetails(mesh, labels, planeIds, planes, centers, areas);
+  if (!design?.walls.length) preserveWallPhotoDetails(mesh, labels, planeIds, planes, centers, areas);
   if (design) {
     // Foreground fragments and uncertain old wall regions keep their photo.
     // Paint targets the continuous design sheet instead of scattered faces.
-    for (let face = 0; face < labels.length; face++) if (labels[face] === 1) labels[face] = 0;
-    counts.walls = design.walls.reduce((sum, wall) => sum + wall.indices.length / 3, 0);
-    surfaceAreas.walls = design.walls.reduce((sum, wall) => sum + wall.area, 0);
+    if (design.walls.length) {
+      for (let face = 0; face < labels.length; face++) if (labels[face] === 1) labels[face] = 0;
+      counts.walls = design.walls.reduce((sum, wall) => sum + wall.indices.length / 3, 0);
+      surfaceAreas.walls = design.walls.reduce((sum, wall) => sum + wall.area, 0);
+    }
+    if (design.ceilings?.length) {
+      for (let face = 0; face < labels.length; face++) if (labels[face] === 3 && design.removedSourceFaces[face]) labels[face] = 0;
+      counts.ceiling = design.ceilings.reduce((sum, ceiling) => sum + ceiling.indices.length / 3, 0);
+      surfaceAreas.ceiling = design.ceilings.reduce((sum, ceiling) => sum + ceiling.area, 0);
+    }
   }
   for (let face = 0; face < faceCount; face++) {
     if (labels[face]) {

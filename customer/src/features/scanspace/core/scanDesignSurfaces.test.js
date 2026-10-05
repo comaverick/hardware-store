@@ -56,6 +56,21 @@ test("noisy overlapping wall sheets become one flat, connected design mesh witho
   expect(getScanDesignSurfaces({ ...mesh, positions: new Float32Array(positions).fill(.3) })).toBeNull();
 });
 
+test("white atlas fallback tiles retain the captured vertex color in prepared walls", () => {
+  const { mesh } = fixture();
+  for (let i=2;i<mesh.positions.length;i+=3) mesh.positions[i]=0;
+  mesh.colors.fill(64);
+  mesh.uvs=new Float32Array(mesh.positions.length/3*2).fill(.5);
+  mesh.texture={width:1,height:1,data:new Uint8Array([255,255,255,255])};
+  const design=buildScanDesignSurfaces(mesh,[{kind:"wall",normal:[0,0,1],offset:0}]);
+  const rgb=Array.from(design.walls[0].texture.data.slice(0,3));
+  expect(rgb).toEqual([137,137,137]);
+  expect(mesh.colors.every(v=>v===64)).toBe(true);
+  mesh.colors.fill(255);
+  const photographed=buildScanDesignSurfaces(mesh,[{kind:"wall",normal:[0,0,1],offset:0}]);
+  expect(Array.from(photographed.walls[0].texture.data.slice(0,3))).toEqual([255,255,255]);
+});
+
 test("independently observed openings remain holes and contradictory background fragments are removed", () => {
   const { mesh, plane, frames, helpers } = fixture({ opening: true });
   const design = buildScanDesignSurfaces(mesh, [plane], frames, helpers), wall = design.walls[0];
@@ -178,6 +193,18 @@ test("separate camera snapshots supply fine photo detail without becoming depth 
   const wall = design.walls[0], offset = (Math.floor(wall.texture.height / 4) * wall.texture.width + Math.floor(wall.texture.width / 4)) * 4;
   expect(Array.from(wall.texture.data.subarray(offset, offset + 4))).toEqual([180, 60, 40, 255]);
   expect(wall.openingMask.some(Boolean)).toBe(false);
+});
+
+test("a clipped wall photo yields to an observed properly exposed alternative", () => {
+  const {mesh,plane,frames,helpers}=fixture();
+  const textureFrames=[0,1].map(i=>({...frames[i],frameId:100+i,textureOnly:true,
+    colorImage:new Uint8Array(16).fill(255),colorWidth:2,colorHeight:2,
+    transformMatrix:new Float32Array([1,0,0,0,0,1,0,0,0,0,1,0,.6,.6,1,1])}));
+  const sampleColor=frame=>frame.frameId===100 ? [255,255,255] : [185,180,170];
+  const design=buildScanDesignSurfaces(mesh,[plane],frames,{...helpers,textureFrames,sampleColor});
+  expect(Array.from(design.walls[0].texture.data.slice(0,3))).toEqual([185,180,170]);
+  const only=buildScanDesignSurfaces(mesh,[plane],frames,{...helpers,textureFrames:[textureFrames[0]],sampleColor});
+  expect(Array.from(only.walls[0].texture.data.slice(0,3))).toEqual([255,255,255]);
 });
 
 test("pale highlights in a flush picture are protected on the continuous wall without a broad halo", () => {

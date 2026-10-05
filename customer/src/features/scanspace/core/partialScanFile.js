@@ -437,26 +437,29 @@ function encodeDesignSurfaces(mesh) {
   const design = getScanDesignSurfaces(mesh);
   if (!design || !validScanDesignSurfaces(design, mesh)) return null;
   const encodeGeometry = value => Object.fromEntries(DESIGN_GEOMETRY_ARRAYS.map(([name, type]) => [name, encodeArray(value[name], type)]));
+  const encodeSurface = wall => ({ ...encodeGeometry(wall), id: wall.id, normal: wall.normal,
+    offset: wall.offset, axes: wall.axes, cellSize: wall.cellSize, extent: wall.extent,
+    area: wall.area, estimatedArea: wall.estimatedArea, componentCount: wall.componentCount,
+    junctionVertexCount: wall.junctionVertexCount || 0,
+    source: wall.source, supportingFrameIds: wall.supportingFrameIds,
+    estimatedTriangleMask: encodeArray(wall.estimatedTriangleMask, "u8"),
+    footprint: encodeArray(wall.footprint, "u8"), openingMask: encodeArray(wall.openingMask, "u8"),
+    detailMask: encodeArray(wall.detailMask, "u8"), texture: {
+      width: wall.texture.width, height: wall.texture.height, data: encodeArray(wall.texture.data, "u8"),
+    } });
   return { version: design.version, sourceAlgorithmVersion: design.sourceAlgorithmVersion,
     mode: "estimated-planar-design-surface", sourceKey: design.sourceKey,
     removedSourceFaces: encodeArray(design.removedSourceFaces, "u8"),
     fragments: { ...encodeGeometry(design.fragments), colors: encodeArray(design.fragments.colors, "u8"),
       sourceFaces: encodeArray(design.fragments.sourceFaces, "u32"),
       estimatedTriangleMask: encodeArray(design.fragments.estimatedTriangleMask, "u8") },
-    walls: design.walls.map(wall => ({ ...encodeGeometry(wall), id: wall.id, normal: wall.normal,
-      offset: wall.offset, axes: wall.axes, cellSize: wall.cellSize, extent: wall.extent,
-      area: wall.area, estimatedArea: wall.estimatedArea, componentCount: wall.componentCount,
-      junctionVertexCount: wall.junctionVertexCount || 0,
-      source: wall.source, supportingFrameIds: wall.supportingFrameIds,
-      estimatedTriangleMask: encodeArray(wall.estimatedTriangleMask, "u8"),
-      footprint: encodeArray(wall.footprint, "u8"), openingMask: encodeArray(wall.openingMask, "u8"),
-      detailMask: encodeArray(wall.detailMask, "u8"), texture: {
-        width: wall.texture.width, height: wall.texture.height, data: encodeArray(wall.texture.data, "u8"),
-      } })), diagnostics: design.diagnostics };
+    walls: design.walls.map(encodeSurface), ceilings: (design.ceilings || []).map(encodeSurface),
+    diagnostics: design.diagnostics };
 }
 
 function decodeDesignSurfaces(value, mesh) {
-  if (value?.version !== SCAN_DESIGN_SURFACE_VERSION || !Array.isArray(value.walls) || value.walls.length > 8) return null;
+  if (value?.version !== SCAN_DESIGN_SURFACE_VERSION || !Array.isArray(value.walls) || value.walls.length > 8 ||
+    (value.ceilings !== undefined && (!Array.isArray(value.ceilings) || value.ceilings.length > 1))) return null;
   try {
     const decodeGeometry = source => Object.fromEntries(DESIGN_GEOMETRY_ARRAYS.map(([name, type]) =>
       [name, decodeArray(source[name], type, `design ${name}`)]));
@@ -464,7 +467,7 @@ function decodeDesignSurfaces(value, mesh) {
       colors: decodeArray(value.fragments.colors, "u8", "design fragment colors"),
       sourceFaces: decodeArray(value.fragments.sourceFaces, "u32", "design fragment sources"),
       estimatedTriangleMask: decodeArray(value.fragments.estimatedTriangleMask, "u8", "design fragment estimates") };
-    const walls = value.walls.map(source => {
+    const decodeSurface = source => {
       const geometry = decodeGeometry(source);
       return { ...geometry, colors: new Uint8Array(geometry.positions.length).fill(255),
         id: String(source.id || "").slice(0, 100), normal: source.normal, offset: source.offset,
@@ -479,10 +482,11 @@ function decodeDesignSurfaces(value, mesh) {
         detailMask: decodeArray(source.detailMask, "u8", "design photo details"),
         texture: { width: source.texture.width, height: source.texture.height,
           data: decodeArray(source.texture.data, "u8", "design photo") } };
-    });
+    };
+    const walls = value.walls.map(decodeSurface), ceilings = (value.ceilings || []).map(decodeSurface);
     const design = { version: SCAN_DESIGN_SURFACE_VERSION,
       sourceAlgorithmVersion: Number(value.sourceAlgorithmVersion) || SCAN_DESIGN_ALGORITHM_VERSION,
-      mode: "estimated-planar-design-surface", sourceKey: value.sourceKey, walls, fragments,
+      mode: "estimated-planar-design-surface", sourceKey: value.sourceKey, walls, ceilings, fragments,
       removedSourceFaces: decodeArray(value.removedSourceFaces, "u8", "design replacements"),
       diagnostics: { walls: walls.length, area: walls.reduce((sum, wall) => sum + wall.area, 0),
         estimatedArea: walls.reduce((sum, wall) => sum + wall.estimatedArea, 0), measuredGeometryChanged: false } };

@@ -1,10 +1,11 @@
 import { independentFrameIds, structuralSupportAt } from "./structuralDepth";
 import { classifyWallPhotoDetails, wallPhotoTextureDetail } from "./scanWallPhotoDetails";
+import { prepareScanCeiling } from "./scanCeilingPreparation";
 
 // An editable surface is an approximation of the room envelope. It never
 // replaces the measured mesh or supplies new measured area/depth to capture.
 export const SCAN_DESIGN_SURFACE_VERSION = 2;
-export const SCAN_DESIGN_ALGORITHM_VERSION = 58;
+export const SCAN_DESIGN_ALGORITHM_VERSION = 59;
 export const MAX_SCAN_DESIGN_BYTES = 8 * 1024 * 1024;
 const MAX_CELLS = 24000;
 const MAX_WALLS = 8;
@@ -35,14 +36,14 @@ export function getScanDesignSurfaces(mesh) {
   const design = mesh?.designSurfaces;
   return design?.version === SCAN_DESIGN_SURFACE_VERSION &&
     design.sourceAlgorithmVersion === SCAN_DESIGN_ALGORITHM_VERSION &&
-    design.sourceKey === scanDesignSourceKey(mesh) && design.walls?.length &&
+    design.sourceKey === scanDesignSourceKey(mesh) && (design.walls?.length || design.ceilings?.length) &&
     design.removedSourceFaces?.length === mesh.indices.length / 3 ? design : null;
 }
 
 export function scanDesignByteLength(design) {
   if (!design) return 0;
   return [design.removedSourceFaces, ...Object.values(design.fragments || {}),
-    ...(design.walls || []).flatMap(wall => [wall.positions, wall.normals, wall.colors, wall.uvs,
+    ...[...(design.walls || []), ...(design.ceilings || [])].flatMap(wall => [wall.positions, wall.normals, wall.colors, wall.uvs,
       wall.indices, wall.estimatedTriangleMask, wall.texture?.data, wall.detailMask, wall.footprint, wall.openingMask])]
     .filter(ArrayBuffer.isView).reduce((sum, value) => sum + value.byteLength, 0);
 }
@@ -52,7 +53,9 @@ export function scanDesignByteLength(design) {
 export function validScanDesignSurfaces(design, mesh) {
   if (design?.version !== SCAN_DESIGN_SURFACE_VERSION || design.sourceAlgorithmVersion !== SCAN_DESIGN_ALGORITHM_VERSION ||
       design.sourceKey !== scanDesignSourceKey(mesh) ||
-      !Array.isArray(design.walls) || !design.walls.length || design.walls.length > MAX_WALLS ||
+      !Array.isArray(design.walls) || design.walls.length > MAX_WALLS ||
+      (design.ceilings !== undefined && (!Array.isArray(design.ceilings) || design.ceilings.length > 1)) ||
+      !(design.walls.length || design.ceilings?.length) ||
       !(design.removedSourceFaces instanceof Uint8Array) ||
       design.removedSourceFaces.length !== mesh.indices.length / 3 || design.removedSourceFaces.some(x => x > 1) ||
       scanDesignByteLength(design) > MAX_SCAN_DESIGN_BYTES) return false;
@@ -73,7 +76,9 @@ export function validScanDesignSurfaces(design, mesh) {
       fragments.estimatedTriangleMask.length !== fragments.indices.length / 3 ||
       fragments.estimatedTriangleMask.some(x => x > 1)) return false;
   const ids = new Set();
-  for (const wall of design.walls) {
+  if ((design.ceilings || []).some(surface => surface.normal?.[1] > -.999 ||
+    Math.abs(surface.normal?.[0]) > .001 || Math.abs(surface.normal?.[2]) > .001)) return false;
+  for (const wall of [...design.walls, ...(design.ceilings || [])]) {
     if (!geometry(wall) || !wall.indices.length || typeof wall.id !== "string" || wall.id.length > 100 || ids.has(wall.id) ||
         !Array.isArray(wall.normal) || wall.normal.length !== 3 || !wall.normal.every(Number.isFinite) ||
         Math.abs(Math.hypot(...wall.normal) - 1) > .001 || !Number.isFinite(wall.offset) ||
@@ -152,14 +157,22 @@ function eachTriangleCell(points, cell, visit) {
 }
 
 function sourceColor(mesh, points) {
+  const color = [0, 1, 2].map(axis => points.reduce((sum, p) => sum + p.rgb[axis], 0) / points.length);
   if (mesh.texture?.data && mesh.uvs) {
     const uv = [0, 1].map(axis => points.reduce((sum, p) => sum + p.uv[axis], 0) / points.length);
     const x = Math.max(0, Math.min(mesh.texture.width - 1, Math.floor(uv[0] * mesh.texture.width)));
     const y = Math.max(0, Math.min(mesh.texture.height - 1, Math.floor(uv[1] * mesh.texture.height)));
     const offset = (y * mesh.texture.width + x) * 4;
-    return Array.from(mesh.texture.data.subarray(offset, offset + 3));
+    // The atlas's white tile is a multiplier for captured vertex colors on
+    // faces without a photograph. Sampling that tile alone turns those faces
+    // into solid white blocks in the prepared wall and its background palette.
+    return Array.from(mesh.texture.data.subarray(offset, offset + 3), (value, axis) => {
+      const srgb = value / 255;
+      const linear = srgb <= .04045 ? srgb / 12.92 : ((srgb + .055) / 1.055) ** 2.4;
+      return srgbByte(linear * color[axis]);
+    });
   }
-  return [0, 1, 2].map(axis => srgbByte(points.reduce((sum, p) => sum + p.rgb[axis], 0) / points.length));
+  return color.map(srgbByte);
 }
 
 function gridComponents(cells) {
@@ -463,7 +476,11 @@ function buildWall(mesh, sourcePlane, frames, helpers, cell, junctionPlanes = []
       const ray = unit(point.map((x, i) => camera[i + 12] - x));
       const angle = dot(ray, normal);
       if (angle < .25) continue;
-      const score = angle / (1 + Math.abs(depth - uv.depth) * 4) + (Number(frame.colorSharpness) || 0) * .001;
+      const rgb = helpers.sampleColor?.(frame, colorUV);
+      const clipped = rgb ? rgb.filter(value => value >= 250).length / 3 : 0;
+      // A blown-out photograph must not win a wall patch when a visible,
+      // properly exposed alternative exists. Keep it when it is the only view.
+      const score = (angle / (1 + Math.abs(depth - uv.depth) * 4) + (Number(frame.colorSharpness) || 0) * .001) * (1 - clipped * .75);
       choices.push({ frame, score });
       frameScores.set(frame, (frameScores.get(frame) || 0) + score * (p.detail ? 3 : 1));
     }
@@ -741,7 +758,7 @@ function relaxCapturedSeams(mesh, removed, fragments, targets, splits, built, po
 // wall. Adding a ribbon between the old and new edges makes hundreds of fins
 // with no photographed interior. Edge deformation keeps the original UVs and
 // joins the actual surface, including across camera-atlas vertex duplicates.
-function reconnectWallBoundaries(mesh, built, removed, owners, fragments, clippedEdges, planes) {
+function reconnectWallBoundaries(mesh, built, removed, owners, fragments, clippedEdges, planes, excluded) {
   const wallLattices = new Map();
   for (const { wall } of built) {
     const lattice = new Map(), [min, max] = wall.extent;
@@ -770,7 +787,7 @@ function reconnectWallBoundaries(mesh, built, removed, owners, fragments, clippe
     }
   }
   const joins = clippedEdges.slice();
-  for (let face = 0; face < removed.length; face++) if (!removed[face]) {
+  for (let face = 0; face < removed.length; face++) if (!removed[face] && !excluded?.[face]) {
     for (let c = 0; c < 3; c++) {
       const e = edges.get(edgeKey(mesh.indices[face * 3 + c], mesh.indices[face * 3 + (c + 1) % 3]));
       if (!e || e.count !== 1 || e.matched) continue;
@@ -836,7 +853,8 @@ function reconnectWallBoundaries(mesh, built, removed, owners, fragments, clippe
   const stored = { ...fragments, positions: new Float32Array(fragments.positions),
     normals: new Float32Array(fragments.normals), colors: new Uint8Array(fragments.colors),
     uvs: new Float32Array(fragments.uvs) };
-  const deformations = relaxCapturedSeams(mesh, removed, stored, targets, splits, built, pointKey, planes);
+  const omitted = excluded ? Uint8Array.from(removed, (value, face) => value || excluded[face]) : removed;
+  const deformations = relaxCapturedSeams(mesh, omitted, stored, targets, splits, built, pointKey, planes);
   let changedFaces = 0;
   function remap(triangle, face) {
     const polygon = [];
@@ -876,7 +894,7 @@ function reconnectWallBoundaries(mesh, built, removed, owners, fragments, clippe
     const [a, b] = k.split("/").map(p => welds.get(p));
     return a < b ? `${a},${b}` : `${b},${a}`;
   }));
-  for (let face = 0; face < removed.length; face++) if (!removed[face]) {
+  for (let face = 0; face < removed.length; face++) if (!removed[face] && !excluded?.[face]) {
     if (![0,1,2].some(c => movedWelds.has(ids[mesh.indices[face*3+c]]) ||
       splitWelds.has(edgeKey(mesh.indices[face*3+c], mesh.indices[face*3+(c+1)%3])))) continue;
     const triangle = [0,1,2].map(c => vertex(mesh, mesh.indices[face * 3 + c], [[1,0,0],[0,1,0]]));
@@ -902,7 +920,7 @@ function clipFrontOfWall(polygon, wall) {
 // Displaced triangles behind an independently supported wall cannot form the
 // visible room interior. Clip them at the wall, inside its supported footprint
 // only; no cap, color strip, or closure across a real opening is generated.
-function trimWallBackground(mesh, built, removed, fragments) {
+function trimWallBackground(mesh, built, removed, fragments, excluded) {
   const walls = built.filter(p => p.wall.source === "independent-depth-footprint");
   if (!walls.length) return { clippedBackgroundTriangles: 0 };
   const trimmed = { positions: [], normals: [], colors: [], uvs: [], indices: [], sourceFaces: [], estimatedTriangleMask: [] };
@@ -945,7 +963,7 @@ function trimWallBackground(mesh, built, removed, fragments) {
     if (changed) clipped++;
     emit(polygons, fragments.sourceFaces[face], changed || !!fragments.estimatedTriangleMask[face]);
   }
-  for (let face = 0; face < removed.length; face++) if (!removed[face]) {
+  for (let face = 0; face < removed.length; face++) if (!removed[face] && !excluded?.[face]) {
     // Most retained room geometry lies in front of every wall. Avoid allocating
     // polygon/UV copies for it during preparation on the phone.
     if (!walls.some(({ wall }) => [0,1,2].some(c => {
@@ -969,13 +987,16 @@ export function buildScanDesignSurfaces(mesh, planes, frames = [], helpers = {},
     p.normal?.length === 3 && p.normal.every(Number.isFinite) && Number.isFinite(p.offset) &&
     Math.hypot(...p.normal) > .5 && Math.abs(unit(p.normal)[1]) < .3).slice(0, MAX_WALLS);
   const built = selected.map(p => buildWall(mesh, p, frames, helpers, cell, planes)).filter(Boolean);
-  if (!built.length) return null;
   const removed = new Uint8Array(mesh.indices.length / 3);
+  // Ceiling ownership is established on the complete captured mesh, before
+  // wall clipping turns its bent upper triangles into retained fragments.
+  const ceilingRemoved = new Uint8Array(removed.length);
+  const ceiling = prepareScanCeiling(mesh, frames, helpers, ceilingRemoved, built.map(p => p.wall));
   const owners = new Uint8Array(removed.length), clippedEdges = [];
   const fragments = { positions: [], normals: [], colors: [], uvs: [], indices: [], sourceFaces: [], estimatedTriangleMask: [] };
   for (const surface of built) for (const { face, points, extended } of surface.candidates) {
     const { wall, cells, openings, preserved } = surface;
-    if (removed[face]) continue;
+    if (removed[face] || ceilingRemoved[face]) continue;
     const retained = []; let replacedArea = 0;
     eachTriangleCell(points, cell, (x, y, polygon, area) => {
       const p = cells.get(key(x, y));
@@ -1012,10 +1033,14 @@ export function buildScanDesignSurfaces(mesh, planes, frames = [], helpers = {},
       }
     }
   }
-  const boundaryRepair = reconnectWallBoundaries(mesh, built, removed, owners, fragments, clippedEdges, planes);
-  const backgroundCleanup = trimWallBackground(mesh, built, removed, fragments);
+  const boundaryRepair = reconnectWallBoundaries(mesh, built, removed, owners, fragments, clippedEdges, planes, ceilingRemoved);
+  for (const fragment of ceiling?.fragments || []) appendFragment(fragments, fragment.points, fragment.face, true);
+  const backgroundCleanup = trimWallBackground(mesh, built, removed, fragments, ceilingRemoved);
+  for (let face = 0; face < removed.length; face++) if (ceilingRemoved[face]) removed[face] = 1;
+  if (!built.length && !ceiling) return null;
   const design = { version: SCAN_DESIGN_SURFACE_VERSION, mode: "estimated-planar-design-surface", sourceAlgorithmVersion: SCAN_DESIGN_ALGORITHM_VERSION,
     sourceKey: scanDesignSourceKey(mesh), removedSourceFaces: removed, walls: built.map(p => p.wall),
+    ceilings: ceiling ? [ceiling.surface] : [],
     fragments: { positions: new Float32Array(fragments.positions), normals: new Float32Array(fragments.normals),
       colors: new Uint8Array(fragments.colors), uvs: new Float32Array(fragments.uvs),
       indices: new Uint32Array(fragments.indices), sourceFaces: new Uint32Array(fragments.sourceFaces),
@@ -1025,6 +1050,7 @@ export function buildScanDesignSurfaces(mesh, planes, frames = [], helpers = {},
       preservedFoldedPhotoArea: built.reduce((sum, p) => sum + p.preserved.size * cell * cell, 0),
       removedTriangles: removed.reduce((sum, x) => sum + x, 0), fragmentTriangles: fragments.indices.length / 3,
       ...boundaryRepair, ...backgroundCleanup,
+      ceiling: ceiling?.diagnostics || null,
       wallPlacement: built.map(({ wall }) => ({ id: wall.id, setbackMeters: wall.setbackMeters })),
       cellSize: cell, measuredGeometryChanged: false } };
   return scanDesignByteLength(design) <= MAX_SCAN_DESIGN_BYTES ? design : null;

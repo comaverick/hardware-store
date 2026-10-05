@@ -258,7 +258,8 @@ export default function PartialScanScene({ scan, compact = false, customization 
         <i />{" "}
         {mesh && activeSurfaceView === "geometry" ? "Mesh only · inspect gaps and layers"
           : mesh && activeSurfaceView === "depth" ? "Captured depth points"
-          : mesh ? mesh.designSurfaces?.walls?.length ? "Prepared walls + estimates"
+          : mesh ? mesh.designSurfaces?.ceilings?.length ? "Prepared surfaces + estimates"
+            : mesh.designSurfaces?.walls?.length ? "Prepared walls + estimates"
             : mesh.surfaceRepair?.estimatedHoleCount > 0 ? "Measured + estimated repairs" : "Captured measured surface"
           : "Captured depth points"}
       </span>

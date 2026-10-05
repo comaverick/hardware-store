@@ -150,7 +150,7 @@ function CapturedSurface({ mesh, low, geometryOnly, applied, surfaces, design })
   </group> : primary;
 }
 
-function DesignWall({ wall, finish }) {
+function DesignWall({ wall, finish, kind = "wall" }) {
   const resources = useMemo(() => createScanMeshResources(wall), [wall]);
   const lightingTexture = useMemo(() => createWallLightingTexture(wall), [wall]);
   const detailTexture = useMemo(() => {
@@ -165,17 +165,17 @@ function DesignWall({ wall, finish }) {
   useEffect(() => () => { resources.geometry.dispose(); resources.texture?.dispose(); detailTexture?.dispose(); },
     [resources, detailTexture]);
   useEffect(() => () => lightingTexture?.dispose(), [lightingTexture]);
-  return <group name={wall.id}>
-    <mesh geometry={resources.geometry} frustumCulled={false} name="prepared-wall">
+  return <group name={kind === "ceiling" ? `${wall.id}-surface` : wall.id}>
+    <mesh geometry={resources.geometry} frustumCulled={false} name={`prepared-${kind}`}>
       {finish ? <WallPaint key="paint" finish={finish} lightMap={lightingTexture}
         reference={lightingTexture ? preparedLightReference : neutralLightReference} />
         : <meshBasicMaterial key="photo" map={resources.texture} side={THREE.FrontSide} toneMapped={false} />}
     </mesh>
-    <mesh geometry={resources.geometry} frustumCulled={false} name="prepared-wall-back">
+    {kind !== "ceiling" && <mesh geometry={resources.geometry} frustumCulled={false} name={`prepared-${kind}-back`}>
       <meshBasicMaterial color="#505d57" side={THREE.BackSide} toneMapped={false} />
-    </mesh>
+    </mesh>}
     {finish && detailTexture && <mesh geometry={resources.geometry} frustumCulled={false}
-      renderOrder={2} name="wall-photo-details">
+      renderOrder={2} name={`${kind}-photo-details`}>
       <meshBasicMaterial map={detailTexture} alphaTest={.5} side={THREE.FrontSide} toneMapped={false}
         polygonOffset polygonOffsetFactor={-1} polygonOffsetUnits={-1} />
     </mesh>}
@@ -190,5 +190,6 @@ export default function ScanMesh({ mesh, low = false, geometryOnly = false, cust
   return design && !geometryOnly ? <group name="prepared-room">
     {captured}
     {design.walls.map(wall => <DesignWall key={wall.id} wall={wall} finish={applied?.walls} />)}
+    {(design.ceilings || []).map(wall => <DesignWall key={wall.id} wall={wall} kind="ceiling" finish={applied?.ceiling} />)}
   </group> : captured;
 }
