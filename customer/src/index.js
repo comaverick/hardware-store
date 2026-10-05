@@ -5,19 +5,22 @@ import App from "./App";
 import reportWebVitals from "./reportWebVitals";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import ReservationCart from "./cart/CartDrawer";
+import { CustomerAuthProvider } from "./auth/CustomerAuthContext";
 const ScanSpace = lazy(() => import("./features/scanspace/ScanSpace"));
 
 const root = ReactDOM.createRoot(document.getElementById("root"));
 root.render(
   <React.StrictMode>
     <BrowserRouter>
-      <Suspense fallback={<p style={{ padding: 32 }}>Loading…</p>}>
-        <Routes>
-          <Route path="/scanspace/*" element={<ScanSpace />} />
-          <Route path="*" element={<App />} />
-        </Routes>
-      </Suspense>
-      <ReservationCart />
+      <CustomerAuthProvider>
+        <Suspense fallback={<p style={{ padding: 32 }}>Loading…</p>}>
+          <Routes>
+            <Route path="/scanspace/*" element={<ScanSpace />} />
+            <Route path="*" element={<App />} />
+          </Routes>
+        </Suspense>
+        <ReservationCart />
+      </CustomerAuthProvider>
     </BrowserRouter>
   </React.StrictMode>,
 );

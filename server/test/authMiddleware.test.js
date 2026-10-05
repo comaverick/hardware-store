@@ -50,6 +50,18 @@ test("accepts an active user with a valid token", async () => {
   assert.equal(next.mock.callCount(), 1);
 });
 
+test("Firebase customer claims cannot become a staff session", async () => {
+  mock.method(jwt, "verify", () => ({
+    id: "staff-1", uid: "firebase-customer", aud: "hardware-store-2c14a",
+    firebase: { sign_in_provider: "google.com" },
+  }));
+  const lookup = mock.method(User, "findById", () => assert.fail("Must not look up staff"));
+  const res = response();
+  await protect(request(), res, () => assert.fail("Must not continue"));
+  assert.equal(res.statusCode, 401);
+  assert.equal(lookup.mock.callCount(), 0);
+});
+
 for (const user of [null, { _id: "staff-1", isActive: false }]) {
   test(`returns 401 for a ${user ? "disabled" : "deleted"} account`, async () => {
     mockUser(user);

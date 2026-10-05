@@ -67,6 +67,11 @@ const protect = async (req, res, next) => {
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
+    // Staff sessions are issued by this API; Firebase customer tokens never grant staff access.
+    if (typeof decoded.id !== "string" || !decoded.id || decoded.firebase || decoded.aud) {
+      return res.status(401).json({ message: "Not authorized. Invalid staff session." });
+    }
+
     const user = await User.findById(decoded.id)
       .select("-password")
       .populate("branch", "name code");

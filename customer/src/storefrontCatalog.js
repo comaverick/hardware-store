@@ -1,4 +1,4 @@
-const API_ORIGIN = (
+export const API_ORIGIN = (
   process.env.REACT_APP_API_URL ||
   (process.env.NODE_ENV === "production"
     ? "https://hardware-store-nffe.onrender.com"

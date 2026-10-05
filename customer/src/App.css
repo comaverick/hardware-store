@@ -29,7 +29,7 @@
 .shop-header__main {
   min-height: 76px;
   display: grid;
-  grid-template-columns: auto minmax(240px, 1fr) auto auto;
+  grid-template-columns: auto minmax(200px, 1fr) auto auto auto;
   align-items: center;
   gap: clamp(18px, 2.3vw, 34px);
 }
@@ -109,6 +109,7 @@
 }
 
 .shop-header__pickup,
+.shop-header__account,
 .shop-header__cart {
   min-height: 42px;
   display: inline-flex;
@@ -128,10 +129,12 @@
 }
 
 .shop-header__pickup:hover,
+.shop-header__account:hover,
 .shop-header__cart:hover {
   background: var(--shop-surface);
 }
 
+.shop-header__account,
 .shop-header__cart {
   position: relative;
   padding: 0 5px;
@@ -856,7 +859,7 @@
 
 @media (max-width: 1050px) {
   .shop-header__main {
-    grid-template-columns: auto minmax(190px, 1fr) auto;
+    grid-template-columns: auto minmax(190px, 1fr) auto auto;
   }
   .shop-header__pickup {
     display: none;
@@ -882,7 +885,7 @@
   .shop-header__main {
     min-height: 111px;
     padding-block: 11px;
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) auto auto;
     gap: 10px;
   }
   .shop-brand {
@@ -892,7 +895,8 @@
     width: 35px;
     height: 35px;
   }
-  .shop-header__cart span {
+  .shop-header__cart span,
+  .shop-header__account span {
     display: none;
   }
   .shop-header__cart small {
@@ -1118,7 +1122,7 @@
     min-height: 65px;
     padding: 5px 8px calc(5px + env(safe-area-inset-bottom));
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, 1fr);
     border-top: 1px solid var(--shop-line);
     background: rgb(255 255 255 / 98%);
     box-shadow: 0 -7px 20px rgb(0 0 0 / 4%);
@@ -1137,7 +1141,7 @@
     font-weight: 700;
     cursor: pointer;
   }
-  .shop-mobile-nav a:first-child {
+  .shop-mobile-nav a[aria-current="page"] {
     color: var(--shop-accent);
   }
 }

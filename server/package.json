@@ -4,7 +4,7 @@
   "description": "",
   "main": "server.js",
   "scripts": {
-    "test:auth": "node --test test/authMiddleware.test.js test/branchAccess.test.js",
+    "test:auth": "node --test test/authMiddleware.test.js test/branchAccess.test.js test/customerAuthRoutes.test.js",
     "test:stock": "node --test test/stockOperations.test.js test/reservationFulfillment.test.js",
     "test:scanspace": "node --test test/scanspace*.test.js",
     "test:products": "node --test test/productImages.test.js",
@@ -25,6 +25,7 @@
     "escpos": "^3.0.0-alpha.6",
     "escpos-usb": "^3.0.0-alpha.4",
     "express": "^5.2.1",
+    "firebase-admin": "^14.5.0",
     "jsonwebtoken": "^9.0.3",
     "mongodb": "^7.5.0",
     "mongoose": "^9.9.3",

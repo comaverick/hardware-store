@@ -37,6 +37,7 @@ app.use("/api/products", require("./routes/productRoutes"));
 app.use("/api/storefront", require("./routes/storefrontRoutes").router);
 app.use("/api/inventory", require("./routes/branchInventoryRoutes"));
 app.use("/api/auth", require("./routes/authRoutes"));
+app.use("/api/customer-auth", require("./routes/customerAuthRoutes").router);
 app.use("/api/users", require("./routes/userRoutes"));
 app.use("/api/inventory-transactions", inventoryTransactionRoutes);
 app.use("/api/suppliers", supplierRoutes);

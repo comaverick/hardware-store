@@ -24,6 +24,7 @@ import {
   ShoppingCart,
   SquaresFour,
   Storefront,
+  UserCircle,
   Wrench,
 } from "@phosphor-icons/react";
 import heroImage from "./assets/hardware-hero-minimal.webp";
@@ -31,6 +32,8 @@ import scanSpaceImage from "./assets/scanspace-room-feature.webp";
 import { useReservationCart } from "./cart/reservationCart";
 import { fetchStorefrontCatalog, formatPrice, productImageUrl } from "./storefrontCatalog";
 import ProductDetails from "./pages/ProductDetails";
+import { CustomerAuthBoundary, useCustomerAuth } from "./auth/CustomerAuthContext";
+import { AccountPage, ForgotPasswordPage, SignInPage, VerifyEmailPage } from "./auth/AccountPages";
 import "./App.css";
 
 export const categoryIcons = {
@@ -314,6 +317,14 @@ function AppContent() {
   const [error, setError] = useState("");
   const [retryKey, setRetryKey] = useState(0);
   const { draft, show, addItem } = useReservationCart();
+  const { session } = useCustomerAuth();
+  const accountPath = session ? "/account" : "/login";
+  const accountState = { from: location.pathname + location.search };
+  const onAccountPage = ["/account", "/login", "/register", "/forgot-password", "/verify-email"].includes(location.pathname);
+
+  useEffect(() => {
+    if (onAccountPage) window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+  }, [location.pathname, onAccountPage]);
 
   useEffect(() => {
     const cat = searchParams.get("category");
@@ -436,6 +447,11 @@ function AppContent() {
             <MapPin size={21} weight="bold" />
             <span>Branch pickup</span>
           </a>
+          <Link className="shop-header__account" to={accountPath} state={accountState}
+            aria-label={session ? "Your account" : "Sign in"}>
+            <UserCircle size={23} aria-hidden="true" />
+            <span>{session ? "Account" : "Sign in"}</span>
+          </Link>
           <button
             className="shop-header__cart"
             type="button"
@@ -465,6 +481,11 @@ function AppContent() {
       </header>
 
       <Routes>
+        <Route path="/login" element={<SignInPage key="login" />} />
+        <Route path="/register" element={<SignInPage key="register" register />} />
+        <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+        <Route path="/verify-email" element={<VerifyEmailPage />} />
+        <Route path="/account" element={<AccountPage />} />
         <Route
           path="/"
           element={
@@ -574,6 +595,7 @@ function AppContent() {
             <strong>Explore</strong>
             <a href="/scanspace">ScanSpace</a>
             <button type="button" onClick={show}>Reservation cart</button>
+            <Link to={accountPath} state={accountState}>{session ? "Your account" : "Sign in"}</Link>
           </div>
         </div>
         <div className="shop-container shop-footer__bottom">
@@ -583,10 +605,11 @@ function AppContent() {
       </footer>
 
       <nav className="shop-mobile-nav" aria-label="Mobile navigation">
-        <Link to="/"><House size={22} weight="fill" /><span>Home</span></Link>
+        <Link to="/" aria-current={location.pathname === "/" ? "page" : undefined}><House size={22} weight={location.pathname === "/" ? "fill" : "regular"} /><span>Home</span></Link>
         <a href="#categories" onClick={() => { if (location.pathname !== "/") navigate("/#categories"); }}><SquaresFour size={22} /><span>Browse</span></a>
         <button type="button" onClick={show}><ShoppingCart size={22} /><span>Cart</span></button>
         <a href="/scanspace"><Wrench size={22} /><span>ScanSpace</span></a>
+        <Link to={accountPath} state={accountState} aria-current={onAccountPage ? "page" : undefined}><UserCircle size={22} /><span>Account</span></Link>
       </nav>
     </div>
   );
@@ -597,9 +620,9 @@ export default function App() {
   if (!inRouter) {
     return (
       <MemoryRouter initialEntries={["/"]}>
-        <AppContent />
+        <CustomerAuthBoundary><AppContent /></CustomerAuthBoundary>
       </MemoryRouter>
     );
   }
-  return <AppContent />;
+  return <CustomerAuthBoundary><AppContent /></CustomerAuthBoundary>;
 }

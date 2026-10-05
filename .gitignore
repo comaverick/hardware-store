@@ -73,6 +73,7 @@ Thumbs.db
 
 
 # Local secrets
+*firebase-adminsdk*.json
 /server/.env
 /client/.env
 
