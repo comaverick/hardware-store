@@ -1,0 +1,41 @@
+/* iOS-inspired native CSS, retaining store branding. Layout / motion / density: 5 / 3 / 3.
+   Shared tokens cover the storefront and cart without changing ScanSpace's theme. */
+.storefront-shell, .customer-cart--storefront {
+  color-scheme: light;
+  --shop-background: #fdfdfd;
+  --shop-surface: #f3f3f5;
+  --shop-elevated: #fdfdfd;
+  --shop-ink: #1d1d1f;
+  --shop-muted: #626269;
+  --shop-line: #dedee3;
+  --shop-accent: #bb471b;
+  --shop-accent-hover: #a23b14;
+  --shop-accent-soft: #fbede7;
+  --shop-on-accent: #fdfdfd;
+  --shop-glass: rgb(253 253 253 / 88%);
+  --shop-success: #206a42;
+  --shop-success-soft: #e9f5ee;
+  --shop-danger: #a03229;
+  --shop-danger-soft: #fbecea;
+  --shop-radius: 24px;
+  --shop-field-radius: 14px;
+  --shop-pill: 999px;
+}
+@media (prefers-color-scheme: dark) {
+  .storefront-shell:not([data-theme="light"]), .customer-cart--storefront:not([data-theme="light"]) {
+    color-scheme: dark;
+    --shop-background: #141416; --shop-surface: #222225; --shop-elevated: #2c2c2f;
+    --shop-ink: #f5f5f7; --shop-muted: #b1b1b9; --shop-line: #404045;
+    --shop-accent: #ff9c72; --shop-accent-hover: #ffb18f; --shop-accent-soft: #39271f; --shop-on-accent: #24160f;
+    --shop-glass: rgb(20 20 22 / 88%);
+    --shop-success: #83d6a2; --shop-success-soft: #1a3023; --shop-danger: #ffaba2; --shop-danger-soft: #39211f;
+  }
+}
+.storefront-shell[data-theme="dark"], .customer-cart--storefront[data-theme="dark"] {
+  color-scheme: dark;
+  --shop-background: #141416; --shop-surface: #222225; --shop-elevated: #2c2c2f;
+  --shop-ink: #f5f5f7; --shop-muted: #b1b1b9; --shop-line: #404045;
+  --shop-accent: #ff9c72; --shop-accent-hover: #ffb18f; --shop-accent-soft: #39271f; --shop-on-accent: #24160f;
+  --shop-glass: rgb(20 20 22 / 88%);
+  --shop-success: #83d6a2; --shop-success-soft: #1a3023; --shop-danger: #ffaba2; --shop-danger-soft: #39211f;
+}

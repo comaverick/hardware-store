@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { useParams, useNavigate, Link } from "react-router-dom";
+import { useParams, Link } from "react-router-dom";
 import {
   ArrowLeft,
   ArrowRight,
@@ -78,7 +78,6 @@ export default function ProductDetails({
   onBranchChange,
 }) {
   const { id } = useParams();
-  const navigate = useNavigate();
   const { addItem, show } = useReservationCart();
 
   // Find initial product from cache if available for instant display
@@ -266,7 +265,7 @@ export default function ProductDetails({
         <MagnifyingGlass size={36} aria-hidden="true" />
         <h2>Product not found</h2>
         <p>{error}</p>
-        <Link to="/" className="shop-button shop-button--primary">
+        <Link to="/products" className="shop-button shop-button--primary">
           <ArrowLeft size={18} weight="bold" /> Back to store catalog
         </Link>
       </div>
@@ -285,7 +284,7 @@ export default function ProductDetails({
           /
         </span>
         <Link
-          to={`/?category=${encodeURIComponent(product.category || "All")}`}
+          to={`/products?category=${encodeURIComponent(product.category || "All")}`}
           className="pdp-breadcrumb-link"
         >
           {product.category || "Catalog"}
@@ -305,18 +304,14 @@ export default function ProductDetails({
           <div className="pdp-gallery">
             <div className="pdp-gallery__stage">
               <ProductVisual product={product} size={110} />
-              {product.category && (
-                <span className="pdp-gallery__badge">{product.category}</span>
-              )}
             </div>
             <div className="pdp-back-action">
-              <button
-                type="button"
+              <Link
+                to="/products"
                 className="pdp-back-button"
-                onClick={() => navigate(-1)}
               >
                 <ArrowLeft size={16} weight="bold" /> Back to products
-              </button>
+              </Link>
             </div>
           </div>
 
@@ -381,7 +376,7 @@ export default function ProductDetails({
                       ? "Choose a branch to see pickup availability"
                       : isOutOfStock
                         ? `Out of stock at ${selectedBranch?.name || "this branch"}`
-                        : `In stock — ${product.availableQuantity} available at ${
+                        : `In stock: ${product.availableQuantity} available at ${
                             selectedBranch?.name || "this branch"
                           }`}
                   </strong>
@@ -450,7 +445,7 @@ export default function ProductDetails({
                 {addedFeedback ? (
                   <>
                     <Check size={20} weight="bold" />
-                    <span>Added to Cart!</span>
+                    <span>Added to cart</span>
                   </>
                 ) : isOutOfStock ? (
                   <span>Out of stock at this branch</span>
@@ -458,7 +453,7 @@ export default function ProductDetails({
                   <>
                     <ShoppingCart size={20} weight="bold" />
                     <span>
-                      Add {quantity > 1 ? `${quantity} ` : ""}to Cart
+                      Add {quantity > 1 ? `${quantity} ` : ""}to cart
                     </span>
                   </>
                 )}

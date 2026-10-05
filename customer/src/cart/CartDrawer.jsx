@@ -1,26 +1,39 @@
 import { useEffect, useRef } from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { ShoppingCart, Trash, X } from "@phosphor-icons/react";
 import { useReservationCart } from "./reservationCart";
 import { formatPrice } from "../storefrontCatalog";
+import { useStoreAppearance } from "../storefront/AppearancePicker";
+import "../storefront/theme.css";
 import "./cart.css";
 
 export default function CartDrawer() {
   const { open, draft, close, clear, changeQuantity } = useReservationCart();
   const dialog = useRef(null);
   const { pathname } = useLocation();
+  const navigate = useNavigate();
+  const appearance = useStoreAppearance((state) => state.appearance);
   const storefront = !pathname.startsWith("/scanspace");
   const items = Array.isArray(draft?.items) ? draft.items : [];
+  function continueShopping() { close(); navigate("/products"); }
 
   useEffect(() => {
     if (open && !dialog.current?.open) dialog.current?.showModal?.();
     if (!open && dialog.current?.open) dialog.current?.close?.();
   }, [open]);
 
+  useEffect(() => {
+    if (!open) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = previousOverflow; };
+  }, [open]);
+
   return (
     <dialog
       ref={dialog}
       className={`customer-cart${storefront ? " customer-cart--storefront" : ""}`}
+      data-theme={appearance}
       onCancel={close}
       onClose={close}
       aria-label="Reservation cart"
@@ -95,7 +108,7 @@ export default function CartDrawer() {
                   <span>Estimated total</span>
                   <strong>{formatPrice(draft.total)}</strong>
                 </div>
-                <button type="button" onClick={close}>
+                <button type="button" onClick={continueShopping}>
                   Continue shopping
                 </button>
               </footer>
@@ -105,7 +118,7 @@ export default function CartDrawer() {
               <ShoppingCart size={38} aria-hidden="true" />
               <h3>Your cart is empty</h3>
               <p>Browse products and add the supplies you need.</p>
-              <button type="button" onClick={close}>Continue shopping</button>
+              <button type="button" onClick={continueShopping}>Continue shopping</button>
             </div>
           )}
         </div>

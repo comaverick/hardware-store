@@ -69,7 +69,7 @@ afterEach(() => {
 
 test("product cards on catalog page are clickable and link to product details", async () => {
   render(
-    <MemoryRouter initialEntries={["/"]}>
+    <MemoryRouter initialEntries={["/products"]}>
       <App />
     </MemoryRouter>
   );
@@ -82,7 +82,7 @@ test("product cards on catalog page are clickable and link to product details", 
 
 test("clicking a product navigates to the product detail page with description and details", async () => {
   render(
-    <MemoryRouter initialEntries={["/"]}>
+    <MemoryRouter initialEntries={["/products"]}>
       <App />
     </MemoryRouter>
   );

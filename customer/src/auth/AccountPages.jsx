@@ -298,10 +298,10 @@ export function AccountPage() {
             {customer.emailVerified && <span className="customer-account__verified"><CheckCircle size={17} weight="fill" aria-hidden="true" /> Email verified</span>}
           </div>
           <dl>
-            <div><dt>Full name</dt><dd>{customer.name || session?.name || "—"}</dd></div>
+            <div><dt>Full name</dt><dd>{customer.name || session?.name || "Not provided"}</dd></div>
             <div><dt>Email address</dt><dd>{customer.email}</dd></div>
           </dl>
-          <Link className="shop-button shop-button--primary" to="/">Browse products <ArrowRight size={17} aria-hidden="true" /></Link>
+          <Link className="shop-button shop-button--primary" to="/products">Browse products <ArrowRight size={17} aria-hidden="true" /></Link>
         </section>
         : session && <button className="shop-button shop-button--outline" type="button" onClick={refreshSession}>Try again</button>}
     </main>

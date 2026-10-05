@@ -23,7 +23,7 @@
 html { scroll-behavior: smooth; }
 body {
   margin: 0;
-  min-width: 320px;
+  min-width: 280px;
   min-height: 100dvh;
   background: var(--background);
   color: var(--text);
