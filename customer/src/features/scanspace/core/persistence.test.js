@@ -1,7 +1,6 @@
 import {
   loadDraft,
   looksLikeScanDiagnostics,
-  MAX_ROOM_IMPORT_BYTES,
   parseRoomImport,
   saveDraft,
 } from "../services";
@@ -34,7 +33,6 @@ test("room imports accept exports over 500 KB and reject diagnostics", () => {
   });
   const exportSize = new Blob([exportValue]).size;
   expect(exportSize).toBeGreaterThan(512000);
-  expect(MAX_ROOM_IMPORT_BYTES).toBeGreaterThan(exportSize);
   expect(parseRoomImport(exportValue)).toEqual(normalizeRoom(room));
   expect(
     looksLikeScanDiagnostics(

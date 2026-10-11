@@ -7,8 +7,6 @@ import { getScanDesignSurfaces, validScanDesignSurfaces, scanDesignByteLength,
 export const SCAN_FILE_FORMAT = "scanspace-scan";
 // Kept so exports created before the unified scan UI continue to open.
 export const PARTIAL_SCAN_FORMAT = "scanspace-partial-surface";
-export const MAX_SCAN_FILE_IMPORT_BYTES = 64 * 1024 * 1024;
-export const MAX_PARTIAL_SCAN_IMPORT_BYTES = MAX_SCAN_FILE_IMPORT_BYTES;
 
 const MAX_ARRAY_BYTES = MAX_SCAN_ARRAY_BYTES;
 // Base64 adds about one third to the binary size. Keeping portable mesh data
@@ -666,8 +664,6 @@ export function serializePartialScan(scan) {
         rawCapture: encodedCapture,
       },
     });
-    if (new Blob([value]).size > MAX_SCAN_FILE_IMPORT_BYTES)
-      throw new Error("This raw scan is too large to export (maximum 64 MB).");
     return value;
   }
   if (!scan?.mesh && !scan?.cloud)

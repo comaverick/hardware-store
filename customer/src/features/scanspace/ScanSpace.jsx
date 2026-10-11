@@ -3,46 +3,50 @@ import {
   Suspense,
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
 } from "react";
-import {
-  ArrowLeft,
-  ArrowRight,
-  Camera,
-  Cube,
-  FolderOpen,
-  Ruler,
-  UploadSimple,
-} from "@phosphor-icons/react";
+import { ArrowLeft } from "@phosphor-icons/react";
+import { useLocation, useNavigate } from "react-router-dom";
+import { CustomerAuthBoundary, useCustomerAuth } from "../../auth/CustomerAuthContext";
+import { openAccountScan, pendingAccountScan } from "./accountScans";
 import { detectCapabilities } from "./core/depth";
 import { downloadDepthCapture } from "./core/captureDebug";
 import {
   looksLikeScanFile,
-  MAX_SCAN_FILE_IMPORT_BYTES,
   parseScanFile,
 } from "./core/partialScanFile";
-import { useScanSpace, sampleRoom } from "./store";
+import { useScanSpace } from "./store";
+import { useStoreAppearance } from "../../storefront/AppearancePicker";
 import {
   api,
   captureStore,
   loadDraft,
   looksLikeScanDiagnostics,
-  MAX_ROOM_IMPORT_BYTES,
   parseRoomImport,
 } from "./services";
 import RoomReview from "./components/RoomReview";
 import SavedProjectsDialog from "./components/SavedProjectsDialog";
+import ScanSpaceWelcome from "./components/ScanSpaceWelcome";
 import ScanRenderProgress from "./components/ScanRenderProgress";
 import "./scanspace.css";
+import "../../storefront/theme.css";
+import "./scanspace-home.css";
 const ScannerPanel = lazy(() => import("./components/ScannerPanel"));
 const RoomEditor = lazy(() => import("./components/RoomEditor"));
-const RoomScene = lazy(() => import("./components/RoomScene"));
 const PartialScanReview = lazy(
   () => import("./components/PartialScanReview"),
 );
 export default function ScanSpace() {
+  return <CustomerAuthBoundary><ScanSpaceContent /></CustomerAuthBoundary>;
+}
+function ScanSpaceContent() {
+  const { session, initializing, profileLoading } = useCustomerAuth();
+  const location = useLocation(), navigate = useNavigate();
+  const currentUid = session?.user?.uid || "";
+  const uidRef = useRef(currentUid); uidRef.current = currentUid;
+  const opening = useRef(null);
+  const [source, setSource] = useState(null);
   const [stage, setStage] = useState("welcome"),
     [capabilities, setCapabilities] = useState(null),
     [reviewRoom, setReviewRoom] = useState(null),
@@ -50,24 +54,43 @@ export default function ScanSpace() {
     [capture, setCapture] = useState({}),
     [error, setError] = useState(""),
     [importing, setImporting] = useState(null),
-    [draft, setDraft] = useState(false),
-    [savedOpen, setSavedOpen] = useState(false);
+    [draft, setDraft] = useState(null),
+    [savedOpen, setSavedOpen] = useState(false),
+    [savedVersion, setSavedVersion] = useState(0);
   const transferStarted = useRef(false);
-  const demo = useMemo(() => sampleRoom(), []);
+  const appearance = useStoreAppearance((state) => state.appearance);
+  useEffect(() => {
+    opening.current?.abort();
+    if (source?.account && source.account.ownerUid !== currentUid) {
+      setSource(null); setSurfaceScan(null); setStage("welcome");
+      useScanSpace.setState({ room: null, original: null, textures: {}, scanCloud: null, scanMesh: null });
+    }
+  }, [currentUid, source?.account]);
+  useEffect(() => () => opening.current?.abort(), []);
+  const accountSaved = useCallback((account) => {
+    setSource(value => value ? { ...value, account } : value);
+    setSavedVersion(value => value + 1);
+  }, []);
+  const closeSavedProjects = useCallback(() => {
+    setSavedOpen(false);
+    setSavedVersion((value) => value + 1);
+  }, []);
   useEffect(() => {
     let active = true;
     detectCapabilities().then((v) => {
       if (active) setCapabilities(v);
     });
     try {
-      setDraft(!!loadDraft());
+      setDraft(loadDraft());
     } catch {}
     return () => {
       active = false;
     };
   }, []);
   const openRoom = useCallback((room, extra = {}) => {
-    useScanSpace.getState().setRoom(room, extra);
+    const { originalFile = null, originalRoom = room, account = null, ...roomExtras } = extra;
+    setSource({ kind: "room", original: originalRoom, file: originalFile, account });
+    useScanSpace.getState().setRoom(room, roomExtras);
     setStage("editor");
     setError("");
   }, []);
@@ -87,6 +110,55 @@ export default function ScanSpace() {
     });
     setSavedOpen(false);
   }, [openRoom]);
+  const openAccountProject = useCallback(async (project) => {
+    const user = session?.user;
+    if (!user) return;
+    const controller = new AbortController(); opening.current?.abort(); opening.current = controller;
+    const isCurrent = () => !controller.signal.aborted && uidRef.current === user.uid;
+    setImporting({ name: project.name }); setStage("importing"); setError("");
+    try {
+      const { scan: account, file } = await openAccountScan(user, project.id, controller.signal);
+      const contents = await file.text();
+      if (!isCurrent()) return;
+      const owned = { ...account, ownerUid: user.uid };
+      if (account.kind === "room") {
+        const originalRoom = parseRoomImport(contents);
+        openRoom(account.room || originalRoom, { originalRoom, originalFile: file, account: owned });
+      } else {
+        const raw = parseScanFile(contents);
+        setSource({ kind: "scan", original: raw, file, account: owned });
+        setSurfaceScan({ ...raw, customization: account.customization });
+        setStage("surface");
+      }
+    } catch (reason) {
+      if (isCurrent()) { setStage("welcome"); setError(reason.message || "The saved scan could not open. Please retry."); }
+    } finally {
+      if (opening.current === controller) { opening.current = null; setImporting(null); if (controller.signal.aborted) setStage("welcome"); }
+    }
+  }, [session?.user, openRoom]);
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    if (params.get("resume") !== "account-save" || initializing || profileLoading || !session?.emailVerified) return;
+    let active = true;
+    pendingAccountScan("get").then(async saved => {
+      if (!active || !saved) return;
+      if (saved.ownerUid && saved.ownerUid !== currentUid) throw new Error("Sign in to the original account to resume this scan.");
+      const contents = await saved.file.text();
+      if (!active) return;
+      if (saved.kind === "room") {
+        const originalRoom = parseRoomImport(contents);
+        openRoom(saved.metadata.room || originalRoom, { originalRoom, originalFile: saved.file });
+      } else {
+        const raw = parseScanFile(contents);
+        setSource({ kind: "scan", original: raw, file: saved.file, account: null });
+        setSurfaceScan({ ...raw, customization: saved.metadata.customization }); setStage("surface");
+      }
+      await pendingAccountScan("delete");
+      params.delete("resume");
+      if (active) navigate(`${location.pathname}${params.size ? `?${params}` : ""}`, { replace: true });
+    }).catch(reason => { if (active) setError(reason.message || "The scan could not be resumed. Import your exported file."); });
+    return () => { active = false; };
+  }, [location.pathname, location.search, initializing, profileLoading, session?.emailVerified, currentUid, openRoom, navigate]);
   useEffect(() => {
     const code = new URLSearchParams(window.location.search).get("transfer");
     if (!code || transferStarted.current) return;
@@ -133,22 +205,15 @@ export default function ScanSpace() {
         throw new Error(
           "This is a scan-diagnostics file, not a ScanSpace scan. Import a saved scan or room export instead.",
         );
-      const limit = scanFile
-        ? MAX_SCAN_FILE_IMPORT_BYTES
-        : MAX_ROOM_IMPORT_BYTES;
-      if (file.size > limit)
-        throw new Error(
-          scanFile
-            ? "Scan files can be up to 64 MB."
-            : "Saved room files can be up to 10 MB.",
-        );
       const contents = await file.text();
       if (scanFile) {
-        setSurfaceScan(parseScanFile(contents));
+        const scan = parseScanFile(contents);
+        setSource({ kind: "scan", original: scan, file, account: null });
+        setSurfaceScan(scan);
         setStage("surface");
         setError("");
       } else {
-        openRoom(parseRoomImport(contents));
+        openRoom(parseRoomImport(contents), { originalFile: file });
       }
     } catch (reason) {
       setStage("welcome");
@@ -164,16 +229,18 @@ export default function ScanSpace() {
         fallback={<div className="ss-loading">Opening the editor…</div>}
       >
         <RoomEditor
+          source={source} onAccountSaved={accountSaved} onOpenLegacy={openSavedProject}
           onExit={() => {
             setStage("welcome");
-            setDraft(true);
+            setSavedVersion(value => value + 1);
+            try { setDraft(loadDraft()); } catch { setDraft(null); }
           }}
         />
       </Suspense>
     );
   return (
-    <main className="ss-app">
-      <header className="ss-header">
+    <main className={`ss-app${stage === "welcome" ? " ss-app--home storefront-shell" : ""}`} data-theme={appearance}>
+      {stage !== "welcome" && <header className="ss-header">
         <a href="/" className="ss-back">
           <ArrowLeft size={18} />
           <span>Back to store</span>
@@ -182,136 +249,14 @@ export default function ScanSpace() {
           Scan<span>Space</span>
         </a>
         <span className="ss-header-label">Room planning</span>
-      </header>
-      {stage === "welcome" && (
-        <div className="ss-welcome">
-          <div className="ss-intro">
-            <span className="ss-kicker">See the possibilities.</span>
-            <h1>
-              Your room.
-              <br />A fresh perspective.
-            </h1>
-            <p>
-              Capture your space, try new finishes, and find the materials to
-              make it happen.
-            </p>
-            <div className="ss-start-actions">
-              <button
-                className="ss-primary"
-                onClick={() => {
-                  setCapture({});
-                  setStage("scan");
-                }}
-                disabled={!capabilities?.ar}
-              >
-                <Camera size={21} />
-                Scan a space
-                <ArrowRight size={18} />
-              </button>
-              <button
-                onClick={() => {
-                  setReviewRoom(null);
-                  setCapture({});
-                  setStage("review");
-                }}
-              >
-                <Ruler size={20} />
-                Enter measurements
-              </button>
-              <button onClick={() => setSavedOpen(true)}>
-                <FolderOpen size={20} />
-                Open saved room
-              </button>
-            </div>
-            <p className="ss-device-note">
-              {!capabilities
-                ? "Checking this device…"
-                : capabilities.ar
-                  ? "Android camera scanning is available. Depth support is checked when the scan starts."
-                  : capabilities.error ||
-                    "Open on a compatible Android phone to scan. You can design with measurements on this device."}
-            </p>
-            <div className="ss-welcome-links">
-              <button onClick={() => openRoom(sampleRoom())}>
-                <Cube size={18} />
-                Explore a sample room
-              </button>
-              {draft && (
-                <button onClick={continueDraft}>
-                  Continue my saved room
-                  <ArrowRight size={16} />
-                </button>
-              )}
-              <label className="ss-import">
-                <UploadSimple size={17} />
-                Import scan
-                <input
-                  type="file"
-                  accept="application/json,.json"
-                  onChange={importRoom}
-                />
-              </label>
-            </div>
-            {error && (
-              <p role="alert" className="ss-error">
-                {error}
-              </p>
-            )}
-          </div>
-          <div className="ss-welcome-room">
-            <div className="ss-preview-label">
-              <strong>Studio living room</strong>
-              <span>Interactive sample · 4.8 × 4 m</span>
-            </div>
-            <Suspense
-              fallback={
-                <div className="ss-loading">Preparing room preview…</div>
-              }
-            >
-              <RoomScene
-                room={demo}
-                mode="orbit"
-                onSelect={() => {}}
-                onMove={() => {}}
-              />
-            </Suspense>
-            <button
-              className="ss-preview-cta"
-              onClick={() => openRoom(sampleRoom())}
-            >
-              Step inside this room
-              <ArrowRight size={18} />
-            </button>
-          </div>
-          <ol className="ss-workflow">
-            <li>
-              <span>01</span>
-              <div>
-                <strong>Capture your space</strong>
-                <p>
-                  Scan with depth where supported, or enter your measurements.
-                </p>
-              </div>
-            </li>
-            <li>
-              <span>02</span>
-              <div>
-                <strong>Make it your own</strong>
-                <p>
-                  Try wall colors, floor finishes, and furniture at real scale.
-                </p>
-              </div>
-            </li>
-            <li>
-              <span>03</span>
-              <div>
-                <strong>Plan your materials</strong>
-                <p>Calculate quantities using your room and store products.</p>
-              </div>
-            </li>
-          </ol>
-        </div>
-      )}
+      </header>}
+      {stage === "welcome" && <ScanSpaceWelcome
+        capabilities={capabilities} draft={draft} error={error} savedVersion={savedVersion}
+        onScan={() => { setSource(null); setCapture({}); setStage("scan"); }}
+        onMeasure={() => { setSource(null); setReviewRoom(null); setCapture({}); setStage("review"); }}
+        onImport={importRoom} onContinue={continueDraft}
+        onOpenProject={openAccountProject} onManage={() => setSavedOpen(true)}
+      />}
       {stage === "importing" && (
         <div className="ss-import-rendering">
           <ScanRenderProgress
@@ -337,6 +282,7 @@ export default function ScanSpace() {
               setStage("review");
             }}
             onSurface={(scan) => {
+              setSource({ kind: "scan", original: scan, file: null, account: null });
               setSurfaceScan(scan);
               setStage("surface");
             }}
@@ -349,12 +295,15 @@ export default function ScanSpace() {
         >
           <PartialScanReview
             scan={surfaceScan}
+            source={source} onAccountSaved={accountSaved}
             onDone={() => {
               setSurfaceScan(null);
+              setSavedVersion(value => value + 1);
               setStage("welcome");
             }}
             onRescan={() => {
               setSurfaceScan(null);
+              setSource(null);
               setStage("scan");
             }}
           />
@@ -419,7 +368,7 @@ export default function ScanSpace() {
       )}
       {savedOpen && (
         <SavedProjectsDialog
-          onClose={() => setSavedOpen(false)}
+          onClose={closeSavedProjects}
           onLoad={openSavedProject}
         />
       )}

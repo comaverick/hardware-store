@@ -39,6 +39,7 @@ app.use("/api/inventory", require("./routes/branchInventoryRoutes"));
 app.use("/api/auth", require("./routes/authRoutes"));
 app.use("/api/customer-auth", require("./routes/customerAuthRoutes").router);
 app.use("/api/customer-reservations", require("./routes/customerReservationRoutes").router);
+app.use("/api/customer-scans", require("./routes/customerScanRoutes").router);
 app.use("/api/users", require("./routes/userRoutes"));
 app.use("/api/customers", require("./routes/customerRoutes"));
 app.use("/api/inventory-transactions", inventoryTransactionRoutes);
@@ -73,6 +74,9 @@ app.get("/api/health", (req, res) => {
 
 const PORT = process.env.PORT || 5000;
 
-app.listen(PORT, "0.0.0.0", () => {
+const server = app.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running on port ${PORT}`);
 });
+// Multipart scans stream to temporary disk; the upload route enforces inactivity
+// and available total storage instead of a fixed request-duration/file-size cap.
+server.requestTimeout = 0;

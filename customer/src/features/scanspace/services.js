@@ -1,5 +1,4 @@
 import { normalizeRoom } from "./core/domain";
-export const MAX_ROOM_IMPORT_BYTES = 10 * 1024 * 1024;
 
 export function looksLikeScanDiagnostics(fileName, beginning = "") {
   return (

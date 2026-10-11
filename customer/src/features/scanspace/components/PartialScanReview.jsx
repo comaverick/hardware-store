@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { CheckCircle, Info, WarningCircle } from "@phosphor-icons/react";
+import { CheckCircle } from "@phosphor-icons/react/dist/csr/CheckCircle";
+import { Info } from "@phosphor-icons/react/dist/csr/Info";
+import { WarningCircle } from "@phosphor-icons/react/dist/csr/WarningCircle";
 import PartialScanScene from "./PartialScanScene";
 import ScanRenderProgress from "./ScanRenderProgress";
+import AccountScanSave from "./AccountScanSave";
 import RoomCustomizationPanel from "./RoomCustomizationPanel";
 import { downloadDepthCapture } from "../core/captureDebug";
 import { downloadScan } from "../core/partialScanFile";
@@ -27,6 +30,8 @@ export default function PartialScanReview({
   scan,
   onRescan,
   onDone,
+  source,
+  onAccountSaved,
 }) {
   const [exportError, setExportError] = useState("");
   const [customization, setCustomization] = useState(() => sanitizeScanCustomization(scan.customization));
@@ -376,10 +381,10 @@ export default function PartialScanReview({
       <div className="ss-notice ss-notice--success">
         <div className="ss-notice-title">
           <CheckCircle size={17} weight="fill" aria-hidden="true" />
-          <strong>Scan saved</strong>
+          <strong>Scan ready</strong>
         </div>
         <p>
-          This scan can be exported and opened on another device.
+          Save this scan to your account to open it on another device, or export the original file.
         </p>
         <p className="ss-notice-detail">
           <strong>Structural detection status:</strong> {displayScan.reason}
@@ -396,6 +401,7 @@ export default function PartialScanReview({
         </p>
       )}
       <div className="ss-actions">
+        <AccountScanSave source={source || { kind: "scan", original: scan }} metadata={{ name: source?.account?.name || scan.name || "My scan", customization }} onSaved={onAccountSaved} />
         <button
           type="button"
           onClick={() => {

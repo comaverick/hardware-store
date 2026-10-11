@@ -9,7 +9,6 @@ import {
 import {
   ArrowCounterClockwise,
   ArrowClockwise,
-  FloppyDisk,
   PaintRoller,
   Cube,
   Ruler,
@@ -39,6 +38,7 @@ import {
 } from "../../../cart/reservationCart";
 import RoomReview from "./RoomReview";
 import SavedProjectsDialog from "./SavedProjectsDialog";
+import AccountScanSave from "./AccountScanSave";
 const RoomScene = lazy(() => import("./RoomScene"));
 const money = (value) =>
   new Intl.NumberFormat("en-PH", {
@@ -56,7 +56,7 @@ const colors = [
   "#424e55",
   "#ffffff",
 ];
-export default function RoomEditor({ onExit }) {
+export default function RoomEditor({ onExit, source, onAccountSaved, onOpenLegacy }) {
   const s = useScanSpace(),
     [tab, setTab] = useState("surfaces"),
     [notice, setNotice] = useState(""),
@@ -105,7 +105,7 @@ export default function RoomEditor({ onExit }) {
         saveDraft(s.room);
       } catch {
         setNotice(
-          "Browser storage is full. Save a cloud project or export your room.",
+          "Browser storage is full. Save to your account or export your room.",
         );
       }
     }, 700);
@@ -228,9 +228,7 @@ export default function RoomEditor({ onExit }) {
       setBusy(false);
     }
   }
-  async function save() {
-    setBusy(true);
-    setError("");
+  async function saveLocalCapture() {
     const room = current.current;
     try {
       saveDraft(room);
@@ -240,24 +238,12 @@ export default function RoomEditor({ onExit }) {
           textures: s.textures,
         });
       else await captureStore("delete");
-      const result = await api(
-        s.projectId ? `/projects/${s.projectId}` : "/projects",
-        { room, revision: s.revision },
-        s.projectId ? "PATCH" : "POST",
-      );
-      s.update({ projectId: result._id, revision: result.revision });
-      setNotice(
-        "Project saved privately. Cloud projects expire after 90 days without saving.",
-      );
     } catch (e) {
-      setError(
-        `Local draft saved when storage is available. Cloud save: ${e.message}`,
-      );
-    } finally {
-      setBusy(false);
+      setNotice("The local device copy could not be updated. You can still save the room to your account.");
     }
   }
   async function loadProject(data) {
+    if (onOpenLegacy) { await onOpenLegacy(data); setProjectsOpen(false); return; }
     let saved;
     try {
       saved = await captureStore("get");
@@ -350,15 +336,7 @@ export default function RoomEditor({ onExit }) {
           >
             <FolderOpen size={19} />
           </button>
-          <button
-            disabled={busy}
-            onClick={save}
-            className="ss-primary"
-            aria-label="Save project"
-          >
-            <FloppyDisk size={18} />
-            <span>Save</span>
-          </button>
+          <AccountScanSave source={source || { kind: "room", original: s.original }} metadata={{ name: s.room.name, room: s.room }} beforeSave={saveLocalCapture} onSaved={record => { if (record.name !== s.room.name) s.edit(room => { room.name = record.name; }); onAccountSaved?.(record); }} />
         </div>
       </header>
       <div className="ss-editor-body">

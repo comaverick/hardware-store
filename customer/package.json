@@ -49,7 +49,8 @@
   },
   "jest": {
     "moduleNameMapper": {
-      "^react-router/dom$": "<rootDir>/node_modules/react-router/dist/development/dom-export.js"
+      "^react-router/dom$": "<rootDir>/node_modules/react-router/dist/development/dom-export.js",
+      "^@phosphor-icons/react/dist/csr/[^/]+$": "<rootDir>/node_modules/@phosphor-icons/react/dist/index.cjs.js"
     }
   }
 }
