@@ -1,9 +1,6 @@
-export const floorFinishes = [
-  { id: "oak", name: "Natural oak", kind: "Wood", pattern: "plank", color: "#b99d7a" },
-  { id: "walnut", name: "Walnut", kind: "Wood", pattern: "plank", color: "#765641" },
-  { id: "stone", name: "Soft stone", kind: "Tile", pattern: "tile", color: "#c5c7c2" },
-  { id: "light-vinyl", name: "Light oak", kind: "Vinyl", pattern: "plank", color: "#d1bb95" },
-];
+import finishCatalog from "../finishCatalog.json";
+
+export const { paintColors, paintFinishes, floorFinishes } = finishCatalog;
 export const defaultFinishSelections = () => ({
   walls: { color: "#eee8dd", finish: "Matte" },
   floor: { finishId: "oak", direction: "lengthwise" },

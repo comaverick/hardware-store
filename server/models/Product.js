@@ -86,6 +86,8 @@ const productSchema = new mongoose.Schema(
         enum: ["paint", "tile", "wood", "vinyl", "object"],
       },
       color: { type: String, match: /^#[0-9a-f]{6}$/i },
+      paintFinish: { type: String, enum: ["Matte", "Eggshell", "Satin"] },
+      floorFinishId: { type: String, maxlength: 80, match: /^[a-z0-9-]+$/ },
       textureUrl: { type: String, maxlength: 2048 },
       tileSize: { type: Number, min: 0.05, max: 5 },
       coveragePerLiter: { type: Number, min: 0.1, max: 50 },

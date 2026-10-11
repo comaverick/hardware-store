@@ -389,27 +389,6 @@
   width: 100%;
   padding: 8px 10px;
 }
-.ss-custom-color {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-height: 42px;
-  padding: 4px 10px 4px 4px;
-  border: 1px solid var(--ss-line);
-  border-radius: 8px;
-  background: #fff;
-}
-.ss-app .ss-customization-panel .ss-custom-color input[type="color"] {
-  width: 40px;
-  height: 32px;
-  border: 0;
-  margin: 0;
-  cursor: pointer;
-}
-.ss-custom-color > span {
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
 .ss-floor-finishes {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -507,6 +486,41 @@
   color: var(--ss-muted);
   font-size: 11px;
   line-height: 1.6;
+}
+.ss-finish-shopping {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--ss-line);
+}
+.ss-finish-shopping-details,
+.ss-customization-panel .ss-finish-quantity {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+}
+.ss-finish-shopping-details a {
+  color: var(--ss-muted);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.ss-finish-shopping-details strong {
+  font-size: 14px;
+  white-space: nowrap;
+}
+.ss-customization-panel .ss-finish-quantity {
+  margin: 14px 0;
+}
+.ss-customization-panel .ss-finish-quantity input {
+  width: 76px;
+  min-height: 44px;
+  margin: 0;
+  padding: 8px 10px;
+  text-align: center;
+}
+.ss-finish-shopping > button + button {
+  margin-top: 8px;
 }
 @media (max-width: 1000px) {
   .ss-room-workspace {
@@ -662,6 +676,42 @@
 }
 .ss-partial-scene .ss-joystick small {
   color: #eff8f3;
+}
+.ss-vertical-movement {
+  position: absolute;
+  right: 18px;
+  bottom: 70px;
+  z-index: 3;
+  display: grid;
+  gap: 2px;
+  width: 80px;
+  padding: 3px;
+  border: 1px solid #ffffff3d;
+  border-radius: 12px;
+  background: #10231ed9;
+  box-shadow: 0 8px 18px #07130f40;
+  backdrop-filter: blur(10px);
+}
+.ss-app .ss-vertical-movement button {
+  min-height: 44px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #edf7f2;
+  font-size: 12px;
+  touch-action: none;
+  user-select: none;
+}
+.ss-app .ss-vertical-movement button:hover {
+  background: #ffffff1c;
+}
+.ss-app .ss-vertical-movement button:active {
+  background: var(--ss-accent);
+  color: #fff;
+}
+.ss-app .ss-vertical-movement button:focus-visible {
+  outline: 2px solid #f1b18f;
+  outline-offset: -2px;
 }
 .ss-partial-facts {
   display: grid;

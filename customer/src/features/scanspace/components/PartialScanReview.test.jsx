@@ -8,6 +8,7 @@ import { downloadScan } from "../core/partialScanFile";
 jest.mock("../core/createFusionWorker", () => ({ createFusionWorker: jest.fn() }));
 jest.mock("./PartialScanScene", () => ({ __esModule: true,
   default: ({ customization }) => <div data-testid="scan-preview" data-customization={JSON.stringify(customization)}>Checked scan preview</div> }));
+jest.mock("./FinishProductCart", () => ({ __esModule: true, default: () => null }));
 jest.mock("../core/partialScanFile", () => ({ ...jest.requireActual("../core/partialScanFile"), downloadScan: jest.fn() }));
 
 beforeEach(() => jest.clearAllMocks());

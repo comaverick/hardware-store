@@ -1,0 +1,19 @@
+{
+  "paintColors": [
+    { "id": "warm-white", "name": "Warm white", "color": "#eee8dd" },
+    { "id": "sage", "name": "Sage", "color": "#a0afa4" },
+    { "id": "mist-blue", "name": "Mist blue", "color": "#b3c0c7" },
+    { "id": "clay", "name": "Clay", "color": "#d9b09a" },
+    { "id": "sand", "name": "Sand", "color": "#e5d3a4" },
+    { "id": "forest", "name": "Forest", "color": "#53665b" },
+    { "id": "slate", "name": "Slate", "color": "#424e55" },
+    { "id": "white", "name": "White", "color": "#ffffff" }
+  ],
+  "paintFinishes": ["Matte", "Eggshell", "Satin"],
+  "floorFinishes": [
+    { "id": "oak", "name": "Natural oak", "kind": "Wood", "pattern": "plank", "color": "#b99d7a" },
+    { "id": "walnut", "name": "Walnut", "kind": "Wood", "pattern": "plank", "color": "#765641" },
+    { "id": "stone", "name": "Soft stone", "kind": "Tile", "pattern": "tile", "color": "#c5c7c2" },
+    { "id": "light-vinyl", "name": "Light oak", "kind": "Vinyl", "pattern": "plank", "color": "#d1bb95" }
+  ]
+}

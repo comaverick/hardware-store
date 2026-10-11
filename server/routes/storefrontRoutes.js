@@ -17,7 +17,7 @@ function createStorefrontRouter({ ProductModel = Product, BranchModel = Branch, 
 
       const [products, branches] = await Promise.all([
         ProductModel.find({ isActive: true })
-          .select("name sku brand category description sellingPrice unit image")
+          .select("name sku brand category description sellingPrice unit image scanSpace")
           .populate("category", "name isActive")
           .sort({ name: 1 })
           .lean(),
@@ -61,6 +61,7 @@ function createStorefrontRouter({ ProductModel = Product, BranchModel = Branch, 
           sellingPrice: product.sellingPrice,
           unit: product.unit,
           image: product.image || "",
+          scanSpace: product.scanSpace || null,
           availableQuantity: branchId
             ? availableByProduct.get(String(product._id)) || 0
             : null,

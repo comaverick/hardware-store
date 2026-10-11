@@ -5,13 +5,19 @@ import * as THREE from "three";
 import ScanPointCloud from "./ScanPointCloud";
 import ScanMesh from "./ScanMesh";
 
+const MOVEMENT_PADDING = 0.7;
+
 function ScanControls({ cloud, mode, input, view, reset }) {
   const { camera, gl } = useThree();
   const angle = useRef({ yaw: 0, pitch: 0 });
   useEffect(() => {
     if (mode === "first") {
       const start = cloud.observer || view.center;
-      camera.position.set(start.x, start.y || 1.6, start.z);
+      camera.position.set(start.x, THREE.MathUtils.clamp(
+        start.y ?? 1.6,
+        cloud.bounds.min.y - MOVEMENT_PADDING,
+        cloud.bounds.max.y + MOVEMENT_PADDING,
+      ), start.z);
       const dx = view.center.x - start.x;
       const dz = view.center.z - start.z;
       angle.current = {
@@ -49,12 +55,16 @@ function ScanControls({ cloud, mode, input, view, reset }) {
       pointer = null;
     };
     const key = (event) => {
-      if (/INPUT|SELECT|TEXTAREA/.test(event.target.tagName)) return;
+      if (!["KeyW", "KeyA", "KeyS", "KeyD", "KeyQ", "KeyE"].includes(event.code)) return;
+      if (event.type === "keydown" &&
+        (/INPUT|SELECT|TEXTAREA/.test(event.target.tagName) || event.target.isContentEditable)) return;
       input.current.keys[event.code] = event.type === "keydown";
     };
     const blur = () => {
       input.current.keys = {};
       input.current.x = input.current.y = 0;
+      input.current.up = input.current.down = false;
+      pointer = null;
     };
     element.addEventListener("pointerdown", down);
     element.addEventListener("pointermove", move);
@@ -73,7 +83,7 @@ function ScanControls({ cloud, mode, input, view, reset }) {
       window.removeEventListener("blur", blur);
       blur();
     };
-  }, [gl, input, mode]);
+  }, [gl, input, mode, reset]);
   useFrame((_, delta) => {
     if (mode !== "first") return;
     camera.rotation.order = "YXZ";
@@ -83,9 +93,11 @@ function ScanControls({ cloud, mode, input, view, reset }) {
     const forward =
       -controls.y + (keys.KeyW ? 1 : 0) - (keys.KeyS ? 1 : 0);
     const right = controls.x + (keys.KeyD ? 1 : 0) - (keys.KeyA ? 1 : 0);
+    const vertical =
+      (controls.up || keys.KeyQ ? 1 : 0) - (controls.down || keys.KeyE ? 1 : 0);
     const speed =
       (Math.min(delta, 0.05) * 1.35) /
-      Math.max(1, Math.hypot(forward, right));
+      Math.max(1, Math.hypot(forward, right, vertical));
     const dx =
       (Math.cos(angle.current.yaw) * right -
         Math.sin(angle.current.yaw) * forward) *
@@ -94,16 +106,20 @@ function ScanControls({ cloud, mode, input, view, reset }) {
       (-Math.sin(angle.current.yaw) * right -
         Math.cos(angle.current.yaw) * forward) *
       speed;
-    const padding = 0.7;
     camera.position.x = THREE.MathUtils.clamp(
       camera.position.x + dx,
-      cloud.bounds.min.x - padding,
-      cloud.bounds.max.x + padding,
+      cloud.bounds.min.x - MOVEMENT_PADDING,
+      cloud.bounds.max.x + MOVEMENT_PADDING,
+    );
+    camera.position.y = THREE.MathUtils.clamp(
+      camera.position.y + vertical * speed,
+      cloud.bounds.min.y - MOVEMENT_PADDING,
+      cloud.bounds.max.y + MOVEMENT_PADDING,
     );
     camera.position.z = THREE.MathUtils.clamp(
       camera.position.z + dz,
-      cloud.bounds.min.z - padding,
-      cloud.bounds.max.z + padding,
+      cloud.bounds.min.z - MOVEMENT_PADDING,
+      cloud.bounds.max.z + MOVEMENT_PADDING,
     );
   });
   return mode === "first" ? null : (
@@ -123,7 +139,7 @@ export default function PartialScanScene({ scan, compact = false, customization 
   const [surfaceView, setSurfaceView] = useState("photo");
   const [reset, setReset] = useState(0);
   const [knob, setKnob] = useState({ x: 0, y: 0 });
-  const input = useRef({ x: 0, y: 0, keys: {} });
+  const input = useRef({ x: 0, y: 0, up: false, down: false, keys: {} });
   const mesh = scan.mesh;
   const cloud = scan.cloud;
   const activeSurfaceView = surfaceView === "depth" && !cloud ? "photo" : surfaceView;
@@ -244,14 +260,44 @@ export default function PartialScanScene({ scan, compact = false, customization 
           }}
           onPointerUp={clearJoystick}
           onPointerCancel={clearJoystick}
+          onLostPointerCapture={clearJoystick}
         >
           <span style={{ transform: `translate(${knob.x}px,${knob.y}px)` }} />
           <small>Move</small>
         </div>
       )}
+      {mode === "first" && (
+        <div className="ss-vertical-movement" role="group" aria-label="Camera height">
+          {[["up", "Q", "↑", "Up"], ["down", "E", "↓", "Down"]].map(([direction, shortcut, arrow, label]) => (
+            <button key={direction} type="button" aria-label={`Move ${direction}`}
+              aria-keyshortcuts={shortcut} title={`Hold to move ${direction} (${shortcut})`}
+              onPointerDown={(event) => {
+                if (event.button > 0) return;
+                event.currentTarget.setPointerCapture?.(event.pointerId);
+                input.current[direction] = true;
+              }}
+              onPointerUp={() => { input.current[direction] = false; }}
+              onPointerCancel={() => { input.current[direction] = false; }}
+              onLostPointerCapture={() => { input.current[direction] = false; }}
+              onKeyDown={(event) => {
+                if (event.key !== " " && event.key !== "Enter") return;
+                event.preventDefault();
+                input.current[direction] = true;
+              }}
+              onKeyUp={(event) => {
+                if (event.key !== " " && event.key !== "Enter") return;
+                event.preventDefault();
+                input.current[direction] = false;
+              }}
+              onBlur={() => { input.current[direction] = false; }}>
+              <span aria-hidden="true">{arrow}</span> {label}
+            </button>
+          ))}
+        </div>
+      )}
       <span className="ss-view-hint">
         {mode === "first"
-          ? "Drag to look · Use the joystick to move"
+          ? "Drag to look · Joystick / WASD · Q up / E down"
           : "Drag to orbit · Pinch to zoom"}
       </span>
       <span className="ss-partial-legend" role="status">

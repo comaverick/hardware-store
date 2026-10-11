@@ -35,6 +35,7 @@ test("public storefront catalog exposes active products and branch availability 
             image: "",
             costPrice: 100,
             barcode: "private-barcode",
+            scanSpace: { enabled: true, materialType: "paint", color: "#a0afa4", paintFinish: "Matte", packageVolume: 4 },
           },
           {
             _id: otherProductId,
@@ -104,6 +105,7 @@ test("public storefront catalog exposes active products and branch availability 
   assert.equal(catalog.products[0].availableQuantity, null);
   assert.equal(catalog.products[0].costPrice, undefined);
   assert.equal(catalog.products[0].barcode, undefined);
+  assert.deepEqual(catalog.products[0].scanSpace, { enabled: true, materialType: "paint", color: "#a0afa4", paintFinish: "Matte", packageVolume: 4 });
   assert.equal(calls.some((call) => call.collection === "inventory"), false);
 
   const branchResponse = await fetch(`${base}?branch=${branchId}`);

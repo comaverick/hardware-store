@@ -5,23 +5,18 @@ import {
   ArrowRight,
   Check,
   ClipboardText,
-  Drop,
-  Hammer,
-  HardHat,
   House,
-  Lightning,
   MagnifyingGlass,
   MapPin,
   Minus,
-  PaintBrush,
   Plus,
   ShieldCheck,
   ShoppingCart,
   SquaresFour,
   Storefront,
-  Wrench,
 } from "@phosphor-icons/react";
 import { useReservationCart } from "../cart/reservationCart";
+import { ProductVisual as StoreProductVisual } from "../storefront/ProductVisual";
 import {
   fetchStorefrontProduct,
   fetchStorefrontCatalog,
@@ -30,45 +25,8 @@ import {
 } from "../storefrontCatalog";
 import "./ProductDetails.css";
 
-const categoryIcons = {
-  Tools: Hammer,
-  "Hand Tools": Hammer,
-  "Power Tools": Wrench,
-  Paint: PaintBrush,
-  Electrical: Lightning,
-  Plumbing: Drop,
-  Hardware: Wrench,
-  Fasteners: Wrench,
-  Safety: HardHat,
-};
-
 function ProductVisual({ product, size = 72 }) {
-  const image = productImageUrl(product?.image);
-  const [failed, setFailed] = useState(false);
-
-  useEffect(() => {
-    setFailed(false);
-  }, [image]);
-
-  if (image && !failed) {
-    return (
-      <img
-        src={image}
-        alt={product?.name || "Product"}
-        loading="lazy"
-        onError={() => setFailed(true)}
-      />
-    );
-  }
-  const Icon = categoryIcons[product?.category] || SquaresFour;
-  return (
-    <Icon
-      className="pdp-visual__placeholder"
-      size={size}
-      weight="duotone"
-      aria-hidden="true"
-    />
-  );
+  return <StoreProductVisual product={product} size={size} placeholderClassName="pdp-visual__placeholder" />;
 }
 
 export default function ProductDetails({

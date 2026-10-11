@@ -484,20 +484,6 @@ export default function RoomEditor({ onExit, source, onAccountSaved, onOpenLegac
                         />
                       ))}
                     </div>
-                    <label>
-                      Custom color
-                      <input
-                        type="color"
-                        value={surface.color}
-                        onChange={(e) =>
-                          chooseMaterial({
-                            color: e.target.value,
-                            productId: "",
-                            textureUrl: "",
-                          })
-                        }
-                      />
-                    </label>
                     {s.selected === "floor" && (
                       <div className="ss-inline">
                         <label>

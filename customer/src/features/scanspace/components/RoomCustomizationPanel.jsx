@@ -6,22 +6,13 @@ import {
   PaintRoller,
   Rectangle,
 } from "@phosphor-icons/react";
-import { defaultFinishSelections, finishSelections, floorFinishes } from "../core/scanCustomization";
+import { defaultFinishSelections, finishSelections, floorFinishes, paintColors, paintFinishes } from "../core/scanCustomization";
+import FinishProductCart from "./FinishProductCart";
 
 const surfaces = [
   { id: "walls", label: "Walls", icon: PaintRoller },
   { id: "floor", label: "Flooring", icon: GridFour },
   { id: "ceiling", label: "Ceiling", icon: Rectangle },
-];
-const paintColors = [
-  { name: "Warm white", color: "#eee8dd" },
-  { name: "Sage", color: "#a0afa4" },
-  { name: "Mist blue", color: "#b3c0c7" },
-  { name: "Clay", color: "#d9b09a" },
-  { name: "Sand", color: "#e5d3a4" },
-  { name: "Forest", color: "#53665b" },
-  { name: "Slate", color: "#424e55" },
-  { name: "White", color: "#ffffff" },
 ];
 export default function RoomCustomizationPanel({ customization, availability, onApply, onReset }) {
   const panelId = useId();
@@ -32,7 +23,7 @@ export default function RoomCustomizationPanel({ customization, availability, on
   const canApply = !!(availability?.[surface] && onApply);
   const selectedFloor = floorFinishes.find(finish => finish.id === selections.floor.finishId);
   const paint = surface === "floor" ? null : selections[surface];
-  const colorName = paintColors.find(choice => choice.color === paint?.color)?.name || "Custom color";
+  const colorName = paintColors.find(choice => choice.color === paint?.color)?.name || "Saved paint color";
 
   function updatePaint(values) {
     setNotice("");
@@ -111,11 +102,11 @@ export default function RoomCustomizationPanel({ customization, availability, on
       >
         <div className="ss-customization-section-heading">
           <h3>{surface === "floor" ? "Floor finishes" : surface === "walls" ? "Wall paint" : "Ceiling paint"}</h3>
-          <p>Sample finishes</p>
+          <p>Store finishes</p>
         </div>
         {surface === "floor" ? (
           <>
-            <div className="ss-floor-finishes" role="group" aria-label="Sample flooring finishes">
+            <div className="ss-floor-finishes" role="group" aria-label="Flooring finishes">
               {floorFinishes.map(finish => (
                 <button
                   key={finish.id}
@@ -165,22 +156,9 @@ export default function RoomCustomizationPanel({ customization, availability, on
               ))}
             </div>
             <label className="ss-customization-field">
-              Custom color
-              <span className="ss-custom-color">
-                <input
-                  type="color"
-                  value={paint.color}
-                  onChange={event => updatePaint({ color: event.target.value })}
-                />
-                <span>{paint.color.toUpperCase()}</span>
-              </span>
-            </label>
-            <label className="ss-customization-field">
               Paint finish
               <select value={paint.finish} onChange={event => updatePaint({ finish: event.target.value })}>
-                <option>Matte</option>
-                <option>Eggshell</option>
-                <option>Satin</option>
+                {paintFinishes.map(finish => <option key={finish}>{finish}</option>)}
               </select>
             </label>
           </>
@@ -201,13 +179,13 @@ export default function RoomCustomizationPanel({ customization, availability, on
             <strong>{surface === "floor" ? selectedFloor.name : colorName}</strong>
             <small>{surface === "floor"
               ? `${selectedFloor.kind} · ${selections.floor.direction === "lengthwise" ? "Lengthwise" : "Crosswise"}`
-              : `${paint.finish} · ${paint.color.toUpperCase()}`}</small>
+              : paint.finish}</small>
           </div>
         </div>
       </div>
 
       <div className="ss-customization-footer">
-        <button type="button" className={canApply ? "ss-primary" : ""} disabled={!canApply}
+        <button type="button" disabled={!canApply}
           aria-describedby={`${panelId}-availability`}
           onClick={() => {
             onApply(surface, selections[surface]);
@@ -216,6 +194,7 @@ export default function RoomCustomizationPanel({ customization, availability, on
           <PaintRoller size={18} aria-hidden="true" />
           Apply to room
         </button>
+        <FinishProductCart surface={surface} selection={selections[surface]} />
         <p id={`${panelId}-availability`} role="status">
           {canApply ? notice || "Choose a finish, then apply it to this surface."
             : `No editable ${surface === "walls" ? "wall" : surface} surface was detected in this scan.`}

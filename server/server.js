@@ -22,6 +22,10 @@ const {
 const app = express();
 
 app.use(cors());
+app.use("/assets/scanspace", express.static(path.join(__dirname, "public", "scanspace"), {
+  index: false,
+  maxAge: "7d",
+}));
 app.use(express.json({ limit: "8mb" }));
 app.use("/api", apiRateLimiter);
 app.use("/api/auth", authRateLimiter);

@@ -7,11 +7,19 @@ export const categoryIcons = {
   Electrical: Lightning, Plumbing: Drop, Hardware: Wrench, Fasteners: Wrench, Safety: HardHat,
 };
 
-export function ProductVisual({ product }) {
+export function ProductVisual({ product, size = 58, placeholderClassName = "shop-product__placeholder" }) {
   const image = productImageUrl(product?.image);
   const [failed, setFailed] = useState(false);
   useEffect(() => setFailed(false), [image]);
   if (image && !failed) return <img src={image} alt={product?.name || "Product"} loading="lazy" onError={() => setFailed(true)} />;
+  const finish = product?.scanSpace;
+  if (finish?.enabled && /^#[0-9a-f]{6}$/i.test(finish.color) &&
+    ["paint", "wood", "tile", "vinyl"].includes(finish.materialType)) {
+    return <div className={`shop-product__finish shop-product__finish--${finish.materialType}`}
+      style={{ "--product-finish": finish.color }} aria-hidden="true">
+      {finish.materialType === "paint" && <PaintBrush size={Math.min(size, 42)} weight="duotone" />}
+    </div>;
+  }
   const Icon = categoryIcons[product?.category] || SquaresFour;
-  return <Icon className="shop-product__placeholder" size={58} weight="duotone" aria-hidden="true" />;
+  return <Icon className={placeholderClassName} size={size} weight="duotone" aria-hidden="true" />;
 }
