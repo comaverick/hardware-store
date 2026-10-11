@@ -12,7 +12,7 @@ Store managers, administrators, and authorized staff who monitor hardware invent
 
 ## Product Purpose
 
-The Hardware Management System centralizes product catalog, inventory, branch stock, point-of-sale transactions, reservations, purchasing placeholders, reporting, audit activity, and user administration. Success means staff can understand stock and operational risk quickly, then move to the correct workflow without losing context.
+The Hardware Management System centralizes product catalog, inventory, branch stock, point-of-sale transactions, reservations, reporting, audit activity, and user administration. Success means staff can understand stock and operational risk quickly, then move to the correct workflow without losing context.
 
 ## Positioning
 
@@ -24,7 +24,8 @@ Users work from a desktop-first management interface with a collapsible navigati
 
 ## Capabilities and Constraints
 
-- Existing routes include Dashboard, POS, Products, Inventory, Reservations, Product Finder, Stock History, Reports, Audit Logs, User Management, and placeholder routes for Transfers, Purchases, and Settings.
+- Existing routes include Dashboard, POS, Products, Inventory, Reservations, Product Finder, Stock History, Reports, Audit Logs, User Management, and Settings.
+- Settings provides a branch directory and super-admin branch creation through the existing API, browser-local receipt preferences used by POS, workstation printer selection, account/access details, and API/database connection checks. Receipt configuration and printer selection controls are restricted to SUPER_ADMIN and ADMIN in the application; other staff can continue printing sales receipts.
 - Existing APIs provide products, inventory, inventory transactions, sales, smart-inventory recommendations, reservations, users, branches, and system health.
 - Access is role-aware through the authenticated user context; elevated routes are restricted in the existing navigation.
 - The redesign must preserve real API data, existing business rules, and the current React/Ant Design/Recharts stack.

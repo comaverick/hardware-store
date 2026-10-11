@@ -270,6 +270,16 @@ def format_money(value):
     return f"P{float(value):,.2f}"
 
 
+def receipt_text(value, fallback, max_length, multiline=False):
+    if not isinstance(value, str):
+        return fallback
+    text = "".join(
+        char if (ord(char) >= 32 and ord(char) != 127) or (multiline and char == "\n") else " "
+        for char in value
+    ).strip()[:max_length]
+    return text or fallback
+
+
 def format_receipt(data):
 
     lines = []
@@ -292,7 +302,7 @@ def format_receipt(data):
     lines.append(BOLD_ON)
 
     lines.append(
-        "HARDWARE STORE\n".encode(
+        (receipt_text(data.get("storeName"), "HARDWARE STORE", 80) + "\n").encode(
             "cp437",
             errors="replace"
         )
@@ -555,15 +565,16 @@ def format_receipt(data):
 
     lines.append(BOLD_ON)
 
+    footer = receipt_text(data.get("receiptFooter"), "THANK YOU!\nPlease come again.", 200, multiline=True)
+    footer_lines = footer.split("\n", 1)
     lines.append(
-        b"THANK YOU!\n"
+        (footer_lines[0] + "\n").encode("cp437", errors="replace")
     )
 
     lines.append(BOLD_OFF)
 
-    lines.append(
-        b"Please come again.\n"
-    )
+    if len(footer_lines) > 1:
+        lines.append((footer_lines[1] + "\n").encode("cp437", errors="replace"))
 
     lines.append(
         b"\n\n\n"
@@ -1005,30 +1016,21 @@ class PrintServer(
 # START SERVER
 # =========================
 
-server = ThreadingHTTPServer(
-    (os.environ.get("HOST", "0.0.0.0"), PORT),
-    PrintServer
-)
+if __name__ == "__main__":
+    server = ThreadingHTTPServer(
+        (os.environ.get("HOST", "0.0.0.0"), PORT),
+        PrintServer
+    )
 
-print("--------------------------------")
-print("HARDWARE STORE PRINT SERVER")
-print("--------------------------------")
-print(
-    f"Server listening on {os.environ.get('HOST', '0.0.0.0')}:{PORT}"
-)
-print(
-    "GEZHI USB VID: 28E9"
-)
-print(
-    "GEZHI USB PID: 0289"
-)
-print(
-    f"Physical USB detection: {'ENABLED' if win32print else 'UNAVAILABLE (non-Windows host)'}"
-)
-print(
-    "Waiting for print requests..."
-)
-print("--------------------------------")
+    print("--------------------------------")
+    print("HARDWARE STORE PRINT SERVER")
+    print("--------------------------------")
+    print(f"Server listening on {os.environ.get('HOST', '0.0.0.0')}:{PORT}")
+    print("GEZHI USB VID: 28E9")
+    print("GEZHI USB PID: 0289")
+    print(f"Physical USB detection: {'ENABLED' if win32print else 'UNAVAILABLE (non-Windows host)'}")
+    print("Waiting for print requests...")
+    print("--------------------------------")
 
-server.serve_forever()
+    server.serve_forever()
 

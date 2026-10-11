@@ -19,7 +19,7 @@ import AuditLogs from "./pages/AuditLogs/AuditLogs";
 import UserManagement from "./pages/UserManagement/UserManagement";
 import Customers from "./pages/Customers/Customers";
 import Reports from "./pages/Reports/Reports";
-import ComingSoon from "./pages/ComingSoon";
+import Settings from "./pages/Settings/Settings";
 
 function App() {
   return (
@@ -129,32 +129,6 @@ function App() {
             }
           />
           <Route
-            path="/transfers"
-            element={
-              <ProtectedRoute>
-                <AppLayout>
-                  <ComingSoon
-                    title="Stock Transfers"
-                    description="Move inventory between branches and keep stock levels balanced."
-                  />
-                </AppLayout>
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/purchases"
-            element={
-              <ProtectedRoute>
-                <AppLayout>
-                  <ComingSoon
-                    title="Purchases"
-                    description="Track incoming purchases and maintain a complete purchasing history."
-                  />
-                </AppLayout>
-              </ProtectedRoute>
-            }
-          />
-          <Route
             path="/reports"
             element={
               <ProtectedRoute>
@@ -170,10 +144,7 @@ function App() {
             element={
               <ProtectedRoute>
                 <AppLayout>
-                  <ComingSoon
-                    title="Settings"
-                    description="Configure your store, users, branches, and system preferences."
-                  />
+                  <Settings />
                 </AppLayout>
               </ProtectedRoute>
             }

@@ -1,0 +1,566 @@
+.settings-page {
+  width: 100%;
+  max-width: 1400px;
+  margin: 0 auto;
+  color: var(--app-ink);
+}
+
+.settings-page [hidden] {
+  display: none !important;
+}
+.settings-intro {
+  margin-bottom: 30px;
+}
+.settings-intro h2 {
+  margin: 0 0 8px;
+  color: var(--app-heading);
+  font-size: clamp(23px, 2.4vw, 30px);
+  letter-spacing: -0.8px;
+  line-height: 1.25;
+}
+.settings-intro p,
+.settings-section-heading p {
+  margin: 0;
+  color: var(--app-muted);
+  font-size: 14px;
+  line-height: 1.6;
+}
+.settings-layout {
+  display: grid;
+  grid-template-columns: 210px minmax(0, 1fr);
+  gap: 32px;
+  align-items: start;
+}
+.settings-sidebar {
+  position: sticky;
+  top: 98px;
+}
+.settings-sidebar nav {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.settings-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  color: var(--app-muted);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  transition:
+    background var(--app-motion-fast) var(--app-ease-out),
+    color var(--app-motion-fast) var(--app-ease-out);
+}
+.settings-nav-item .anticon {
+  font-size: 17px;
+}
+.settings-nav-item:hover {
+  background: var(--app-panel);
+  color: var(--app-ink);
+}
+.settings-nav-active,
+.settings-nav-active:hover {
+  background: var(--app-accent-soft);
+  color: var(--app-accent-ink);
+}
+.settings-scope-note {
+  display: flex;
+  align-items: start;
+  gap: 9px;
+  margin: 24px 14px 0;
+  padding-top: 20px;
+  border-top: 1px solid var(--app-line);
+  color: var(--app-muted);
+}
+.settings-scope-note .anticon {
+  margin-top: 3px;
+}
+.settings-scope-note p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.65;
+}
+.settings-main {
+  min-width: 0;
+}
+.settings-section-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 22px;
+}
+.settings-section-heading h2 {
+  margin: 0 0 5px;
+  color: var(--app-heading);
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.35px;
+}
+.settings-section-heading .ant-btn {
+  flex-shrink: 0;
+}
+.settings-panel {
+  overflow: hidden;
+  border: 1px solid var(--app-line);
+  border-radius: 13px;
+  background: var(--app-panel-raised);
+}
+.settings-panel + .settings-panel {
+  margin-top: 22px;
+}
+.settings-panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-height: 56px;
+  padding: 0 22px;
+  border-bottom: 1px solid var(--app-line);
+  background: var(--app-panel);
+}
+.settings-panel-heading h3 {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+}
+.settings-panel-heading > span {
+  color: var(--app-muted);
+  font-size: 12px;
+}
+.settings-panel-body {
+  padding: 22px;
+}
+.settings-panel-footnote {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 16px 22px;
+  border-top: 1px solid var(--app-line);
+  color: var(--app-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.settings-branch-panel .ant-table {
+  border: 0;
+  border-radius: 0;
+}
+.settings-branch-panel .ant-table-thead > tr > th {
+  font-size: 12px;
+}
+.settings-branch-panel .ant-table-tbody > tr > td {
+  padding-top: 20px;
+  padding-bottom: 20px;
+}
+.settings-branch-panel .ant-table-pagination {
+  margin: 16px 22px;
+}
+.settings-branch-name {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.settings-branch-name strong {
+  font-weight: 650;
+}
+.settings-branch-name span {
+  color: var(--app-muted);
+  font: 11px var(--app-font-mono, Consolas, monospace);
+  letter-spacing: 0.03em;
+}
+.settings-branch-address {
+  display: block;
+  max-width: 300px;
+  overflow-wrap: anywhere;
+}
+.settings-page .settings-status {
+  margin: 0;
+  border: 0;
+  font-size: 11px;
+  font-weight: 600;
+}
+.settings-page .settings-status-success {
+  background: var(--app-success-soft);
+  color: var(--app-success);
+}
+.settings-page .settings-status-neutral {
+  background: var(--app-steel-soft);
+  color: var(--app-muted);
+}
+.settings-page .settings-status-warning {
+  background: var(--app-warning-soft);
+  color: var(--app-warning);
+}
+.settings-alert {
+  margin-bottom: 18px;
+}
+.settings-permission-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin-bottom: 18px;
+  color: var(--app-muted);
+  font-size: 13px;
+  line-height: 1.65;
+}
+.settings-permission-note .anticon {
+  margin-top: 4px;
+  color: var(--app-accent-ink);
+}
+.settings-panel-body > .settings-permission-note:last-child {
+  margin-bottom: 0;
+  margin-top: 20px;
+}
+.settings-local-label {
+  padding: 4px 8px;
+  border: 1px solid var(--app-line);
+  border-radius: 5px;
+}
+.settings-receipt-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 230px;
+  gap: 30px;
+  padding: 24px;
+}
+.settings-page .ant-form-item-label > label {
+  color: var(--app-ink);
+  font-size: 13px;
+  font-weight: 600;
+}
+.settings-page .ant-input {
+  min-height: 38px;
+  font-size: 14px;
+}
+.settings-page textarea.ant-input {
+  line-height: 1.6;
+}
+.settings-switch-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 18px;
+  margin: 30px 0;
+  padding-top: 20px;
+  border-top: 1px solid var(--app-line);
+}
+.settings-switch-row strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+.settings-switch-row p {
+  margin: 5px 0 0;
+  color: var(--app-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.settings-switch-row .ant-switch {
+  flex-shrink: 0;
+}
+.settings-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  padding-top: 20px;
+  border-top: 1px solid var(--app-line);
+}
+.settings-form-actions > span {
+  color: var(--app-muted);
+  font-size: 12px;
+}
+.settings-form-actions > div,
+.settings-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+.settings-page .ant-btn-primary:disabled {
+  opacity: 0.5;
+}
+.settings-receipt-preview {
+  padding: 16px;
+  border-radius: 8px;
+  background: var(--app-canvas);
+}
+.settings-preview-label {
+  display: block;
+  margin-bottom: 18px;
+  color: var(--app-muted);
+  text-align: center;
+  font-size: 11px;
+}
+.settings-paper {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 24px 15px;
+  border: 1px solid var(--app-line);
+  border-radius: 3px;
+  background: var(--app-panel-raised);
+  text-align: center;
+  font-family: Consolas, monospace;
+  overflow-wrap: anywhere;
+}
+.settings-paper > strong {
+  font-size: 15px;
+  line-height: 1.5;
+}
+.settings-paper > span,
+.settings-paper > small {
+  color: var(--app-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.settings-preview-items {
+  margin: 12px 0;
+  padding: 25px 0;
+  border-top: 1px dashed var(--app-line-strong);
+  border-bottom: 1px dashed var(--app-line-strong);
+  color: var(--app-muted);
+  font-size: 11px;
+  line-height: 1.8;
+}
+.settings-paper p {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.7;
+  white-space: pre-line;
+}
+.settings-printer-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 300px);
+  gap: 24px;
+  align-items: center;
+}
+.settings-printer-row label {
+  font-size: 13px;
+  font-weight: 600;
+}
+.settings-printer-row p {
+  margin: 5px 0 0;
+  color: var(--app-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.settings-printer-row .ant-select {
+  width: 100%;
+}
+.settings-printer-status {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 20px;
+  color: var(--app-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.settings-account-summary {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.settings-account-avatar {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  border-radius: 13px;
+  background: var(--app-accent-soft);
+  color: var(--app-accent-ink);
+  font-size: 23px;
+}
+.settings-account-summary h3 {
+  margin: 0 0 5px;
+  font-size: 18px;
+  font-weight: 650;
+}
+.settings-account-summary p {
+  margin: 0;
+  color: var(--app-muted);
+  font-size: 13px;
+}
+.settings-details {
+  margin: 0;
+}
+.settings-details > div {
+  display: grid;
+  grid-template-columns: 160px minmax(0, 1fr);
+  gap: 18px;
+  padding: 15px 0;
+  border-bottom: 1px solid var(--app-line);
+  font-size: 13px;
+}
+.settings-details dt {
+  color: var(--app-muted);
+}
+.settings-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-weight: 550;
+}
+.settings-details dd .anticon {
+  margin-right: 5px;
+}
+.settings-account-help {
+  margin: 22px 0 15px;
+  color: var(--app-muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.settings-action-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--app-accent-ink);
+  font-size: 13px;
+  font-weight: 650;
+  text-decoration: none;
+}
+.settings-action-link:hover {
+  color: var(--app-accent-deep);
+  text-decoration: underline;
+}
+.settings-access-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 18px;
+  padding: 24px 0;
+}
+.settings-access-row h3 {
+  margin: 0 0 5px;
+  font-size: 14px;
+}
+.settings-access-row p {
+  margin: 0;
+  color: var(--app-muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.settings-text-success {
+  color: var(--app-success);
+}
+.settings-modal-description {
+  margin: 0 0 20px;
+  color: var(--app-muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.settings-modal-actions {
+  margin-top: 24px;
+}
+
+@media (max-width: 1200px) {
+  .settings-layout {
+    grid-template-columns: 185px minmax(0, 1fr);
+    gap: 24px;
+  }
+  .settings-receipt-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .settings-receipt-preview {
+    max-width: 260px;
+    width: 100%;
+    box-sizing: border-box;
+    justify-self: center;
+  }
+}
+
+@media (max-width: 900px) {
+  .settings-layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 24px;
+  }
+  .settings-sidebar {
+    position: static;
+  }
+  .settings-sidebar nav {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 4px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--app-line);
+  }
+  .settings-nav-item {
+    justify-content: center;
+    padding: 11px 8px;
+    font-size: 12px;
+    gap: 8px;
+  }
+  .settings-scope-note {
+    display: none;
+  }
+  .settings-receipt-layout {
+    grid-template-columns: minmax(0, 1fr) 220px;
+    gap: 22px;
+  }
+}
+
+@media (max-width: 640px) {
+  .settings-intro {
+    margin-bottom: 22px;
+  }
+  .settings-sidebar nav {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
+  .settings-nav-item {
+    justify-content: flex-start;
+    padding: 12px 10px;
+  }
+  .settings-section-heading {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 14px;
+    margin-bottom: 18px;
+  }
+  .settings-section-heading h2 {
+    font-size: 18px;
+  }
+  .settings-section-heading p {
+    font-size: 13px;
+  }
+  .settings-panel-heading {
+    padding: 12px 16px;
+    min-height: 32px;
+  }
+  .settings-panel-body,
+  .settings-receipt-layout {
+    padding: 18px 16px;
+  }
+  .settings-receipt-layout,
+  .settings-printer-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .settings-printer-row {
+    gap: 16px;
+  }
+  .settings-panel-footnote {
+    padding: 14px 16px;
+  }
+  .settings-details > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
+  .settings-form-actions > div {
+    width: 100%;
+  }
+  .settings-form-actions > div .ant-btn {
+    flex: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-nav-item {
+    transition: none;
+  }
+}

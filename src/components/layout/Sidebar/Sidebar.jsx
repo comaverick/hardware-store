@@ -3,8 +3,6 @@ import {
   ShoppingCartOutlined,
   AppstoreOutlined,
   InboxOutlined,
-  SwapOutlined,
-  ShoppingOutlined,
   TeamOutlined,
   ContactsOutlined,
   BarChartOutlined,
@@ -166,16 +164,6 @@ const Sidebar = ({
       title: "Management",
 
       items: [
-        {
-          key: "/purchases",
-          icon: <ShoppingOutlined />,
-          label: "Purchases",
-        },
-        {
-          key: "/transfers",
-          icon: <SwapOutlined />,
-          label: "Stock transfers",
-        },
         {
           key: "/reports",
           icon: <BarChartOutlined />,

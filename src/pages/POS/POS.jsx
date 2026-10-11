@@ -38,19 +38,16 @@ import {
 } from "antd";
 
 import api from "../../services/api";
+import { printerFetch } from "../../services/printer";
+import {
+  canManageReceiptSettings,
+  getReceiptSettings,
+} from "../../services/receiptSettings";
 import { useAuth } from "../../context/AuthContext";
 
 import "./POS.css";
 
 const { Title, Text } = Typography;
-
-const PRINTER_SERVER = (process.env.REACT_APP_PRINTER_SERVER_URL || "http://localhost:5100").replace(/\/+$/, "");
-
-const printerFetch = (path, options = {}) =>
-  fetch(`${PRINTER_SERVER}${path}`, {
-    ...options,
-    targetAddressSpace: "loopback",
-  });
 
 const POS = () => {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -60,6 +57,7 @@ const POS = () => {
   });
   const routeReservationLoadedRef = useRef(false);
   const { user } = useAuth();
+  const canManageReceipts = canManageReceiptSettings(user?.role);
   const canRefundDirectly = ["SUPER_ADMIN", "ADMIN", "MANAGER"].includes(user?.role);
   const searchRef = useRef(null);
   const cartItemsRef = useRef(null);
@@ -308,6 +306,7 @@ const POS = () => {
   // =========================
 
   const handlePrinterChange = async (printer) => {
+    if (!canManageReceipts) return;
     try {
       const response = await printerFetch("/printer/select", {
         method: "POST",
@@ -833,6 +832,7 @@ const POS = () => {
   const printReceipt = async (sale, isReprint = false) => {
     return runPrintJob(async () => {
       try {
+        const receiptSettings = getReceiptSettings();
         const response = await printerFetch("/print", {
         method: "POST",
 
@@ -841,6 +841,8 @@ const POS = () => {
         },
 
         body: JSON.stringify({
+          storeName: receiptSettings.storeName,
+          receiptFooter: receiptSettings.receiptFooter,
           branch: sale.branch?.name || "Hardware Store",
 
           receiptNumber: sale.receiptNumber,
@@ -981,7 +983,9 @@ const POS = () => {
       // PRINT
       // =========================
 
-      await printReceipt(sale);
+      if (getReceiptSettings().autoPrint) {
+        await printReceipt(sale);
+      }
 
       message.success("Sale completed successfully.");
     } catch (error) {
@@ -1255,7 +1259,7 @@ const POS = () => {
                 printerLoading ? "Detecting printer..." : "Select printer"
               }
               loading={printerLoading}
-              disabled={printers.length === 0}
+              disabled={!canManageReceipts || printers.length === 0}
               style={{
                 minWidth: 220,
               }}
@@ -1985,7 +1989,7 @@ const POS = () => {
             )}
 
             <div className="receipt-header">
-              <Title level={3}>HARDWARE STORE</Title>
+              <Title level={3}>{getReceiptSettings().storeName}</Title>
 
               <Text>{receipt.branch?.name}</Text>
 
@@ -2091,9 +2095,9 @@ const POS = () => {
             </div>
 
             <div className="receipt-footer">
-              Thank you for your purchase!
-              <br />
-              Please come again.
+              {getReceiptSettings().receiptFooter.split("\n").map((line, index) => (
+                <div key={index}>{line || <br />}</div>
+              ))}
             </div>
           </div>
         )}

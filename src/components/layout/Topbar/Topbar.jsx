@@ -127,16 +127,6 @@ const Topbar = ({
       description: "Track inventory movements",
     },
 
-    "/transfers": {
-      title: "Stock Transfers",
-      description: "Move inventory between branches",
-    },
-
-    "/purchases": {
-      title: "Purchases",
-      description: "Track purchased inventory",
-    },
-
     "/reports": {
       title: "Reports",
       description: "View store performance",
@@ -157,8 +147,6 @@ const Topbar = ({
     "/reservations": "Inventory",
     "/product-finder": "Inventory",
     "/stock-history": "Inventory",
-    "/transfers": "Inventory",
-    "/purchases": "Purchasing",
     "/reports": "Management",
     "/settings": "System",
     "/user-management": "Administration",
@@ -208,6 +196,10 @@ const Topbar = ({
 
     if (key === "settings") {
       navigate("/settings");
+    }
+
+    if (key === "profile") {
+      navigate("/settings?section=account");
     }
   };
 

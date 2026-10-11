@@ -1,3 +1,11 @@
+# Hardware Store
+
+Settings is available from the navigation rail and the account menu. Super administrators can create store branches; other staff see their assigned branch. Account details link to the existing user management and audit tools according to the user's role.
+
+Receipt and printer configuration controls are available only to Super Admins and Admins, including printer selection in POS. Other staff cannot open the configuration controls through a direct receipt-settings link, but can still print and reprint sales receipts. Receipt names, footer text, and automatic printing are saved in this browser and used by POS, including manual reprints. These are application controls over browser-local preferences; the local print service does not authenticate staff roles. Printer selection uses the existing local print service (`http://localhost:5100`, or `REACT_APP_PRINTER_SERVER_URL`). Restart the print service after updating its receipt formatter. System status checks the existing API health endpoint.
+
+Run `npm test -- --watch=false --runInBand` for frontend checks, `python -m unittest discover -s server/test -p test_receipt_settings.py` for thermal receipt formatting checks, and `npm run build` for the production build.
+
 # Getting Started with Create React App
 
 This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
