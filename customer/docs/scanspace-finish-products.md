@@ -8,6 +8,8 @@ The presentation catalog has eight paint colors in Matte, Eggshell, and Satin (2
 
 Storefront products expose `scanSpace.paintFinish` or `scanSpace.floorFinishId` alongside their color and package coverage. ScanSpace uses that metadata to find the exact product. It adds the selected quantity to the existing reservation cart and opens the normal branch pickup flow. Available branch stock and quantities already in the cart limit additions. Stock is held only when the customer confirms a reservation.
 
+Captured scans have a separate **Applied items** section below the room preview and finish controls. It lists only finishes committed with **Apply to room**, combines identical wall and ceiling paint, and keeps staged finish choices out of the shopping list. Customers set package quantities manually, then use checkboxes with **Add selected**, or **Add all** to include every applied product. A group is validated against branch stock before the cart is updated; unavailable finishes remain visible and cannot be substituted with a different product. Resetting the room finishes clears the list without removing products already added to the cart.
+
 Imported scans can retain previously saved colors; arbitrary color picking is removed from both the captured-scan panel and the measured-room editor. Only matching store products can be added to the cart.
 
 Product photos are generated presentation assets stored in `server/public/scanspace` and served by the API under `/assets/scanspace`. Each paint color has one can photo shared across its three finishes; each flooring type has its own material photo. Catalog, detail, and cart views all use the product's image URL.

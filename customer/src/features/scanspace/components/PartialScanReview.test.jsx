@@ -8,7 +8,8 @@ import { downloadScan } from "../core/partialScanFile";
 jest.mock("../core/createFusionWorker", () => ({ createFusionWorker: jest.fn() }));
 jest.mock("./PartialScanScene", () => ({ __esModule: true,
   default: ({ customization }) => <div data-testid="scan-preview" data-customization={JSON.stringify(customization)}>Checked scan preview</div> }));
-jest.mock("./FinishProductCart", () => ({ __esModule: true, default: () => null }));
+jest.mock("./AppliedItems", () => ({ __esModule: true,
+  default: ({ customization }) => <div data-testid="applied-items" data-customization={JSON.stringify(customization)} /> }));
 jest.mock("../core/partialScanFile", () => ({ ...jest.requireActual("../core/partialScanFile"), downloadScan: jest.fn() }));
 
 beforeEach(() => jest.clearAllMocks());
@@ -25,14 +26,18 @@ test("applying, exporting, and resetting a finish updates the scan view without 
   renderReview(scan);
   fireEvent.click(screen.getByRole("button", { name: "Sage", exact: true }));
   expect(screen.getByTestId("scan-preview")).toHaveAttribute("data-customization", "null");
+  expect(screen.getByTestId("applied-items")).toHaveAttribute("data-customization", "null");
   fireEvent.click(screen.getByRole("button", { name: "Apply to room" }));
   expect(JSON.parse(screen.getByTestId("scan-preview").getAttribute("data-customization")))
     .toEqual({ version: 1, walls: { color: "#a0afa4", finish: "Matte" } });
+  expect(screen.getByTestId("applied-items").getAttribute("data-customization"))
+    .toBe(screen.getByTestId("scan-preview").getAttribute("data-customization"));
   fireEvent.click(screen.getByRole("button", { name: "Export scan + design" }));
   expect(downloadScan).toHaveBeenCalledWith(expect.objectContaining({ mesh: scan.mesh,
     customization: { version: 1, walls: { color: "#a0afa4", finish: "Matte" } } }));
   fireEvent.click(screen.getByRole("button", { name: "Reset finish selections" }));
   expect(screen.getByTestId("scan-preview")).toHaveAttribute("data-customization", "null");
+  expect(screen.getByTestId("applied-items")).toHaveAttribute("data-customization", "null");
   expect(scan.customization).toBeUndefined();
   expect(screen.getByRole("button", { name: "Export raw scan" })).toBeInTheDocument();
 });

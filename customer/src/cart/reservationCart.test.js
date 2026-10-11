@@ -35,6 +35,31 @@ test("storefront items support custom quantity when adding to cart", () => {
   });
 });
 
+test("adding a group merges products once, preserving pickup details and the existing cart", () => {
+  const cart = useReservationCart.getState();
+  const flooring = { id: "c".repeat(24), name: "Oak flooring", price: 1600, image: "/oak.png" };
+  cart.addItem(product);
+  cart.setBranchId("branch-one");
+  cart.setPickupSchedule("2026-10-12", "14:00");
+  const listener = jest.fn();
+  window.addEventListener("customer:reservation-cart-changed", listener);
+  try {
+    cart.addItems([{ product, quantity: 2 }, { product: flooring, quantity: 3 }]);
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(useReservationCart.getState()).toMatchObject({ open: true, branchId: "branch-one", draft: {
+      pickupDate: "2026-10-12", pickupTime: "14:00", total: 6135,
+      items: [expect.objectContaining({ productId: product.id, quantity: 3, total: 1335 }),
+        expect.objectContaining({ productId: flooring.id, quantity: 3, total: 4800 })],
+    } });
+    expect(JSON.parse(localStorage.getItem("customer:reservation-cart")))
+      .toEqual(useReservationCart.getState().draft);
+    cart.addItems([]);
+    expect(listener).toHaveBeenCalledTimes(1);
+  } finally {
+    window.removeEventListener("customer:reservation-cart-changed", listener);
+  }
+});
+
 test("a validated ScanSpace draft still opens the shared cart", async () => {
   const draft = {
     canAdd: true,

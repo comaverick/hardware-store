@@ -92,27 +92,33 @@ export const useReservationCart = create((set, get) => ({
     saveDraft(draft, "reservation");
   },
   addItem: (product, quantityToAdd = 1) => {
-    const qty = Math.max(1, Number(quantityToAdd) || 1);
+    get().addItems([{ product, quantity: quantityToAdd }]);
+  },
+  addItems: (additions) => {
+    if (!additions.length) return;
     const current = get().draft;
     const items = Array.isArray(current?.items) ? [...current.items] : [];
-    const index = items.findIndex((item) => item.productId === product.id);
-    if (index >= 0) {
-      items[index] = {
-        ...items[index],
-        name: product.name,
-        unitPrice: product.price,
-        image: product.image || "",
-        quantity: Number(items[index].quantity || 0) + qty,
-      };
-    } else {
-      items.push({
-        productId: product.id,
-        name: product.name,
-        quantity: qty,
-        unitPrice: product.price,
-        image: product.image || "",
-        total: product.price * qty,
-      });
+    for (const { product, quantity = 1 } of additions) {
+      const qty = Math.max(1, Number(quantity) || 1);
+      const index = items.findIndex((item) => item.productId === product.id);
+      if (index >= 0) {
+        items[index] = {
+          ...items[index],
+          name: product.name,
+          unitPrice: product.price,
+          image: product.image || "",
+          quantity: Number(items[index].quantity || 0) + qty,
+        };
+      } else {
+        items.push({
+          productId: product.id,
+          name: product.name,
+          quantity: qty,
+          unitPrice: product.price,
+          image: product.image || "",
+          total: product.price * qty,
+        });
+      }
     }
     saveDraft(
       {

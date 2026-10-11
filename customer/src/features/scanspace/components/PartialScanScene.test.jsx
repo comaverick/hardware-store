@@ -14,10 +14,9 @@ jest.mock("@react-three/fiber", () => ({
   useFrame: jest.fn(),
   useThree: () => ({ camera: mockCamera, gl: mockGl }),
 }));
-jest.mock("@react-three/drei", () => ({ OrbitControls: () => null }));
 jest.mock("./ScanMesh", () => ({
   __esModule: true,
-  default: ({ geometryOnly }) => <div data-testid="scan-mesh" data-geometry-only={geometryOnly} />,
+  default: ({ geometryOnly = false }) => <div data-testid="scan-mesh" data-geometry-only={geometryOnly} />,
 }));
 jest.mock("./ScanPointCloud", () => ({
   __esModule: true,
@@ -41,27 +40,41 @@ beforeEach(() => {
 
 function walkInside() {
   render(<PartialScanScene scan={{ cloud: { bounds, observer: { x: 0, y: 1.6, z: 0.5 } } }} />);
-  fireEvent.click(screen.getByRole("button", { name: "Walk inside" }));
 }
 
 function advanceFrame(delta = 0.05) {
   act(() => mockFrame({}, delta));
 }
 
-test("the same scan can be inspected as photo, geometry, or depth points", () => {
-  render(<PartialScanScene scan={{ mesh: { bounds }, cloud: { bounds } }} />);
+test("the scan opens in walk view with its photo mesh and no view or layer selectors", () => {
+  render(<PartialScanScene scan={{ mesh: { bounds, observer: { x: 0, y: 1.6, z: 0.5 } }, cloud: { bounds } }} />);
   expect(screen.getByTestId("scan-mesh")).toHaveAttribute("data-geometry-only", "false");
-  fireEvent.click(screen.getByRole("button", { name: "Geometry" }));
-  expect(screen.getByTestId("scan-mesh")).toHaveAttribute("data-geometry-only", "true");
-  fireEvent.click(screen.getByRole("button", { name: "Depth points" }));
-  expect(screen.getByTestId("depth-points")).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "Photo" }));
-  expect(screen.getByTestId("scan-mesh")).toHaveAttribute("data-geometry-only", "false");
+  expect(screen.queryByTestId("depth-points")).not.toBeInTheDocument();
+  for (const name of ["Overview", "Walk inside", "Photo", "Geometry", "Depth points"]) {
+    expect(screen.queryByRole("button", { name, exact: true })).not.toBeInTheDocument();
+  }
+  expect(screen.getByRole("group", { name: "Movement joystick" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Reset camera" })).toBeInTheDocument();
+  expect(mockCamera.position).toMatchObject({ x: 0, y: 1.6, z: 0.5 });
 });
 
-test("depth inspection is unavailable without captured points", () => {
-  render(<PartialScanScene scan={{ mesh: { bounds } }} />);
-  expect(screen.getByRole("button", { name: "Depth points" })).toBeDisabled();
+test("a scan without a reconstructed mesh still opens its captured data in walk view", () => {
+  walkInside();
+  expect(screen.getByTestId("depth-points")).toBeInTheDocument();
+  expect(screen.queryByTestId("scan-mesh")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Depth points" })).not.toBeInTheDocument();
+  fireEvent.keyDown(window, { code: "KeyW" });
+  advanceFrame();
+  expect(mockCamera.position.z).toBeLessThan(0.5);
+});
+
+test("the compact capture preview also supports walking immediately", () => {
+  render(<PartialScanScene compact scan={{ cloud: { bounds, observer: { x: 0, y: 1.6, z: 0.5 } } }} />);
+  fireEvent.keyDown(window, { code: "KeyW" });
+  advanceFrame();
+  expect(mockCamera.position.z).toBeLessThan(0.5);
+  expect(screen.getByRole("button", { name: "Move up" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Move down" })).toBeInTheDocument();
 });
 
 test("holding the height buttons moves vertically and stops on release or lost capture", () => {
@@ -150,7 +163,7 @@ test("forward and vertical movement combine without increasing movement speed", 
   expect(Math.hypot(mockCamera.position.y - 1.6, mockCamera.position.z - 0.5)).toBeCloseTo(0.0675);
 });
 
-test("cancel, window blur, reset, and changing view clear held movement", () => {
+test("cancel, window blur, and reset clear held movement", () => {
   walkInside();
   const up = screen.getByRole("button", { name: "Move up" });
   fireEvent.pointerDown(up);
@@ -167,13 +180,6 @@ test("cancel, window blur, reset, and changing view clear held movement", () => 
   fireEvent.pointerDown(up);
   advanceFrame();
   fireEvent.click(screen.getByRole("button", { name: "Reset camera" }));
-  advanceFrame();
-  expect(mockCamera.position.y).toBe(1.6);
-
-  fireEvent.pointerDown(up);
-  fireEvent.click(screen.getByRole("button", { name: "Overview" }));
-  expect(screen.queryByRole("button", { name: "Move up" })).not.toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "Walk inside" }));
   advanceFrame();
   expect(mockCamera.position.y).toBe(1.6);
 });

@@ -7,7 +7,6 @@ import {
   Rectangle,
 } from "@phosphor-icons/react";
 import { defaultFinishSelections, finishSelections, floorFinishes, paintColors, paintFinishes } from "../core/scanCustomization";
-import FinishProductCart from "./FinishProductCart";
 
 const surfaces = [
   { id: "walls", label: "Walls", icon: PaintRoller },
@@ -194,7 +193,6 @@ export default function RoomCustomizationPanel({ customization, availability, on
           <PaintRoller size={18} aria-hidden="true" />
           Apply to room
         </button>
-        <FinishProductCart surface={surface} selection={selections[surface]} />
         <p id={`${panelId}-availability`} role="status">
           {canApply ? notice || "Choose a finish, then apply it to this surface."
             : `No editable ${surface === "walls" ? "wall" : surface} surface was detected in this scan.`}

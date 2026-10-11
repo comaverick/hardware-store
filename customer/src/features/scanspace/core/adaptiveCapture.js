@@ -654,7 +654,7 @@ export function auditCapture(stats, diagnostics = null) {
   if (diagnostics?.alignment?.disconnectedFrameIds?.length) issues.push("Some views failed the final alignment check.");
   const ambiguousEdges = diagnostics?.topologyAfterRepair?.nonManifoldEdges || 0;
   if (ambiguousEdges >= 200 && ambiguousEdges / Math.max(1, diagnostics?.triangles || 0) >= 0.01)
-    issues.push("The reconstructed mesh has possible overlapping or torn edges. Inspect Geometry from the side before saving; depth points can help distinguish a reconstruction defect from missing capture data.");
+    issues.push("The scan may have overlapping or torn edges. Walk around to inspect these areas before saving; capture more views if important details are missing.");
   for (const issue of diagnostics?.measuredReviewWarning?.issues || []) {
     // Detached furniture is not evidence that the capture path is broken.
     if (issue.code !== "disconnected-mesh-patches" && issue.code !== "disconnected-capture-frames") issues.push(issue.message);

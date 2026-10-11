@@ -6,6 +6,7 @@ import PartialScanScene from "./PartialScanScene";
 import ScanRenderProgress from "./ScanRenderProgress";
 import AccountScanSave from "./AccountScanSave";
 import RoomCustomizationPanel from "./RoomCustomizationPanel";
+import AppliedItems from "./AppliedItems";
 import { downloadDepthCapture } from "../core/captureDebug";
 import { downloadScan } from "../core/partialScanFile";
 import { buildScanCloud } from "../core/scanCloud";
@@ -310,7 +311,7 @@ export default function PartialScanReview({
             )}
             {!!displayScan.mesh?.designSurfaces?.walls?.length && <div className="ss-notice ss-notice--guidance" role="status">
               <strong>Prepared wall surfaces</strong>
-              <p>Wall finishes use estimated flat surfaces. Geometry and Depth points retain the captured measurements.
+              <p>Wall finishes use estimated flat surfaces. Your original measurements are kept in the saved scan.
                 Observed openings and foreground objects are preserved.</p>
             </div>}
           </div>
@@ -319,7 +320,7 @@ export default function PartialScanReview({
       {quality?.structuralRebuild?.reconstructedArea > 0 && !quality.structuralRebuild.reverted && (
         <p className="ss-notice-detail" role="status">
           Supported {quality.structuralRebuild.planes?.map(plane => plane.kind).filter((kind, index, kinds) => kinds.indexOf(kind) === index).join(" and ") || "horizontal"} regions were rebuilt from overlapping depth views.
-          Check the sides and the ceiling in Walk inside; unscanned object faces remain open.
+          Walk around to check the walls and ceiling; unscanned areas remain open.
         </p>
       )}
       <div className="ss-room-workspace">
@@ -331,12 +332,7 @@ export default function PartialScanReview({
             sanitizeScanCustomization({ ...previous, version: 1, [kind]: selection }))}
           onReset={() => setCustomization(null)} />
       </div>
-      {displayScan.mesh && displayScan.cloud && <p className="ss-notice-detail">
-        Inspect Photo, Geometry, and Depth points from the same angle and from the side.
-        A defect only in Photo suggests color alignment; a gap in Geometry with depth points
-        behind it suggests reconstruction. A wall can hide a missing foreground object from
-        the front, so also check from the side. If both lack data, the capture may need more views.
-      </p>}
+      <AppliedItems customization={customization} />
       {quality?.topology?.disconnectedArea > 0.12 && <p className="ss-notice-detail" role="status">
         Connection check: {quality.topology.disconnectedComponentCount} surface islands remain
         outside the main mesh ({quality.topology.disconnectedArea.toFixed(2)} m²).

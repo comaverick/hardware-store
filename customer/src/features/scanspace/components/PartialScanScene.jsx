@@ -1,38 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 import ScanPointCloud from "./ScanPointCloud";
 import ScanMesh from "./ScanMesh";
 
 const MOVEMENT_PADDING = 0.7;
 
-function ScanControls({ cloud, mode, input, view, reset }) {
+function ScanControls({ cloud, input, view, reset }) {
   const { camera, gl } = useThree();
   const angle = useRef({ yaw: 0, pitch: 0 });
   useEffect(() => {
-    if (mode === "first") {
-      const start = cloud.observer || view.center;
-      camera.position.set(start.x, THREE.MathUtils.clamp(
-        start.y ?? 1.6,
-        cloud.bounds.min.y - MOVEMENT_PADDING,
-        cloud.bounds.max.y + MOVEMENT_PADDING,
-      ), start.z);
-      const dx = view.center.x - start.x;
-      const dz = view.center.z - start.z;
-      angle.current = {
-        yaw: Math.atan2(-dx, -dz),
-        pitch: 0,
-      };
-      camera.rotation.order = "YXZ";
-      camera.rotation.set(0, angle.current.yaw, 0);
-    } else {
-      camera.position.set(...view.position);
-      camera.lookAt(view.center.x, view.center.y, view.center.z);
-    }
-  }, [camera, cloud, mode, reset, view]);
+    camera.position.set(...view.position);
+    angle.current = { yaw: view.yaw, pitch: 0 };
+    camera.rotation.order = "YXZ";
+    camera.rotation.set(0, angle.current.yaw, 0);
+  }, [camera, reset, view]);
   useEffect(() => {
-    if (mode !== "first") return undefined;
     const element = gl.domElement;
     let pointer = null;
     const down = (event) => {
@@ -83,9 +66,8 @@ function ScanControls({ cloud, mode, input, view, reset }) {
       window.removeEventListener("blur", blur);
       blur();
     };
-  }, [gl, input, mode, reset]);
+  }, [gl, input, reset]);
   useFrame((_, delta) => {
-    if (mode !== "first") return;
     camera.rotation.order = "YXZ";
     camera.rotation.set(angle.current.pitch, angle.current.yaw, 0);
     const controls = input.current;
@@ -122,54 +104,38 @@ function ScanControls({ cloud, mode, input, view, reset }) {
       cloud.bounds.max.z + MOVEMENT_PADDING,
     );
   });
-  return mode === "first" ? null : (
-    <OrbitControls
-      makeDefault
-      target={[view.center.x, view.center.y, view.center.z]}
-      enableDamping
-      minDistance={0.45}
-      maxDistance={view.extent * 5}
-    />
-  );
+  return null;
 }
 
 export default function PartialScanScene({ scan, compact = false, customization = scan.customization, surfaces }) {
-  const [mode, setMode] = useState("orbit");
   const [low, setLow] = useState(compact);
-  const [surfaceView, setSurfaceView] = useState("photo");
   const [reset, setReset] = useState(0);
   const [knob, setKnob] = useState({ x: 0, y: 0 });
   const input = useRef({ x: 0, y: 0, up: false, down: false, keys: {} });
   const mesh = scan.mesh;
   const cloud = scan.cloud;
-  const activeSurfaceView = surfaceView === "depth" && !cloud ? "photo" : surfaceView;
   const visual = mesh || cloud;
   const view = useMemo(() => {
     if (!visual)
       return {
-        center: { x: 0, y: 1, z: 0 },
-        extent: 3,
-        position: [4, 3, 4],
+        position: [0, 1.6, 0],
+        yaw: 0,
       };
     const center = {
       x: (visual.bounds.min.x + visual.bounds.max.x) / 2,
       y: (visual.bounds.min.y + visual.bounds.max.y) / 2,
       z: (visual.bounds.min.z + visual.bounds.max.z) / 2,
     };
-    const extent = Math.max(
-      2.2,
-      visual.bounds.max.x - visual.bounds.min.x,
-      visual.bounds.max.y - visual.bounds.min.y,
-      visual.bounds.max.z - visual.bounds.min.z,
-    );
+    const start = visual.observer || center;
     return {
-      center,
-      extent,
       position: [
-        center.x + extent * 1.1,
-        center.y + extent * 0.6,
-        center.z + extent * 1.1,
+        start.x,
+        THREE.MathUtils.clamp(start.y ?? 1.6,
+          visual.bounds.min.y - MOVEMENT_PADDING,
+          visual.bounds.max.y + MOVEMENT_PADDING),
+        start.z,
       ],
+      yaw: Math.atan2(-(center.x - start.x), -(center.z - start.z)),
     };
   }, [visual]);
   const joystick = (event) => {
@@ -191,7 +157,7 @@ export default function PartialScanScene({ scan, compact = false, customization 
   return (
     <div className="ss-partial-scene">
       <Canvas
-        frameloop={compact && mode === "orbit" ? "demand" : "always"}
+        frameloop="always"
         camera={{ position: view.position, fov: 48, near: 0.025, far: 100 }}
         dpr={low ? 1 : [1, 2]}
         gl={{ antialias: true, powerPreference: "high-performance" }}
@@ -205,106 +171,78 @@ export default function PartialScanScene({ scan, compact = false, customization 
         <hemisphereLight args={["#fff8ed", "#66756f", 2.1]} />
         <ambientLight intensity={0.35} />
         <directionalLight position={[3, 7, 4]} intensity={1.6} />
-        {mesh && activeSurfaceView !== "depth" ? (
-          <ScanMesh mesh={mesh} low={low} geometryOnly={activeSurfaceView === "geometry"}
+        {mesh ? (
+          <ScanMesh mesh={mesh} low={low}
             customization={customization} surfaces={surfaces} />
         ) : (
           <ScanPointCloud cloud={cloud} low={low} />
         )}
         <ScanControls
           cloud={visual}
-          mode={mode}
           input={input}
           view={view}
           reset={reset}
         />
       </Canvas>
       <div className="ss-partial-viewbar">
-        {!compact && <div role="group" aria-label="Captured room view">
-          <button
-            className={mode === "orbit" ? "is-active" : ""}
-            aria-pressed={mode === "orbit"}
-            onClick={() => setMode("orbit")}
-          >
-            Overview
-          </button>
-          <button
-            className={mode === "first" ? "is-active" : ""}
-            aria-pressed={mode === "first"}
-            onClick={() => setMode("first")}
-          >
-            Walk inside
-          </button>
-        </div>}
-        <button aria-label="Reset camera" onClick={() => setReset((v) => v + 1)}>
+        <button type="button" aria-label="Reset camera" onClick={() => {
+          clearJoystick();
+          setReset((v) => v + 1);
+        }}>
           Reset
         </button>
       </div>
-      {!compact && mesh && <div className="ss-surface-modebar" role="group" aria-label="Inspect scan layers">
-        {[["photo", "Photo"], ["geometry", "Geometry"], ["depth", "Depth points"]].map(([value, label]) =>
-          <button key={value} type="button" className={activeSurfaceView === value ? "is-active" : ""}
-            aria-pressed={activeSurfaceView === value} disabled={value === "depth" && !cloud}
-            onClick={() => setSurfaceView(value)}>{label}</button>)}
-      </div>}
-      {mode === "first" && (
-        <div
-          className="ss-joystick"
-          role="group"
-          aria-label="Movement joystick"
-          onPointerDown={(event) => {
-            event.currentTarget.setPointerCapture(event.pointerId);
-            joystick(event);
-          }}
-          onPointerMove={(event) => {
-            if (event.buttons) joystick(event);
-          }}
-          onPointerUp={clearJoystick}
-          onPointerCancel={clearJoystick}
-          onLostPointerCapture={clearJoystick}
-        >
-          <span style={{ transform: `translate(${knob.x}px,${knob.y}px)` }} />
-          <small>Move</small>
-        </div>
-      )}
-      {mode === "first" && (
-        <div className="ss-vertical-movement" role="group" aria-label="Camera height">
-          {[["up", "Q", "↑", "Up"], ["down", "E", "↓", "Down"]].map(([direction, shortcut, arrow, label]) => (
-            <button key={direction} type="button" aria-label={`Move ${direction}`}
-              aria-keyshortcuts={shortcut} title={`Hold to move ${direction} (${shortcut})`}
-              onPointerDown={(event) => {
-                if (event.button > 0) return;
-                event.currentTarget.setPointerCapture?.(event.pointerId);
-                input.current[direction] = true;
-              }}
-              onPointerUp={() => { input.current[direction] = false; }}
-              onPointerCancel={() => { input.current[direction] = false; }}
-              onLostPointerCapture={() => { input.current[direction] = false; }}
-              onKeyDown={(event) => {
-                if (event.key !== " " && event.key !== "Enter") return;
-                event.preventDefault();
-                input.current[direction] = true;
-              }}
-              onKeyUp={(event) => {
-                if (event.key !== " " && event.key !== "Enter") return;
-                event.preventDefault();
-                input.current[direction] = false;
-              }}
-              onBlur={() => { input.current[direction] = false; }}>
-              <span aria-hidden="true">{arrow}</span> {label}
-            </button>
-          ))}
-        </div>
-      )}
+      <div
+        className="ss-joystick"
+        role="group"
+        aria-label="Movement joystick"
+        onPointerDown={(event) => {
+          event.currentTarget.setPointerCapture(event.pointerId);
+          joystick(event);
+        }}
+        onPointerMove={(event) => {
+          if (event.buttons) joystick(event);
+        }}
+        onPointerUp={clearJoystick}
+        onPointerCancel={clearJoystick}
+        onLostPointerCapture={clearJoystick}
+      >
+        <span style={{ transform: `translate(${knob.x}px,${knob.y}px)` }} />
+        <small>Move</small>
+      </div>
+      <div className="ss-vertical-movement" role="group" aria-label="Camera height">
+        {[["up", "Q", "↑", "Up"], ["down", "E", "↓", "Down"]].map(([direction, shortcut, arrow, label]) => (
+          <button key={direction} type="button" aria-label={`Move ${direction}`}
+            aria-keyshortcuts={shortcut} title={`Hold to move ${direction} (${shortcut})`}
+            onPointerDown={(event) => {
+              if (event.button > 0) return;
+              event.currentTarget.setPointerCapture?.(event.pointerId);
+              input.current[direction] = true;
+            }}
+            onPointerUp={() => { input.current[direction] = false; }}
+            onPointerCancel={() => { input.current[direction] = false; }}
+            onLostPointerCapture={() => { input.current[direction] = false; }}
+            onKeyDown={(event) => {
+              if (event.key !== " " && event.key !== "Enter") return;
+              event.preventDefault();
+              input.current[direction] = true;
+            }}
+            onKeyUp={(event) => {
+              if (event.key !== " " && event.key !== "Enter") return;
+              event.preventDefault();
+              input.current[direction] = false;
+            }}
+            onBlur={() => { input.current[direction] = false; }}>
+            <span aria-hidden="true">{arrow}</span> {label}
+          </button>
+        ))}
+      </div>
       <span className="ss-view-hint">
-        {mode === "first"
-          ? "Drag to look · Joystick / WASD · Q up / E down"
-          : "Drag to orbit · Pinch to zoom"}
+        Drag to look · Joystick / WASD · Q up / E down
       </span>
       <span className="ss-partial-legend" role="status">
         <i />{" "}
-        {mesh && activeSurfaceView === "geometry" ? "Mesh only · inspect gaps and layers"
-          : mesh && activeSurfaceView === "depth" ? "Captured depth points"
-          : mesh ? mesh.designSurfaces?.ceilings?.length ? "Prepared surfaces + estimates"
+        {mesh ? mesh.designSurfaces?.ceilings?.length ? "Prepared surfaces + estimates"
             : mesh.designSurfaces?.walls?.length ? "Prepared walls + estimates"
             : mesh.surfaceRepair?.estimatedHoleCount > 0 ? "Measured + estimated repairs" : "Captured measured surface"
           : "Captured depth points"}
