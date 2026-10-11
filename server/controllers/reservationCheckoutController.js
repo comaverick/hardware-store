@@ -9,6 +9,7 @@ const BranchInventory = require("../models/BranchInventory");
 const InventoryTransaction = require("../models/InventoryTransaction");
 const { branchFilter } = require("../lib/branchAccess");
 const { EXPIRABLE_STATUSES } = require("../lib/reservationExpiry");
+const { reservationItems } = require("../lib/reservationItems");
 const { fail, runStockOperation, sendStockError } = require("../lib/stockOperations");
 
 const checkoutReservation = async (req, res) => {
@@ -44,7 +45,7 @@ const checkoutReservation = async (req, res) => {
       const saleItems = [];
       const seenProducts = new Set();
       let subtotal = 0;
-      let heldItemFound = false;
+      const heldItems = new Map(reservationItems(reservation).map((item) => [String(item.product?._id || item.product), item.quantity]));
       for (const item of items) {
         const quantity = Number(item.quantity);
         if (!mongoose.isValidObjectId(item.product) || !Number.isFinite(quantity) || quantity < 1) {
@@ -56,10 +57,9 @@ const checkoutReservation = async (req, res) => {
 
         const product = await Product.findOne({ _id: item.product, isActive: true }).session(session);
         if (!product) fail(400, "One of the selected products is unavailable.");
-        const held = productId === String(reservation.product);
+        const held = heldItems.has(productId);
         if (held) {
-          heldItemFound = true;
-          if (quantity !== reservation.quantity) {
+          if (quantity !== heldItems.get(productId)) {
             fail(400, "The reserved item's quantity must match the held quantity.");
           }
         }
@@ -69,7 +69,9 @@ const checkoutReservation = async (req, res) => {
         subtotal += itemSubtotal;
         saleItems.push({ product: product._id, quantity, unitPrice, subtotal: itemSubtotal, held });
       }
-      if (!heldItemFound) fail(400, "Add the reserved product to the sale.");
+      if ([...heldItems.keys()].some((productId) => !seenProducts.has(productId))) {
+        fail(400, "Add every reserved product to the sale.");
+      }
 
       const discountAmount = Number(discount);
       const paid = Number(amountPaid);

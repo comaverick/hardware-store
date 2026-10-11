@@ -403,27 +403,27 @@ const POS = () => {
     if (String(pickupBranch) !== String(selectedBranch)) {
       throw new Error(`Select ${reservation.branch?.name || "the pickup branch"} before checkout.`);
     }
-    const product = reservation.product;
-    if (!product?._id || !product.isActive) {
-      throw new Error("The reserved product is no longer available for sale.");
+    const lines = reservation.items?.length ? reservation.items : [{ product: reservation.product, quantity: reservation.quantity }];
+    if (lines.some((line) => !line.product?._id || !line.product.isActive)) {
+      throw new Error("A reserved product is no longer available for sale.");
     }
-    const unitPrice = Number(product.sellingPrice);
+    const reservedProducts = new Set(lines.map((line) => line.product._id));
     setCart((current) => [
-      ...current.filter((item) => !item.isReserved && item.product !== product._id),
-      {
+      ...current.filter((item) => !item.isReserved && !reservedProducts.has(item.product)),
+      ...lines.map(({ product, quantity }) => ({
         product: product._id,
         name: product.name,
         sku: product.sku,
         unit: product.unit,
-        unitPrice,
-        quantity: reservation.quantity,
-        subtotal: unitPrice * reservation.quantity,
-        available: reservation.quantity,
+        unitPrice: Number(product.sellingPrice),
+        quantity,
+        subtotal: Number(product.sellingPrice) * quantity,
+        available: quantity,
         isReserved: true,
-      },
+      })),
     ]);
     setSelectedReservation(reservation);
-    setSelectedCartProductId(product._id);
+    setSelectedCartProductId(lines[0].product._id);
     setAmountPaid(0);
     setReservationSearchOpen(false);
     checkoutRequestRef.current = null;
@@ -532,7 +532,7 @@ const POS = () => {
       message.warning("Select a branch first.");
       return;
     }
-    if (selectedReservation && String(selectedReservation.product?._id) === String(product._id)) {
+    if (cart.some((item) => item.isReserved && String(item.product) === String(product._id))) {
       message.info("The reserved quantity is fixed for this checkout.");
       return;
     }
@@ -698,6 +698,9 @@ const POS = () => {
     if (cart.find((item) => item.product === productId)?.isReserved) {
       setSelectedReservation(null);
       checkoutRequestRef.current = null;
+      setCart(cart.filter((item) => !item.isReserved));
+      setSelectedCartProductId(null);
+      return;
     }
     setCart(cart.filter((item) => item.product !== productId));
     setSelectedCartProductId((selected) =>
@@ -1530,11 +1533,11 @@ const POS = () => {
                 <div>
                   <strong>Held for {selectedReservation.customerName}</strong>
                   <span>
-                    {selectedReservation.reservationNumber} · {selectedReservation.quantity} units ·
+                    {selectedReservation.reservationNumber} · {cart.filter((item) => item.isReserved).reduce((sum, item) => sum + item.quantity, 0)} units ·
                     expires {new Date(selectedReservation.expiresAt).toLocaleString("en-PH")}
                   </span>
                 </div>
-                <Button size="small" onClick={() => removeFromCart(selectedReservation.product?._id || selectedReservation.product)}>
+                <Button size="small" onClick={() => removeFromCart(cart.find((item) => item.isReserved)?.product)}>
                   Remove hold
                 </Button>
               </div>
@@ -1787,7 +1790,7 @@ const POS = () => {
         onCancel={() => setReservationSearchOpen(false)}
         footer={null}
       >
-        <Text type="secondary">Enter the customer's reservation number to add its held item to this sale.</Text>
+        <Text type="secondary">Enter the customer's pickup reference to add all held items to this sale.</Text>
         <Input.Search
           autoFocus
           size="large"

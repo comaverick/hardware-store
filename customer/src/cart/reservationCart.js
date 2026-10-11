@@ -54,12 +54,38 @@ function recalculate(items) {
   };
 }
 
+const initialDraft = read();
+function readBranch() {
+  try {
+    return localStorage.getItem("customer:pickup-branch") || initialDraft?.branch?.id || initialDraft?.branch?._id || "";
+  } catch { return ""; }
+}
+
 export const useReservationCart = create((set, get) => ({
-  draft: read(),
+  draft: initialDraft,
+  branchId: readBranch(),
   open: false,
   show: () => set({ open: true }),
   close: () => set({ open: false }),
   clear: () => saveDraft(null, "storefront"),
+  setBranchId: (branchId) => {
+    try { localStorage.setItem("customer:pickup-branch", branchId); } catch {}
+    set({ branchId });
+  },
+  saveRequest: (request) => {
+    const draft = { ...get().draft, reservationRequest: request || undefined };
+    try { localStorage.setItem("customer:reservation-cart", JSON.stringify(draft)); } catch {}
+    set({ draft });
+  },
+  completeReservation: (submittedItems) => {
+    const current = get().draft;
+    if (!current?.items) return;
+    const items = current.items.map((item) => ({ ...item,
+      quantity: item.quantity - (submittedItems.find((line) => line.productId === item.productId)?.quantity || 0),
+    })).filter((item) => item.quantity > 0);
+    const draft = items.length ? { ...current, ...recalculate(items), reservationRequest: undefined } : null;
+    saveDraft(draft, "reservation");
+  },
   addItem: (product, quantityToAdd = 1) => {
     const qty = Math.max(1, Number(quantityToAdd) || 1);
     const current = get().draft;
@@ -130,7 +156,8 @@ export async function acceptScanSpaceCart(validatedDraft) {
     });
     return "Added to your reservation cart.";
   }
-  // This checkout has no customer reservation endpoint. Retain one shared, replaceable draft.
+  const branchId = validatedDraft.branch?.id || validatedDraft.branch?._id;
+  if (branchId) useReservationCart.getState().setBranchId(branchId);
   saveDraft(validatedDraft, "scanspace");
   return "Cart prepared. Items are not reserved yet.";
 }

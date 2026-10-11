@@ -9,6 +9,7 @@ import { fetchStorefrontCatalog, productImageUrl } from "./storefrontCatalog";
 import ProductDetails from "./pages/ProductDetails";
 import HomePage from "./pages/HomePage";
 import ProductsPage from "./pages/ProductsPage";
+import ReservationsPage from "./pages/ReservationsPage";
 import AppearancePicker, { useStoreAppearance } from "./storefront/AppearancePicker";
 import { CustomerAuthBoundary, useCustomerAuth } from "./auth/CustomerAuthContext";
 import { AccountPage, ForgotPasswordPage, SignInPage, VerifyEmailPage } from "./auth/AccountPages";
@@ -32,16 +33,15 @@ function AppContent() {
   const appliedQuery = searchParams.get("search") || "";
   const [products, setProducts] = useState([]);
   const [branches, setBranches] = useState([]);
-  const [branchId, setBranchId] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [retryKey, setRetryKey] = useState(0);
-  const { draft, show, addItem } = useReservationCart();
+  const { draft, show, addItem, branchId, setBranchId } = useReservationCart();
   const { session } = useCustomerAuth();
   const appearance = useStoreAppearance((state) => state.appearance);
   const accountPath = session ? "/account" : "/login";
   const accountState = { from: location.pathname + location.search };
-  const onAccountPage = ["/account", "/login", "/register", "/forgot-password", "/verify-email"].includes(location.pathname);
+  const onAccountPage = location.pathname.startsWith("/account") || ["/login", "/register", "/forgot-password", "/verify-email"].includes(location.pathname);
   const onProductsPage = location.pathname === "/products";
   const inProducts = location.pathname.startsWith("/products") || location.pathname.startsWith("/product/");
 
@@ -142,6 +142,7 @@ function AppContent() {
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />
         <Route path="/verify-email" element={<VerifyEmailPage />} />
         <Route path="/account" element={<AccountPage />} />
+        <Route path="/account/reservations" element={<ReservationsPage />} />
         <Route path="/" element={<HomePage categories={categories} loading={loading} error={error}
           onRetry={() => setRetryKey((value) => value + 1)} showCart={show} />} />
         <Route path="/products" element={<ProductsPage activeCategory={activeCategory} resetFilters={resetFilters}

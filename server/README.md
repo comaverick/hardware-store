@@ -6,6 +6,16 @@ Set `CLOUDINARY_URL` on the API service using the API environment variable from 
 
 The product form is available to super admins, admins, managers, and inventory staff. Cashiers can view products but cannot change them. Local image uploads also require `CLOUDINARY_URL` in `server/.env`.
 
+## Customer directory
+
+The staff app's **Customers** tab reads the existing customer collection through `GET /api/customers`. An active staff session is required. Customer accounts are shared across branches.
+
+The endpoint accepts `search` (name or email), `status` (`all`, `active`, `inactive`), `verification` (`all`, `verified`, `unverified`), `page`, and `pageSize` (1–100, default 10). It returns `{ customers, total, page, pageSize }`, ordered newest first. Results contain account details and timestamps; Firebase identifiers are excluded.
+
+Run `npm run test:customers` for the directory's authentication, filtering, pagination, and error handling checks.
+
+## Stock operations
+
 The following authenticated write endpoints require a unique `Idempotency-Key` header (8 to 128 letters, digits, hyphens, or underscores):
 
 - `POST /api/sales/:id/refund`

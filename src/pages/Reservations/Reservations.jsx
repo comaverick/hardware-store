@@ -105,7 +105,7 @@ const Reservations = () => {
     ["ACTIVE", "READY_FOR_PICKUP"].includes(item.status) && new Date(item.expiresAt).getTime() > now,
   );
   const reservedUnits = activeReservations.reduce(
-    (total, item) => total + item.quantity,
+    (total, item) => total + (item.items?.length ? item.items.reduce((sum, line) => sum + line.quantity, 0) : item.quantity),
     0,
   );
   const readyCount = activeReservations.filter(
@@ -241,8 +241,9 @@ const Reservations = () => {
         <div>
           <strong>{item.reservationNumber}</strong>
           <div className="reservation-muted">
-            {item.product?.name} x {item.quantity}
+            {item.items?.length ? item.items.map((line) => <div key={line.product?._id || line.product}>{line.name || line.product?.name} × {line.quantity}</div>) : <>{item.product?.name} × {item.quantity}</>}
           </div>
+          {item.source === "CUSTOMER" && <Tag color="purple">Customer website</Tag>}
         </div>
       ),
     },
@@ -255,6 +256,7 @@ const Reservations = () => {
           <div className="reservation-muted">
             {item.customerPhone || "No phone number"}
           </div>
+          {item.customerEmail && <div className="reservation-muted">{item.customerEmail}</div>}
         </div>
       ),
     },

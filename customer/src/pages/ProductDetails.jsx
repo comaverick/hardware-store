@@ -99,12 +99,10 @@ export default function ProductDetails({
     }
   }, [cachedBranches, branches.length]);
 
-  // Sync branchId from props
+  // Keep the catalog, product page, and shared cart on the same pickup branch.
   useEffect(() => {
-    if (initialBranchId && !branchId) {
-      setBranchId(initialBranchId);
-    }
-  }, [initialBranchId, branchId]);
+    setBranchId(initialBranchId || "");
+  }, [initialBranchId]);
 
   // Fetch product details
   useEffect(() => {
@@ -336,7 +334,7 @@ export default function ProductDetails({
                 <span className="pdp-unit">/ {product.unit}</span>
               </div>
               <p className="pdp-price-note">
-                Taxes included. Reserve online, inspect and pay upon branch pickup.
+                Reserve online and pay at your chosen branch. Final prices are checked at pickup.
               </p>
             </div>
 
@@ -385,7 +383,7 @@ export default function ProductDetails({
                       ? "Stock counts update dynamically when you choose a pickup branch."
                       : isOutOfStock
                         ? "Check back soon or choose a different branch location."
-                        : "Ready for pickup once your draft reservation is confirmed."}
+                        : "Reserve in your cart. Your branch will mark the items ready for pickup."}
                   </small>
                 </div>
               </div>
@@ -496,8 +494,8 @@ export default function ProductDetails({
               <div className="pdp-benefit">
                 <ClipboardText size={22} weight="duotone" />
                 <div>
-                  <strong>Draft Reservation</strong>
-                  <small>Hold items online without upfront deposit.</small>
+                  <strong>Two-hour reservation</strong>
+                  <small>Hold available items online and pay at pickup.</small>
                 </div>
               </div>
               <div className="pdp-benefit">

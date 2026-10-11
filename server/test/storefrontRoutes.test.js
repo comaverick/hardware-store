@@ -69,7 +69,7 @@ test("public storefront catalog exposes active products and branch availability 
     BranchModel: {
       find: (filter) => {
         calls.push({ collection: "branches", filter });
-        return query([{ _id: branchId, name: "Main branch", code: "MAIN", address: "Private address" }]);
+        return query([{ _id: branchId, name: "Main branch", code: "MAIN", address: "12 Main St", phone: "1234567" }]);
       },
     },
     InventoryModel: {
@@ -99,7 +99,7 @@ test("public storefront catalog exposes active products and branch availability 
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("cache-control"), "no-store");
   assert.deepEqual(calls.slice(0, 2).map((call) => call.filter), [{ isActive: true }, { isActive: true }]);
-  assert.deepEqual(catalog.branches, [{ _id: branchId, name: "Main branch", code: "MAIN" }]);
+  assert.deepEqual(catalog.branches, [{ _id: branchId, name: "Main branch", code: "MAIN", address: "12 Main St", phone: "1234567" }]);
   assert.equal(catalog.products[0].category, "Hand Tools");
   assert.equal(catalog.products[0].availableQuantity, null);
   assert.equal(catalog.products[0].costPrice, undefined);
@@ -127,7 +127,7 @@ test("public storefront catalog exposes active products and branch availability 
   assert.equal(singleData.product.costPrice, undefined);
   assert.equal(singleData.product.barcode, undefined);
   assert.equal(singleData.product.availableQuantity, null);
-  assert.deepEqual(singleData.branches, [{ _id: branchId, name: "Main branch", code: "MAIN" }]);
+  assert.deepEqual(singleData.branches, catalog.branches);
 
   const singleBranchResponse = await fetch(`${productBase}/${productId}?branch=${branchId}`);
   const singleBranchData = await singleBranchResponse.json();

@@ -2,7 +2,17 @@
 
 Customer accounts use Firebase Authentication (email/password and Google). The Express API verifies Firebase ID tokens, including revocation, and stores customer profiles in MongoDB by Firebase UID. Staff accounts continue to use their existing authentication system.
 
-The storefront, cart draft, and ScanSpace browsing remain public. This first phase adds sign-in, registration, password recovery, email verification, and an account page. Reservations and saved ScanSpace projects are not linked to accounts yet.
+The storefront, cart draft, and ScanSpace browsing remain public. Verified customer accounts can now reserve a whole cart at a selected branch, review reservation history, and cancel active holds. Saved ScanSpace projects are not linked to accounts yet.
+
+## Customer reservations
+
+Choose a branch in Products or the cart; the selection is shared and saved on this device. The cart shows current prices, the branch address and contact number, and available stock. Sign in and verify your email, enter a pickup name, and select **Reserve at this branch**. Optional phone numbers help the branch contact the customer.
+
+The API creates one `Reservation` with all cart items in a MongoDB transaction. Conditional inventory updates prevent overselling; any unavailable line rolls back the entire cart. Prices come from the product database, and a changed price requires the customer to refresh and review the cart. The authenticated Firebase identity owns the reservation; client-supplied customer IDs, emails, statuses, and expiry dates are ignored. Each submission has a persisted request key so retries recover the same reservation without holding stock twice.
+
+The existing two-hour hold policy applies. No online payment is collected. The confirmation includes a pickup reference, branch, items, and deadline in Philippine time. Final prices are checked by the cashier. Customers can find their holds at `/account/reservations`; cancelling or expiry releases every line. Branch staff see the cart in their existing reservation queue and can mark it ready, cancel it, or open all held items together in POS for one receipt. Existing single-product staff reservations remain supported.
+
+The authenticated endpoints are `GET /api/customer-reservations`, `POST /api/customer-reservations` with an `Idempotency-Key` header, and `POST /api/customer-reservations/:id/cancel`. MongoDB must support transactions (a replica set or Atlas). Deploy the API, staff website, and customer website together so grouped reservations can be fulfilled and expired correctly.
 
 ## Local development
 
@@ -39,12 +49,12 @@ Firebase email templates and branding can be customized in **Authentication → 
 
 ## Checks
 
-From `server`, run `npm run test:auth`. Run `node scripts/check-customer-auth.cjs` for a read-only credential/provider/domain check; it never prints private keys or access tokens.
+From `server`, run `npm run test:auth` and `npm run test:reservations`. Run `node scripts/check-customer-auth.cjs` for a read-only credential/provider/domain check; it never prints private keys or access tokens.
 
 From `customer`, run:
 
 ```sh
-npm test -- --watchAll=false --runInBand --runTestsByPath src/auth/AccountPages.test.jsx src/auth/customerApi.test.js src/auth/firebaseAuth.test.js src/App.test.js src/pages/ProductDetails.test.jsx src/cart/reservationCart.test.js
+npm test -- --watchAll=false --runInBand --runTestsByPath src/auth/AccountPages.test.jsx src/auth/customerApi.test.js src/auth/firebaseAuth.test.js src/App.test.js src/pages/ProductDetails.test.jsx src/cart/reservationCart.test.js src/cart/CartDrawer.test.jsx src/cart/reservationApi.test.js
 npm run build
 ```
 

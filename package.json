@@ -31,7 +31,10 @@
   },
   "jest": {
     "moduleNameMapper": {
-      "^react-router/dom$": "<rootDir>/node_modules/react-router/dist/development/dom-export.js"
+      "^react-router/dom$": "<rootDir>/node_modules/react-router/dist/development/dom-export.js",
+      "^@ant-design/colors/es/(.*)$": "<rootDir>/node_modules/@ant-design/colors/lib/$1.js",
+      "^@rc-component/picker/generate/(.*)$": "<rootDir>/node_modules/@rc-component/picker/lib/generate/$1.js",
+      "^@rc-component/(pagination|picker)/locale/(.*)$": "<rootDir>/node_modules/@rc-component/$1/lib/locale/$2.js"
     }
   },
   "browserslist": {

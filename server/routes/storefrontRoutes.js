@@ -22,7 +22,7 @@ function createStorefrontRouter({ ProductModel = Product, BranchModel = Branch, 
           .sort({ name: 1 })
           .lean(),
         BranchModel.find({ isActive: true })
-          .select("_id name code")
+          .select("_id name code address phone")
           .sort({ name: 1 })
           .lean(),
       ]);
@@ -48,7 +48,7 @@ function createStorefrontRouter({ ProductModel = Product, BranchModel = Branch, 
 
       res.set("Cache-Control", "no-store");
       return res.json({
-        branches: branches.map(({ _id, name, code }) => ({ _id, name, code })),
+        branches: branches.map(({ _id, name, code, address, phone }) => ({ _id, name, code, address, phone })),
         products: products.map((product) => ({
           _id: product._id,
           name: product.name,
@@ -93,7 +93,7 @@ function createStorefrontRouter({ ProductModel = Product, BranchModel = Branch, 
           .populate("category", "name isActive")
           .lean(),
         BranchModel.find({ isActive: true })
-          .select("_id name code")
+          .select("_id name code address phone")
           .sort({ name: 1 })
           .lean(),
       ]);
@@ -122,7 +122,7 @@ function createStorefrontRouter({ ProductModel = Product, BranchModel = Branch, 
 
       res.set("Cache-Control", "no-store");
       return res.json({
-        branches: branches.map(({ _id, name, code }) => ({ _id, name, code })),
+        branches: branches.map(({ _id, name, code, address, phone }) => ({ _id, name, code, address, phone })),
         product: {
           _id: product._id,
           name: product.name,

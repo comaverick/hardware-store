@@ -1,7 +1,7 @@
 const mongoose = require("mongoose");
 const Reservation = require("../models/Reservation");
-const BranchInventory = require("../models/BranchInventory");
-const { fail, runTransaction } = require("./stockOperations");
+const { runTransaction } = require("./stockOperations");
+const { releaseReservationStock } = require("./reservationItems");
 
 const EXPIRABLE_STATUSES = ["ACTIVE", "READY_FOR_PICKUP"];
 const INTERVAL_MS = 60 * 1000;
@@ -28,16 +28,7 @@ const expireReservation = async (candidate, now = new Date()) => {
     );
     if (!reservation) return false;
 
-    const inventory = await BranchInventory.findOneAndUpdate(
-      {
-        branch: reservation.branch,
-        product: reservation.product,
-        reservedQuantity: { $gte: reservation.quantity },
-      },
-      { $inc: { reservedQuantity: -reservation.quantity } },
-      { new: true, session },
-    );
-    if (!inventory) fail(409, `Could not release expired reservation ${reservation.reservationNumber}.`);
+    await releaseReservationStock(reservation, session);
     return true;
   });
 };
@@ -57,7 +48,7 @@ const processExpiredReservations = async ({ branchId = null, batchSize = 100, ma
     const candidates = await Reservation.find(query)
       .sort({ expiresAt: 1 })
       .limit(batchSize)
-      .select("_id reservationNumber status expiresAt branch product quantity");
+      .select("_id reservationNumber status expiresAt branch product quantity items");
     if (!candidates.length) break;
 
     for (const candidate of candidates) {

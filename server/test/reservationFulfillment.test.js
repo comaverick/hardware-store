@@ -237,3 +237,56 @@ test("expiry pass scans held reservations without a browser request", async () =
   assert.deepEqual(result.errors, []);
   assert.equal(releases, 1);
 });
+
+test("a customer cart checks out all its held products together as one sale", async () => {
+  const { session, state } = mockTransaction();
+  mockLedger();
+  mockCheckoutReads(reservation({ product: undefined, quantity: undefined,
+    items: [{ product: heldProductId, quantity: 2 }, { product: extraProductId, quantity: 2 }] }));
+  mock.method(Reservation, "findOneAndUpdate", async () => ({ _id: reservationId }));
+  const changes = [];
+  mock.method(Inventory, "findOneAndUpdate", async (filter, update, options) => {
+    assert.equal(options.session, session);
+    assert.equal(filter.reservedQuantity.$gte, 2);
+    changes.push(update.$inc);
+    return { quantity: 8 };
+  });
+  mock.method(InventoryTransaction, "create", async () => {});
+  let saved;
+  mock.method(Sale.prototype, "save", async function () { saved = this; return this; });
+  mock.method(Sale, "findById", () => ({ session() { return this; }, populate() { return this; }, async lean() { return saved.toObject(); } }));
+  const result = response();
+  await checkoutReservation(request("cart-checkout-key", [{ product: heldProductId, quantity: 2 }, { product: extraProductId, quantity: 2 }]), result);
+  assert.equal(result.statusCode, 201);
+  assert.equal(result.body.sale.items.length, 2);
+  assert.equal(result.body.sale.totalAmount, 70);
+  assert.deepEqual(changes, [{ quantity: -2, reservedQuantity: -2 }, { quantity: -2, reservedQuantity: -2 }]);
+  assert.equal(state.commits, 1);
+});
+
+test("cart checkout rejects missing held products before claiming or consuming stock", async () => {
+  const { state } = mockTransaction();
+  mockLedger();
+  mockCheckoutReads(reservation({ product: undefined, quantity: undefined,
+    items: [{ product: heldProductId, quantity: 2 }, { product: extraProductId, quantity: 3 }] }));
+  mock.method(Reservation, "findOneAndUpdate", () => assert.fail("An incomplete checkout must not claim the reservation"));
+  mock.method(Inventory, "findOneAndUpdate", () => assert.fail("An incomplete checkout must not consume stock"));
+  const result = response();
+  await checkoutReservation(request(), result);
+  assert.equal(result.statusCode, 400);
+  assert.match(result.body.message, /every reserved product/);
+  assert.equal(state.aborts, 1);
+});
+
+test("an expired customer cart releases every held product exactly once", async () => {
+  mockTransaction();
+  const old = reservation({ product: undefined, quantity: undefined, expiresAt: new Date(Date.now() - 1000),
+    items: [{ product: heldProductId, quantity: 2 }, { product: extraProductId, quantity: 3 }] });
+  let claimed = false;
+  mock.method(Reservation, "findOneAndUpdate", async () => { if (claimed) return null; claimed = true; return old; });
+  const released = [];
+  mock.method(Inventory, "findOneAndUpdate", async (filter, update) => { released.push({ product: filter.product, quantity: update.$inc.reservedQuantity }); return {}; });
+  assert.equal(await expireReservation(old), true);
+  assert.equal(await expireReservation(old), false);
+  assert.deepEqual(released, [{ product: heldProductId, quantity: -2 }, { product: extraProductId, quantity: -3 }]);
+});

@@ -4,6 +4,7 @@ const Branch = require("../models/Branch");
 const Product = require("../models/Product");
 const { fail, positiveQuantity, runTransaction, sendStockError } = require("../lib/stockOperations");
 const { expireReservation, processExpiredReservations, EXPIRABLE_STATUSES } = require("../lib/reservationExpiry");
+const { releaseReservationStock } = require("../lib/reservationItems");
 const {
   branchFilter,
   canAccessBranch,
@@ -43,6 +44,7 @@ const getReservations = async (req, res) => {
     const reservations = await Reservation.find(query)
       .populate("branch", "name code")
       .populate("product", "name sku barcode unit sellingPrice")
+      .populate("items.product", "name sku barcode unit sellingPrice isActive")
       .populate("createdBy", "name email")
       .sort({ createdAt: -1 });
     res.json(reservations);
@@ -124,7 +126,8 @@ const lookupReservation = async (req, res) => {
       ...branchFilter(req.user),
     })
       .populate("branch", "name code")
-      .populate("product", "name sku unit sellingPrice isActive");
+      .populate("product", "name sku unit sellingPrice isActive")
+      .populate("items.product", "name sku unit sellingPrice isActive");
     if (!reservation) fail(404, "Reservation not found in your branch.");
     if (new Date(reservation.expiresAt) <= new Date()) {
       await expireReservation(reservation);
@@ -175,16 +178,7 @@ const updateReservationStatus = async (req, res) => {
       );
       if (!updated) fail(409, "Reservation changed. Refresh and try again.");
       if (status === "CANCELLED") {
-        const inventory = await BranchInventory.findOneAndUpdate(
-          {
-            branch: updated.branch,
-            product: updated.product,
-            reservedQuantity: { $gte: updated.quantity },
-          },
-          { $inc: { reservedQuantity: -updated.quantity } },
-          { new: true, session },
-        );
-        if (!inventory) fail(409, "Reservation hold could not be released.");
+        await releaseReservationStock(updated, session);
       }
       return updated;
     });

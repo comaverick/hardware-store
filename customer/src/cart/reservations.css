@@ -1,0 +1,33 @@
+.reservation-receipt { min-width: 0; padding: 24px; border: 1px solid var(--shop-line); border-radius: var(--shop-radius); background: var(--shop-background); color: var(--shop-ink); }
+.reservation-receipt__top { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 12px; color: var(--shop-muted); }
+.reservation-receipt__status { padding: 6px 10px; border-radius: var(--shop-pill); background: var(--shop-surface); color: var(--shop-muted); }
+.reservation-receipt__status--held { background: var(--shop-success-soft); color: var(--shop-success); }
+.reservation-receipt h3 { margin: 18px 0; font-size: 17px; font-weight: 600; overflow-wrap: anywhere; letter-spacing: -.02em; }
+.reservation-receipt__branch { display: flex; align-items: flex-start; gap: 10px; }
+.reservation-receipt__branch > svg { flex-shrink: 0; color: var(--shop-accent); }
+.reservation-receipt__branch strong { font-size: 15px; }
+.reservation-receipt__branch p, .reservation-receipt__actions p { margin: 5px 0 0; font-size: 13px; line-height: 1.6; color: var(--shop-muted); }
+.reservation-receipt__details { margin: 20px 0; display: grid; gap: 14px; }
+.reservation-receipt__details div { display: grid; gap: 4px; font-size: 13px; }
+.reservation-receipt__details dt { color: var(--shop-muted); }
+.reservation-receipt__details dd { margin: 0; font-weight: 550; }
+.reservation-receipt__details small { display: block; margin-top: 4px; font-weight: 400; color: var(--shop-muted); }
+.reservation-receipt__items { margin: 0; padding: 0; list-style: none; }
+.reservation-receipt__items li { padding: 12px 0; display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; border-top: 1px solid var(--shop-line); font-size: 13px; line-height: 1.5; }
+.reservation-receipt__items small { display: block; margin-top: 4px; color: var(--shop-muted); font-size: 12px; }
+.reservation-receipt__items strong { flex-shrink: 0; font-weight: 550; }
+.reservation-receipt__total { display: flex; justify-content: space-between; gap: 16px; padding-top: 14px; border-top: 1px solid var(--shop-line); font-size: 14px; }
+.reservation-receipt__actions { margin-top: 20px; }
+.reservation-receipt__actions > div { margin-top: 12px; display: flex; gap: 12px; flex-wrap: wrap; }
+.reservation-cancel { color: var(--shop-danger) !important; }
+.customer-reservations { min-height: 60vh; padding-block: 42px 72px; }
+.customer-reservations__heading { margin: 24px 0 32px; display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.customer-reservations__heading h1 { margin: 0; font-size: clamp(30px, 5vw, 42px); letter-spacing: -.04em; font-weight: 600; }
+.customer-reservations__heading p, .customer-reservations__note { color: var(--shop-muted); font-size: 14px; line-height: 1.7; }
+.customer-reservations__list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; align-items: start; max-width: 1000px; }
+.customer-reservations__empty { padding: 56px 24px; text-align: center; border-radius: var(--shop-radius); background: var(--shop-surface); }
+.customer-reservations__empty svg { color: var(--shop-muted); }
+.customer-reservations__empty h2 { font-size: 22px; font-weight: 600; letter-spacing: -.03em; }
+.customer-reservations__empty p { margin-bottom: 24px; color: var(--shop-muted); font-size: 14px; line-height: 1.6; }
+.customer-reservations__note { margin-top: 28px; }
+@media (max-width: 700px) { .customer-reservations__list { grid-template-columns: 1fr; } .customer-reservations__heading { align-items: flex-start; } .reservation-receipt { padding: 20px; } }

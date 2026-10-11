@@ -43,8 +43,8 @@ export default function HomePage({ categories, loading, error, onRetry, showCart
       <div className="shop-pickup__intro"><MapPin size={26} aria-hidden="true" /><h2>Easy branch pickup</h2><p>Get your supplies in a few simple steps.</p></div>
       <ol>
         <li><b>1</b><span><strong>Shop supplies</strong><small>Find the items you need.</small></span></li>
-        <li><b>2</b><span><strong>Review your cart</strong><small>Keep a saved draft of your items.</small></span></li>
-        <li><b>3</b><span><strong>Confirm pickup</strong><small>Check stock and price with your branch.</small></span></li>
+        <li><b>2</b><span><strong>Reserve at your branch</strong><small>Sign in and hold available stock for two hours.</small></span></li>
+        <li><b>3</b><span><strong>Collect and pay</strong><small>Show your pickup reference before the hold expires.</small></span></li>
       </ol>
       <button className="shop-button shop-button--outline" type="button" onClick={showCart}>View cart <ArrowRight size={18} aria-hidden="true" /></button>
     </section>

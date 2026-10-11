@@ -95,7 +95,7 @@ test("clicking a product navigates to the product detail page with description a
   expect(await screen.findByRole("heading", { level: 1, name: "Steel Claw Hammer" })).toBeInTheDocument();
   expect(screen.getByText("SKU: HAM-1")).toBeInTheDocument();
   expect(screen.getByText(/Forged steel head with ergonomic fiberglass shock-absorbing grip/i)).toBeInTheDocument();
-  expect(screen.getByText(/Taxes included\. Reserve online/i)).toBeInTheDocument();
+  expect(screen.getByText(/Reserve online and pay at your chosen branch/i)).toBeInTheDocument();
   const mainAddBtn = screen.getAllByRole("button", { name: /add to cart/i })[0];
   expect(mainAddBtn).toBeInTheDocument();
   expect(mainAddBtn).toHaveClass("pdp-add-btn");

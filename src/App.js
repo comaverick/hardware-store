@@ -17,6 +17,7 @@ import Reservations from "./pages/Reservations/Reservations";
 import ProductFinder from "./pages/ProductFinder/ProductFinder";
 import AuditLogs from "./pages/AuditLogs/AuditLogs";
 import UserManagement from "./pages/UserManagement/UserManagement";
+import Customers from "./pages/Customers/Customers";
 import Reports from "./pages/Reports/Reports";
 import ComingSoon from "./pages/ComingSoon";
 
@@ -83,6 +84,16 @@ function App() {
               <ProtectedRoute>
                 <AppLayout>
                   <ProductFinder />
+                </AppLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/customers"
+            element={
+              <ProtectedRoute>
+                <AppLayout>
+                  <Customers />
                 </AppLayout>
               </ProtectedRoute>
             }

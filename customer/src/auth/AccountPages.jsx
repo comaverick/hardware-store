@@ -301,7 +301,8 @@ export function AccountPage() {
             <div><dt>Full name</dt><dd>{customer.name || session?.name || "Not provided"}</dd></div>
             <div><dt>Email address</dt><dd>{customer.email}</dd></div>
           </dl>
-          <Link className="shop-button shop-button--primary" to="/products">Browse products <ArrowRight size={17} aria-hidden="true" /></Link>
+          <div className="customer-auth__actions"><Link className="shop-button shop-button--primary" to="/account/reservations">Your reservations <ArrowRight size={17} aria-hidden="true" /></Link>
+          <Link className="shop-button shop-button--outline" to="/products">Browse products</Link></div>
         </section>
         : session && <button className="shop-button shop-button--outline" type="button" onClick={refreshSession}>Try again</button>}
     </main>

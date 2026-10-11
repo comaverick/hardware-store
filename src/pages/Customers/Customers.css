@@ -1,0 +1,117 @@
+.customers-page {
+  width: 100%;
+  min-width: 0;
+  color: var(--app-ink);
+}
+
+.customers-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.customers-filter-card,
+.customers-error {
+  margin-bottom: 20px;
+}
+
+.customers-page .ant-card-head {
+  min-height: 48px;
+  padding: 0 18px;
+}
+
+.customers-page .ant-card-head-title {
+  font-size: 14px;
+}
+
+.customers-filter-card .ant-card-body {
+  padding: 18px;
+}
+
+.customers-filters {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) repeat(2, minmax(170px, 1fr));
+  gap: 16px;
+}
+
+.customers-filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.customers-filter-field label {
+  color: var(--app-muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.customers-filter-field .ant-select {
+  width: 100%;
+}
+
+.customers-table-card {
+  overflow: hidden;
+}
+
+.customers-table-card .ant-card-body {
+  padding: 0;
+}
+
+.customers-table-card .ant-table {
+  border: 0;
+  border-radius: 0;
+}
+
+.customers-table-card .ant-table-pagination {
+  margin: 16px 18px;
+}
+
+.customer-account-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  overflow-wrap: anywhere;
+}
+
+.customer-account-cell strong {
+  font-weight: 650;
+}
+
+.customers-page .customer-status-success {
+  border-color: var(--app-success-soft);
+  background: var(--app-success-soft);
+  color: var(--app-success);
+}
+
+.customers-page .customer-status-warning {
+  border-color: var(--app-warning-soft);
+  background: var(--app-warning-soft);
+  color: var(--app-warning);
+}
+
+.customers-page .customer-status-inactive {
+  border-color: var(--app-steel-soft);
+  background: var(--app-steel-soft);
+  color: var(--app-muted);
+}
+
+@media (max-width: 768px) {
+  .customers-filters {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 480px) {
+  .customers-header {
+    align-items: flex-start;
+  }
+
+  .customers-table-card .ant-table-pagination {
+    gap: 8px;
+    margin: 14px 12px;
+  }
+}

@@ -112,6 +112,10 @@ const Topbar = ({
       title: "User Management",
       description: "Manage users and permissions",
     },
+    "/customers": {
+      title: "Customers",
+      description: "Browse registered customer accounts",
+    },
 
     "/audit-logs": {
       title: "Audit Logs",
@@ -148,6 +152,7 @@ const Topbar = ({
     "/dashboard": "Store",
     "/pos": "Store",
     "/products": "Catalog",
+    "/customers": "Store",
     "/inventory": "Inventory",
     "/reservations": "Inventory",
     "/product-finder": "Inventory",

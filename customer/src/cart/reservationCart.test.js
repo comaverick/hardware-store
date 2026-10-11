@@ -4,7 +4,7 @@ const product = { id: "b".repeat(24), name: "Claw hammer", price: 445, image: "h
 
 beforeEach(() => {
   localStorage.clear();
-  useReservationCart.setState({ draft: null, open: false });
+  useReservationCart.setState({ draft: null, open: false, branchId: "" });
 });
 
 test("storefront items update the saved cart total and quantity", () => {
@@ -44,4 +44,14 @@ test("a validated ScanSpace draft still opens the shared cart", async () => {
   };
   await expect(acceptScanSpaceCart(draft)).resolves.toBe("Cart prepared. Items are not reserved yet.");
   expect(useReservationCart.getState()).toMatchObject({ draft, open: true });
+  expect(useReservationCart.getState().branchId).toBe("branch-1");
+});
+
+test("reservation completion removes only submitted quantities and retains later additions", () => {
+  const cart = useReservationCart.getState();
+  cart.addItem(product, 2);
+  const submitted = useReservationCart.getState().draft.items.map((item) => ({ ...item }));
+  cart.addItem(product, 1);
+  cart.completeReservation(submitted);
+  expect(useReservationCart.getState().draft.items[0].quantity).toBe(1);
 });
