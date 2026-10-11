@@ -7,14 +7,17 @@ const Reservation = require("../models/Reservation");
 const branchId = "a".repeat(24), otherBranchId = "b".repeat(24);
 const hammerId = "c".repeat(24), paintId = "d".repeat(24);
 const customerId = "e".repeat(24), secondCustomerId = "f".repeat(24);
+const testNow = Math.floor(Date.now() / 60000) * 60000;
+const pickupAt = new Date(testNow + 24 * 60 * 60 * 1000).toISOString();
 const body = () => ({ branch: branchId, customerName: "Alex Customer", customerPhone: "09123456789",
+  pickupAt,
   items: [{ product: hammerId, quantity: 2, unitPrice: 25 }, { product: paintId, quantity: 1, unitPrice: 50 }] });
 const clone = (value) => structuredClone(value);
 
 async function fixture(t, overrides = {}) {
   const branches = [{ _id: branchId, name: "Main branch", code: "MAIN", address: "12 Main St", phone: "1234567", isActive: true }];
   const products = [{ _id: hammerId, name: "Hammer", sku: "HAM", unit: "piece", sellingPrice: 25 }, { _id: paintId, name: "Paint", sku: "PNT", unit: "liter", sellingPrice: 50 }];
-  const state = { records: [], stock: { [hammerId]: { quantity: 8, reservedQuantity: 1 }, [paintId]: { quantity: 4, reservedQuantity: 0 } }, commits: 0, aborts: 0, indexes: 0, stockWrites: 0, customerReads: 0 };
+  const state = { now: testNow, records: [], stock: { [hammerId]: { quantity: 8, reservedQuantity: 1 }, [paintId]: { quantity: 4, reservedQuantity: 0 } }, commits: 0, aborts: 0, indexes: 0, stockWrites: 0, customerReads: 0 };
   function matches(record, filter) {
     return Object.entries(filter).every(([key, value]) => value?.$in ? value.$in.includes(record[key]) : String(record[key]) === String(value));
   }
@@ -62,7 +65,7 @@ async function fixture(t, overrides = {}) {
   const app = express();
   app.use(express.json());
   app.use("/api/customer-reservations", createCustomerReservationRouter({
-    ReservationModel, transaction,
+    ReservationModel, transaction, now: () => new Date(state.now),
     CustomerModel: { async findOne(filter) { state.customerReads += 1; return { _id: filter.firebaseUid === "customer-two" ? secondCustomerId : customerId, isActive: overrides.active !== false }; } },
     BranchModel: { findOne: (filter) => query(() => branches.find((branch) => branch._id === filter._id) || null) },
     ProductModel: { findOne: (filter) => query(() => products.find((product) => product._id === filter._id) || null) },
@@ -105,12 +108,61 @@ test("a verified customer's whole cart becomes one real branch hold using server
   assert.equal(state.records[0].customer, customerId);
   assert.equal(state.records[0].customerEmail, "alex@example.com");
   assert.equal(state.records[0].status, "ACTIVE");
-  assert.ok(Math.abs(new Date(state.records[0].expiresAt).getTime() - Date.now() - 7200000) < 2000);
+  assert.equal(result.body.reservation.pickupAt, pickupAt);
+  assert.equal(new Date(state.records[0].expiresAt).getTime(), new Date(pickupAt).getTime() + 7200000);
   assert.equal(state.stock[hammerId].reservedQuantity, 3);
   assert.equal(state.stock[paintId].reservedQuantity, 1);
   assert.equal(result.body.reservation.requestHash, undefined);
   assert.equal(state.commits, 1);
   await new Reservation(state.records[0]).validate();
+});
+
+test("pickup must be a real future time within seven days, and invalid schedules never change stock", async (t) => {
+  const { request, state } = await fixture(t);
+  for (const value of [undefined, null, "", "tomorrow afternoon", "2026-02-30T01:00:00.000Z", "2026-13-01T01:00:00.000Z",
+    "2026-10-11T12:00", "2026-10-11T12:00:00.000+08:00", "2026-10-11T12:00:30.000Z",
+    new Date(testNow).toISOString(), new Date(testNow - 60000).toISOString(), new Date(testNow + 7 * 86400000 + 60000).toISOString()]) {
+    const result = await request({ cart: { ...body(), pickupAt: value } });
+    assert.equal(result.status, 400, `Invalid pickup: ${value}`);
+  }
+  assert.equal(state.stockWrites, 0);
+  assert.equal(state.records.length, 0);
+});
+
+test("pickup at the seven-day boundary holds stock through the two-hour grace period", async (t) => {
+  const { request, state } = await fixture(t);
+  const lastSlot = new Date(testNow + 7 * 86400000).toISOString();
+  const result = await request({ cart: { ...body(), pickupAt: lastSlot, expiresAt: "2099-01-01" } });
+  assert.equal(result.status, 201);
+  assert.equal(result.body.reservation.pickupAt, lastSlot);
+  assert.equal(new Date(result.body.reservation.expiresAt).getTime(), testNow + 7 * 86400000 + 7200000);
+  assert.equal(state.records.length, 1);
+});
+
+test("changing the schedule requires a new request key; retries still recover after the pickup time passes", async (t) => {
+  const { request, state } = await fixture(t);
+  const original = await request();
+  const later = new Date(new Date(pickupAt).getTime() + 3600000).toISOString();
+  assert.equal((await request({ cart: { ...body(), pickupAt: later } })).status, 409);
+  state.now = new Date(pickupAt).getTime() + 3 * 3600000;
+  const recovered = await request();
+  assert.equal(recovered.status, 201);
+  assert.deepEqual(recovered.body, original.body);
+  assert.equal(state.stockWrites, 2);
+  assert.equal(state.records.length, 1);
+});
+
+test("a saved request from before pickup scheduling can recover its original confirmation", async (t) => {
+  const { request, state } = await fixture(t);
+  const original = (await request()).body.reservation;
+  const legacyBody = body(); delete legacyBody.pickupAt;
+  state.records[0].requestHash = require("node:crypto").createHash("sha256").update(JSON.stringify(require("../routes/customerReservationRoutes").parseCart(legacyBody))).digest("hex");
+  delete state.records[0].pickupAt;
+  const recovered = await request({ cart: legacyBody });
+  assert.equal(recovered.status, 201);
+  assert.equal(recovered.body.reservation.id, original.id);
+  assert.equal(recovered.body.reservation.pickupAt, null);
+  assert.equal(state.stockWrites, 2);
 });
 
 test("retrying or simultaneously submitting the same request never holds stock twice", async (t) => {

@@ -1,17 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { CheckCircle, MapPin, ShoppingCart, Trash, X } from "@phosphor-icons/react";
+import { CalendarBlank, CheckCircle, MapPin, ShoppingCart, Trash, X } from "@phosphor-icons/react";
 import { useReservationCart } from "./reservationCart";
 import { fetchStorefrontCatalog, formatPrice, productImageUrl } from "../storefrontCatalog";
 import { useStoreAppearance } from "../storefront/AppearancePicker";
 import { CustomerAuthBoundary, useCustomerAuth } from "../auth/CustomerAuthContext";
 import { reserveCart } from "./reservationApi";
 import ReservationReceipt, { isHeld } from "./ReservationReceipt";
+import { pickupBounds, pickupError, pickupToIso } from "./pickupSchedule";
 import "../storefront/theme.css";
 import "./cart.css";
 
 function CartContent() {
-  const { open, draft, branchId, setBranchId, show, close, clear, changeQuantity, saveRequest, completeReservation } = useReservationCart();
+  const { open, draft, branchId, setBranchId, setPickupSchedule, show, close, clear, changeQuantity, saveRequest, completeReservation } = useReservationCart();
   const { session, customer, initializing, profileLoading, sessionError, refreshSession } = useCustomerAuth();
   const dialog = useRef(null);
   const location = useLocation();
@@ -26,6 +27,7 @@ function CartContent() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [confirmation, setConfirmation] = useState(null);
+  const [now, setNow] = useState(Date.now);
   const pending = useRef(null);
   const accountUid = useRef(null);
   const items = Array.isArray(draft?.items) ? draft.items : [];
@@ -43,6 +45,10 @@ function CartContent() {
   const requestToRecover = draft?.reservationRequest?.uid === session?.user.uid && draft?.reservationRequest?.body ? draft.reservationRequest : null;
   const editingDisabled = busy || Boolean(requestToRecover);
   const canReserve = checked && selectedBranch && lines.length > 0 && lines.length <= 50 && lines.every((item) => !item.issue && Number.isSafeInteger(item.quantity) && item.quantity > 0 && item.quantity <= 9999);
+  const pickupDate = draft?.pickupDate || "";
+  const pickupTime = draft?.pickupTime || "";
+  const scheduleError = pickupError(pickupDate, pickupTime, now);
+  const bounds = pickupBounds(now);
 
   function closeCart() { setConfirmation(null); close(); }
   function continueShopping() { closeCart(); navigate("/products"); }
@@ -63,6 +69,13 @@ function CartContent() {
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => { document.body.style.overflow = previousOverflow; };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 30000);
+    return () => window.clearInterval(timer);
   }, [open]);
 
   useEffect(() => {
@@ -95,12 +108,16 @@ function CartContent() {
   async function submit(event) {
     event.preventDefault();
     if (pending.current || (!canReserve && !requestToRecover) || !session?.emailVerified || !customer) return;
+    if (!requestToRecover) {
+      const problem = pickupError(pickupDate, pickupTime);
+      if (problem) { setError(problem); return; }
+    }
     setError("");
     setBusy(true);
     const controller = new AbortController();
     pending.current = controller;
     const timer = window.setTimeout(() => controller.abort(), 20000);
-    const body = requestToRecover?.body || { branch: branchId, customerName: pickupName.trim(), customerPhone: phone.trim(),
+    const body = requestToRecover?.body || { branch: branchId, customerName: pickupName.trim(), customerPhone: phone.trim(), pickupAt: pickupToIso(pickupDate, pickupTime),
       items: lines.map((item) => ({ product: item.productId, quantity: item.quantity, unitPrice: item.unitPrice })) };
     const fingerprint = JSON.stringify({ uid: session.user.uid, ...body });
     const saved = draft.reservationRequest;
@@ -141,7 +158,7 @@ function CartContent() {
           <CheckCircle size={42} weight="fill" aria-hidden="true" /><h2>{isHeld(confirmation) ? "Your items are reserved" : "Reservation recovered"}</h2>
           <p>{isHeld(confirmation) ? "Show this reference at your branch before the deadline. Follow preparation updates in Your reservations." : "Your saved reservation and its current status are shown below."}</p>
           <ReservationReceipt reservation={confirmation} />
-          <p>Stock is held for two hours. Pay at pickup; final prices are checked at the cashier.</p>
+          <p>{confirmation.pickupAt ? "Stock is held until two hours after your scheduled pickup." : "Collect your items before the hold expires."} Pay at pickup; final prices are checked at the cashier.</p>
         </div>
         <footer className="customer-cart__footer"><button type="button" onClick={viewReservations}>Your reservations</button>
           <button className="customer-cart__secondary" type="button" onClick={() => { setConfirmation(null); continueShopping(); }}>Continue shopping</button></footer>
@@ -153,7 +170,20 @@ function CartContent() {
               <option value="">Choose a branch</option>{catalog.branches.map((branch) => <option key={branch._id} value={branch._id}>{branch.name} ({branch.code})</option>)}
             </select>
             {selectedBranch?.address && <p>{selectedBranch.address}</p>}{selectedBranch?.phone && <p>{selectedBranch.phone}</p>}
-            <small>Available stock will be held at this branch for two hours after you reserve.</small>
+            <small>Available stock is held at your chosen branch once you reserve.</small>
+          </section>
+          <section className="customer-cart__schedule" aria-labelledby="cart-schedule-title">
+            <h3 id="cart-schedule-title"><CalendarBlank size={19} aria-hidden="true" /> Pickup date &amp; time</h3>
+            <div className="customer-cart__schedule-fields">
+              <div><label htmlFor="cart-pickup-date">Pickup date</label><input id="cart-pickup-date" type="date" value={pickupDate} min={bounds.min.date} max={bounds.max.date} required disabled={editingDisabled}
+                aria-describedby="cart-schedule-hint" aria-invalid={Boolean(pickupDate && pickupTime && scheduleError)}
+                onChange={(event) => { setPickupSchedule(event.target.value, pickupTime); setError(""); }} /></div>
+              <div><label htmlFor="cart-pickup-time">Pickup time</label><input id="cart-pickup-time" type="time" value={pickupTime} step="60" min={pickupDate === bounds.min.date ? bounds.min.time : undefined} max={pickupDate === bounds.max.date ? bounds.max.time : undefined} required disabled={editingDisabled}
+                aria-describedby="cart-schedule-hint" aria-invalid={Boolean(pickupDate && pickupTime && scheduleError)}
+                onChange={(event) => { setPickupSchedule(pickupDate, event.target.value); setError(""); }} /></div>
+            </div>
+            <small id="cart-schedule-hint">Philippine time (UTC+8). Choose a time within the next seven days. Your hold expires two hours after pickup time.</small>
+            {pickupDate && pickupTime && scheduleError && !requestToRecover && <p className="customer-cart__error" role="alert">{scheduleError}</p>}
           </section>
           <div className="customer-cart__stock-heading"><h3>Your items <span>({items.length})</span></h3><button type="button" onClick={() => setRetry((value) => value + 1)} disabled={loading || busy}>Refresh stock</button></div>
           {loading && <p className="customer-cart__message" role="status">Checking current prices and branch stock…</p>}
@@ -174,7 +204,7 @@ function CartContent() {
             </div><button className="customer-cart__remove" type="button" onClick={() => changeQuantity(item.productId, 0)} aria-label={`Remove ${item.name}`} disabled={editingDisabled}><Trash size={18} /></button>
           </li>)}</ul>
           <button className="customer-cart__clear" type="button" onClick={clear} disabled={editingDisabled}>Clear cart</button>
-          {authenticationRequired ? <div className="customer-cart__notice"><strong>{session ? "Verify your email to reserve" : "Sign in to reserve your items"}</strong><span>Your cart and selected branch will be waiting when you return.</span></div> : <section className="customer-cart__contact" aria-labelledby="cart-contact-title">
+          {authenticationRequired ? <div className="customer-cart__notice"><strong>{session ? "Verify your email to reserve" : "Sign in to reserve your items"}</strong><span>Your cart, branch and pickup schedule will be waiting when you return.</span></div> : <section className="customer-cart__contact" aria-labelledby="cart-contact-title">
             <h3 id="cart-contact-title">Pickup details</h3><label htmlFor="cart-name">Pickup name</label><input id="cart-name" value={pickupName} onChange={(event) => setPickupName(event.target.value)} required maxLength={100} autoComplete="name" disabled={editingDisabled} />
             <label htmlFor="cart-phone">Contact number <span>(optional)</span></label><input id="cart-phone" type="tel" value={phone} onChange={(event) => setPhone(event.target.value)} maxLength={30} autoComplete="tel" disabled={editingDisabled} />
             <small>Reservation saved to {session.email}.</small>
@@ -186,7 +216,7 @@ function CartContent() {
           <small>Pay at pickup. Final prices are checked at the cashier.</small>
           {error && <p className="customer-cart__error" role="alert">{error}</p>}
           {authenticationRequired ? <button type="button" onClick={signIn} disabled={initializing}>{initializing ? "Checking account…" : session ? "Verify email to reserve" : "Sign in to reserve"}</button>
-            : <button type="submit" disabled={busy || initializing || profileLoading || !customer || (!requestToRecover && (!canReserve || !pickupName.trim()))}>{busy ? "Reserving your items…" : profileLoading ? "Loading account…" : requestToRecover ? "Retry reservation safely" : loading ? "Checking stock…" : !branchId ? "Choose a pickup branch" : !canReserve ? "Check branch stock" : "Reserve at this branch"}</button>}
+            : <button type="submit" disabled={busy || initializing || profileLoading || !customer || (!requestToRecover && (!canReserve || !pickupName.trim() || Boolean(scheduleError)))}>{busy ? "Reserving your items…" : profileLoading ? "Loading account…" : requestToRecover ? "Retry reservation safely" : loading ? "Checking stock…" : !branchId ? "Choose a pickup branch" : !canReserve ? "Check branch stock" : scheduleError ? "Choose a pickup date and time" : "Reserve at this branch"}</button>}
           <button className="customer-cart__secondary" type="button" onClick={continueShopping} disabled={busy}>Continue shopping</button>
         </footer>
       </form> : <div className="customer-cart__empty"><ShoppingCart size={38} aria-hidden="true" /><h3>Your cart is empty</h3><p>Browse products and add the supplies you need.</p><button type="button" onClick={continueShopping}>Continue shopping</button>{session?.emailVerified && <button className="customer-cart__secondary" type="button" onClick={viewReservations}>Your reservations</button>}</div>}

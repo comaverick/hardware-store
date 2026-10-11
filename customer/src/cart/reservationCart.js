@@ -72,6 +72,11 @@ export const useReservationCart = create((set, get) => ({
     try { localStorage.setItem("customer:pickup-branch", branchId); } catch {}
     set({ branchId });
   },
+  setPickupSchedule: (pickupDate, pickupTime) => {
+    const draft = get().draft;
+    if (!draft?.items?.length) return;
+    saveDraft({ ...draft, pickupDate, pickupTime }, "storefront");
+  },
   saveRequest: (request) => {
     const draft = { ...get().draft, reservationRequest: request || undefined };
     try { localStorage.setItem("customer:reservation-cart", JSON.stringify(draft)); } catch {}

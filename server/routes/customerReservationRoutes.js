@@ -10,8 +10,7 @@ const { createCustomerAuthMiddleware } = require("../middleware/customerAuthMidd
 const { fail, runTransaction, sendStockError } = require("../lib/stockOperations");
 const { releaseReservationStock } = require("../lib/reservationItems");
 const { EXPIRABLE_STATUSES } = require("../lib/reservationExpiry");
-
-const HOLD_MS = 2 * 60 * 60 * 1000;
+const { parsePickupAt, validateNewPickup, PICKUP_GRACE_MS } = require("../lib/pickupSchedule");
 
 function parseCart(body) {
   if (!mongoose.isObjectIdOrHexString(body?.branch)) fail(400, "Select a valid pickup branch.");
@@ -35,7 +34,10 @@ function parseCart(body) {
     seen.add(product);
     return { product, quantity: item.quantity, unitPrice: item.unitPrice };
   }).sort((a, b) => a.product.localeCompare(b.product));
-  return { branch: String(body.branch).toLowerCase(), customerName, customerPhone, items };
+  const cart = { branch: String(body.branch).toLowerCase(), customerName, customerPhone, items };
+  // Older saved request keys must retain their original hash so lost confirmations can be recovered.
+  if (body.pickupAt !== undefined) cart.pickupAt = parsePickupAt(body.pickupAt);
+  return cart;
 }
 
 function customerView(record) {
@@ -50,14 +52,14 @@ function customerView(record) {
     branch: { id: String(branch._id || branch), name: branch.name || "Pickup branch", code: branch.code || "", address: branch.address || "", phone: branch.phone || "" },
     customerName: record.customerName, customerPhone: record.customerPhone || "",
     status: EXPIRABLE_STATUSES.includes(record.status) && new Date(record.expiresAt) <= new Date() ? "EXPIRED" : record.status,
-    expiresAt: record.expiresAt, createdAt: record.createdAt,
+    pickupAt: record.pickupAt || null, expiresAt: record.expiresAt, createdAt: record.createdAt,
     items, total: Number(items.reduce((sum, item) => sum + item.total, 0).toFixed(2)),
   };
 }
 
 function createCustomerReservationRouter({
   CustomerModel = Customer, ReservationModel = Reservation, BranchModel = Branch,
-  ProductModel = Product, InventoryModel = Inventory, transaction = runTransaction, getAuth,
+  ProductModel = Product, InventoryModel = Inventory, transaction = runTransaction, getAuth, now = () => new Date(),
 } = {}) {
   const router = express.Router();
   let indexesReady;
@@ -111,6 +113,8 @@ function createCustomerReservationRouter({
       if (!reservation) {
         try {
           const created = await transaction(async (session) => {
+            // Check the time only for new holds; a retry must still recover an older reservation.
+            const pickupAt = validateNewPickup(cart.pickupAt, now());
             const branch = await BranchModel.findOne({ _id: cart.branch, isActive: true }).session(session);
             if (!branch) fail(404, "This pickup branch is unavailable. Choose another branch.");
             const items = [];
@@ -132,7 +136,7 @@ function createCustomerReservationRouter({
               ...identity, requestHash, reservationNumber: `RES-WEB-${crypto.randomBytes(8).toString("hex").toUpperCase()}`,
               branch: branch._id, items, customerName: cart.customerName, customerPhone: cart.customerPhone,
               customerEmail: req.customerClaims.email.trim().toLowerCase(), status: "ACTIVE",
-              expiresAt: new Date(Date.now() + HOLD_MS),
+              pickupAt, expiresAt: new Date(pickupAt.getTime() + PICKUP_GRACE_MS),
             }], { session });
             return record;
           });

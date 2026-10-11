@@ -494,7 +494,7 @@ export default function ProductDetails({
               <div className="pdp-benefit">
                 <ClipboardText size={22} weight="duotone" />
                 <div>
-                  <strong>Two-hour reservation</strong>
+                  <strong>Scheduled branch pickup</strong>
                   <small>Hold available items online and pay at pickup.</small>
                 </div>
               </div>

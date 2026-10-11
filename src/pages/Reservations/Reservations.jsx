@@ -34,6 +34,9 @@ import api from "../../services/api";
 import "./Reservations.css";
 
 const { Text } = Typography;
+const formatPickupTime = (value) => new Date(value).toLocaleString("en-PH", {
+  timeZone: "Asia/Manila", month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit",
+});
 
 const Reservations = () => {
   const navigate = useNavigate();
@@ -118,9 +121,12 @@ const Reservations = () => {
       Math.floor((new Date(expiresAt).getTime() - now) / 1000),
     );
     const hours = Math.floor(seconds / 3600);
+    const days = Math.floor(hours / 24);
     const minutes = Math.floor((seconds % 3600) / 60);
     const remainingSeconds = seconds % 60;
-    return hours > 0
+    return days > 0
+      ? `${days}d ${hours % 24}h ${String(minutes).padStart(2, "0")}m`
+      : hours > 0
       ? `${hours}h ${String(minutes).padStart(2, "0")}m`
       : `${minutes}m ${String(remainingSeconds).padStart(2, "0")}s`;
   };
@@ -266,6 +272,13 @@ const Reservations = () => {
       render: (_, item) => item.branch?.name || "-",
     },
     {
+      title: "Scheduled pickup",
+      key: "pickupAt",
+      render: (_, item) => item.pickupAt ? (
+        <div>{formatPickupTime(item.pickupAt)}<div className="reservation-muted">Philippine time</div></div>
+      ) : <Text type="secondary">Not scheduled</Text>,
+    },
+    {
       title: "State",
       dataIndex: "status",
       key: "status",
@@ -296,7 +309,7 @@ const Reservations = () => {
           </Text>
         ) : (
           <Text type="secondary">
-            {new Date(item.expiresAt).toLocaleString()}
+            {formatPickupTime(item.expiresAt)} (PH)
           </Text>
         ),
     },

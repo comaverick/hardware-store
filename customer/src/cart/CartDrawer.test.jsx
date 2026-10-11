@@ -5,14 +5,18 @@ import CartDrawer from "./CartDrawer";
 import { useReservationCart } from "./reservationCart";
 import { CustomerAuthProvider } from "../auth/CustomerAuthContext";
 import { reserveCart, fetchReservations, cancelReservation } from "./reservationApi";
+import { pickupToIso } from "./pickupSchedule";
 
 jest.mock("./reservationApi");
 const branchId = "a".repeat(24), secondBranch = "f".repeat(24), productId = "b".repeat(24);
 const user = { uid: "customer-one", emailVerified: true, displayName: "Alex Customer", email: "alex@example.com" };
+const localPickup = new Date(Date.now() + 86400000 + 8 * 3600000).toISOString();
+const pickupDate = localPickup.slice(0, 10), pickupTime = localPickup.slice(11, 16);
+const pickupAt = pickupToIso(pickupDate, pickupTime);
 const catalog = { branches: [{ _id: branchId, name: "Main branch", code: "MAIN", address: "12 Main St" }, { _id: secondBranch, name: "North branch", code: "NORTH" }],
   products: [{ _id: productId, name: "Hammer", unit: "piece", sellingPrice: 25, availableQuantity: 5 }] };
 const receipt = () => ({ id: "reservation-1", reservationNumber: "RES-WEB-123", status: "ACTIVE", branch: { id: branchId, name: "Main branch", address: "12 Main St" },
-  customerName: "Alex Customer", expiresAt: new Date(Date.now() + 7200000).toISOString(), total: 50,
+  customerName: "Alex Customer", pickupAt, expiresAt: new Date(new Date(pickupAt).getTime() + 7200000).toISOString(), total: 50,
   items: [{ productId, name: "Hammer", unit: "piece", quantity: 2, unitPrice: 25, total: 50 }] });
 function renderCart(account = user, path = "/products") {
   let listener;
@@ -25,6 +29,7 @@ function renderCart(account = user, path = "/products") {
 function addHammer(quantity = 2) {
   useReservationCart.getState().addItem({ id: productId, name: "Hammer", price: 99 }, quantity);
   useReservationCart.getState().setBranchId(branchId);
+  useReservationCart.getState().setPickupSchedule(pickupDate, pickupTime);
 }
 
 beforeEach(() => {
@@ -38,6 +43,7 @@ beforeEach(() => {
 
 test("the cart uses current branch prices and submits one authenticated reservation", async () => {
   addHammer();
+  useReservationCart.getState().setPickupSchedule("", "");
   global.fetch.mockResolvedValue({ ok: true, json: async () => catalog });
   reserveCart.mockResolvedValue(receipt());
   renderCart();
@@ -45,16 +51,36 @@ test("the cart uses current branch prices and submits one authenticated reservat
   const dialog = screen.getByRole("dialog", { name: "Reservation cart" });
   expect(within(dialog).getByText("12 Main St")).toBeInTheDocument();
   expect(within(dialog).getAllByText("₱50.00")).toHaveLength(2);
+  expect(within(dialog).getByRole("button", { name: "Choose a pickup date and time" })).toBeDisabled();
+  fireEvent.change(screen.getByLabelText("Pickup date"), { target: { value: pickupDate } });
+  fireEvent.change(screen.getByLabelText("Pickup time"), { target: { value: pickupTime } });
   fireEvent.click(within(dialog).getByRole("button", { name: "Reserve at this branch" }));
   expect(await screen.findByRole("heading", { name: "Your items are reserved" })).toBeInTheDocument();
-  expect(reserveCart).toHaveBeenCalledWith(user, { branch: branchId, customerName: "Alex Customer", customerPhone: "", items: [{ product: productId, quantity: 2, unitPrice: 25 }] }, expect.any(String), expect.any(AbortSignal));
+  expect(reserveCart).toHaveBeenCalledWith(user, { branch: branchId, customerName: "Alex Customer", customerPhone: "", pickupAt, items: [{ product: productId, quantity: 2, unitPrice: 25 }] }, expect.any(String), expect.any(AbortSignal));
   expect(useReservationCart.getState().draft).toBeNull();
   expect(screen.getByText("RES-WEB-123")).toBeInTheDocument();
+  expect(screen.getByText("Scheduled pickup")).toBeInTheDocument();
+  expect(screen.getByText("Hold expires")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Close cart" }));
   act(() => useReservationCart.getState().addItem({ id: productId, name: "Hammer", price: 25 }));
   await screen.findByText("5 available at this branch");
   expect(screen.queryByRole("heading", { name: "Your items are reserved" })).not.toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Reserve at this branch" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Choose a pickup date and time" })).toBeDisabled();
+});
+
+test("past pickup times and dates beyond seven days block a new reservation", async () => {
+  addHammer();
+  global.fetch.mockResolvedValue({ ok: true, json: async () => catalog });
+  renderCart();
+  await screen.findByText("5 available at this branch");
+  const pastDate = new Date(Date.now() - 86400000 + 8 * 3600000).toISOString().slice(0, 10);
+  fireEvent.change(screen.getByLabelText("Pickup date"), { target: { value: pastDate } });
+  expect(screen.getByRole("alert")).toHaveTextContent("Choose a pickup time in the future");
+  expect(screen.getByRole("button", { name: "Choose a pickup date and time" })).toBeDisabled();
+  const farDate = new Date(Date.now() + 8 * 86400000 + 8 * 3600000).toISOString().slice(0, 10);
+  fireEvent.change(screen.getByLabelText("Pickup date"), { target: { value: farDate } });
+  expect(screen.getByRole("alert")).toHaveTextContent("within the next seven days");
+  expect(reserveCart).not.toHaveBeenCalled();
 });
 
 test("switching the pickup branch blocks reservation when its stock is short", async () => {
@@ -69,7 +95,7 @@ test("switching the pickup branch blocks reservation when its stock is short", a
   expect(reserveCart).not.toHaveBeenCalled();
 });
 
-test("sign-in returns to the saved cart with its chosen branch", async () => {
+test("sign-in returns to the saved cart with its chosen branch and pickup schedule", async () => {
   addHammer();
   global.fetch.mockResolvedValue({ ok: true, json: async () => catalog });
   renderCart(null);
@@ -78,6 +104,7 @@ test("sign-in returns to the saved cart with its chosen branch", async () => {
   expect(await screen.findByLabelText("Email address")).toBeInTheDocument();
   expect(useReservationCart.getState().draft.items[0].quantity).toBe(2);
   expect(useReservationCart.getState().branchId).toBe(branchId);
+  expect(JSON.parse(localStorage.getItem("customer:reservation-cart"))).toMatchObject({ pickupDate, pickupTime });
   expect(useReservationCart.getState().open).toBe(false);
   expect(reserveCart).not.toHaveBeenCalled();
   fireEvent.change(screen.getByLabelText("Email address"), { target: { value: "alex@example.com" } });
@@ -87,6 +114,8 @@ test("sign-in returns to the saved cart with its chosen branch", async () => {
   await screen.findByText("5 available at this branch");
   expect(screen.getByRole("button", { name: "Reserve at this branch" })).toBeEnabled();
   expect(screen.getByLabelText("Choose pickup branch")).toHaveValue(branchId);
+  expect(screen.getByLabelText("Pickup date")).toHaveValue(pickupDate);
+  expect(screen.getByLabelText("Pickup time")).toHaveValue(pickupTime);
 });
 
 test("unverified customers must verify their email before reserving", async () => {
@@ -107,6 +136,8 @@ test("a lost confirmation retries the original request even if the held units no
   await screen.findByText("5 available at this branch");
   fireEvent.click(screen.getByRole("button", { name: "Reserve at this branch" }));
   await screen.findByRole("alert");
+  expect(screen.getByLabelText("Pickup date")).toBeDisabled();
+  expect(screen.getByLabelText("Pickup time")).toBeDisabled();
   stock = 0;
   fireEvent.click(screen.getByRole("button", { name: "Refresh stock" }));
   await screen.findByText("Out of stock at this branch");
@@ -136,6 +167,8 @@ test("customers can review reservations and explicitly cancel their hold", async
   cancelReservation.mockResolvedValue({ ...receipt(), status: "CANCELLED" });
   renderCart(user, "/account/reservations");
   expect(await screen.findByText("RES-WEB-123")).toBeInTheDocument();
+  expect(screen.getByText("Scheduled pickup")).toBeInTheDocument();
+  expect(screen.getByText("Hold expires")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Cancel reservation", exact: true }));
   expect(cancelReservation).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "Confirm cancellation" }));

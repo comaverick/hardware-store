@@ -1534,8 +1534,9 @@ const POS = () => {
                   <strong>Held for {selectedReservation.customerName}</strong>
                   <span>
                     {selectedReservation.reservationNumber} · {cart.filter((item) => item.isReserved).reduce((sum, item) => sum + item.quantity, 0)} units ·
-                    expires {new Date(selectedReservation.expiresAt).toLocaleString("en-PH")}
+                    expires {new Date(selectedReservation.expiresAt).toLocaleString("en-PH", { timeZone: "Asia/Manila" })} (PH)
                   </span>
+                  {selectedReservation.pickupAt && <span>Scheduled pickup: {new Date(selectedReservation.pickupAt).toLocaleString("en-PH", { timeZone: "Asia/Manila", month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" })} · Philippine time</span>}
                 </div>
                 <Button size="small" onClick={() => removeFromCart(cart.find((item) => item.isReserved)?.product)}>
                   Remove hold

@@ -39,6 +39,7 @@ const reservationSchema = new mongoose.Schema(
       enum: ["ACTIVE", "READY_FOR_PICKUP", "COMPLETED", "CANCELLED", "EXPIRED"],
       default: "ACTIVE",
     },
+    pickupAt: Date,
     expiresAt: { type: Date, required: true },
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
