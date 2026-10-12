@@ -1,17 +1,18 @@
 {
-  "short_name": "Hardware Ops",
-  "name": "Hardware Operations Management System",
+  "short_name": "Anchor Hardware",
+  "name": "Anchor Hardware Staff Portal",
   "icons": [
     {
-      "src": "favicon.ico",
-      "sizes": "64x64 32x32 24x24 16x16",
-      "type": "image/x-icon"
+      "src": "brand/anchor-hardware-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
     },
     {
-      "src": "hardware-mark.svg",
-      "type": "image/svg+xml",
-      "sizes": "any",
-      "purpose": "any maskable"
+      "src": "brand/anchor-hardware-mark.png",
+      "type": "image/png",
+      "sizes": "1254x1254",
+      "purpose": "any"
     }
   ],
   "start_url": ".",

@@ -49,24 +49,16 @@ const Login = () => {
       <main className="login-auth-region" aria-labelledby="login-title">
         <div className="login-auth-shell">
           <div className="login-brand-lockup login-brand-lockup-external">
-            <div className="login-brand-mark">
-              <svg
-                className="login-logo"
-                viewBox="0 0 40 40"
-                role="img"
-                aria-label="Hardware Management System"
-              >
-                <rect x="6" y="6" width="28" height="28" rx="7" />
-                <path d="M13 14h14M13 20h8M13 26h14M24 17v6M28 17v6" />
-                <circle cx="24" cy="14" r="1.5" />
-                <circle cx="28" cy="26" r="1.5" />
-              </svg>
-            </div>
-
-            <div className="login-brand-copy">
-              <h1>Hardware Ops</h1>
-              <span>Hardware Management System</span>
-            </div>
+            <h1 className="login-brand-name">
+              <img
+                className="login-brand-logo"
+                src={`${process.env.PUBLIC_URL}/brand/anchor-hardware-logo.png`}
+                alt="Anchor Hardware"
+                width="300"
+                height="100"
+              />
+            </h1>
+            <span className="login-brand-caption">Staff portal</span>
           </div>
 
           <div className="login-card-frame">
@@ -74,7 +66,7 @@ const Login = () => {
               <div className="login-header">
               <div className="login-intro">
                 <Title id="login-title" level={2}>Welcome back</Title>
-                <Text>Sign in to continue to Hardware Ops.</Text>
+                <Text>Sign in to your Anchor Hardware staff account.</Text>
               </div>
               </div>
 

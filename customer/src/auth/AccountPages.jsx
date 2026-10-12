@@ -127,7 +127,7 @@ export function SignInPage({ register = false }) {
 
   return (
     <AccountFrame title={register ? "Create your account" : "Welcome back"}
-      description={register ? "A few details, and you’re ready to go." : "Sign in to your Hardware Store account."}>
+      description={register ? "A few details, and you’re ready to go." : "Sign in to your Anchor Hardware account."}>
       <Feedback error={error || sessionError} />
       <GoogleButton onClick={googleSignIn} disabled={disabled} />
       <div className="customer-auth__divider"><span>or use email</span></div>
@@ -161,7 +161,7 @@ export function SignInPage({ register = false }) {
         </button>
       </form>
       <p className="customer-auth__switch">
-        {register ? "Already have an account? " : "New to Hardware Store? "}
+        {register ? "Already have an account? " : "New to Anchor Hardware? "}
         <Link to={register ? "/login" : "/register"} state={{ from: returnTo }}>{register ? "Sign in" : "Create an account"}</Link>
       </p>
     </AccountFrame>
@@ -284,7 +284,7 @@ export function AccountPage() {
   return (
     <main className="customer-account shop-container">
       <div className="customer-account__heading">
-        <div><span className="customer-account__eyebrow">Hardware Store</span><h1>Your account</h1></div>
+        <div><span className="customer-account__eyebrow">Anchor Hardware</span><h1>Your account</h1></div>
         {session && <button className="shop-button shop-button--outline" type="button" onClick={logout} disabled={busy}>
           <SignOut size={18} aria-hidden="true" /> {busy ? "Signing out…" : "Sign out"}
         </button>}

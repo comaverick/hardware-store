@@ -104,7 +104,7 @@
 .dashboard-overview::before,
 .dashboard-skeleton-card::before,
 .sales-overview-card::before,
-.modern-card:not(.smart-card)::before {
+.modern-card::before {
   position: absolute;
   z-index: 0;
   inset: 0;
@@ -117,7 +117,7 @@
 .dashboard-overview::after,
 .dashboard-skeleton-card::after,
 .sales-overview-card::after,
-.modern-card:not(.smart-card)::after {
+.modern-card::after {
   position: absolute;
   z-index: 0;
   inset: 1px;
@@ -130,7 +130,7 @@
 .dashboard-overview > *,
 .dashboard-skeleton-card > *,
 .sales-overview-card > *,
-.modern-card:not(.smart-card) > * { position: relative; z-index: 1; }
+.modern-card > * { position: relative; z-index: 1; }
 .dashboard-overview-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 20px; }
 .dashboard-overview-head h2 { margin: 0 0 5px; color: var(--app-heading); font-size: 18px; font-weight: 760; letter-spacing: -0.03em; }
 .dashboard-overview-head p { margin: 0; color: var(--app-muted); font-size: 12px; }
@@ -290,11 +290,11 @@
 }
 @supports not ((backdrop-filter: blur(1px))) {
   .dashboard-overview-sales .overview-primary-sales {
-    background: var(--app-accent-gradient);
+    background: var(--app-glass-sales-solid);
     box-shadow: var(--app-shadow-sm);
   }
   .dashboard-overview-sales .overview-primary-sales .overview-mark {
-    background: var(--app-accent-strong);
+    background: var(--app-glass-sales-control-solid);
     box-shadow: none;
   }
 }
@@ -327,10 +327,10 @@
 .overview-stat-good .overview-label { color: var(--app-success); }
 
 .dashboard-main-grid,
-.dashboard-secondary-grid { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(320px, 0.85fr); gap: 20px; }
+.dashboard-secondary-grid { display: grid; gap: 20px; }
+.dashboard-main-grid { grid-template-columns: minmax(0, 1fr); }
 .dashboard-secondary-grid { margin-top: 20px; grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr); }
 .sales-overview-card,
-.smart-card,
 .modern-card {
   position: relative;
   isolation: isolate;
@@ -342,22 +342,9 @@
   -webkit-backdrop-filter: blur(var(--app-glass-blur)) saturate(var(--app-glass-saturation));
   backdrop-filter: blur(var(--app-glass-blur)) saturate(var(--app-glass-saturation));
 }
-.smart-card {
-  border-color: var(--app-smart-border) !important;
-  background: var(--app-smart-surface) !important;
-  box-shadow: var(--app-smart-inset), var(--app-smart-shadow) !important;
-  -webkit-backdrop-filter: blur(20px) saturate(132%);
-  backdrop-filter: blur(20px) saturate(132%);
-}
-
-.dashboard .smart-card {
-  border: 1px solid var(--app-smart-border) !important;
-  background: var(--app-smart-surface) !important;
-  box-shadow: var(--app-smart-inset), var(--app-smart-shadow) !important;
-}
 
 .sales-overview-card,
-.modern-card:not(.smart-card) {
+.modern-card {
   background: var(--app-glass-secondary-background) !important;
   border-color: var(--app-glass-border) !important;
   box-shadow: var(--app-glass-shadow) !important;
@@ -374,51 +361,23 @@
   backdrop-filter: blur(var(--app-glass-blur)) saturate(var(--app-glass-saturation));
 }
 
-.smart-card::before {
-  position: absolute;
-  z-index: 0;
-  inset: 0;
-  border-radius: inherit;
-  background: var(--app-smart-reflection);
-  content: "";
-  pointer-events: none;
-}
-
-.smart-card::after {
-  position: absolute;
-  z-index: 0;
-  inset: 1px;
-  border: 1px solid var(--app-smart-inner-border);
-  border-radius: inherit;
-  content: "";
-  pointer-events: none;
-}
-
-.smart-card > * { position: relative; z-index: 1; }
-
 @supports not ((backdrop-filter: blur(1px))) {
   .dashboard-skeleton-card,
   .dashboard-overview,
   .sales-overview-card,
-  .modern-card:not(.smart-card) { background: var(--app-panel-translucent) !important; box-shadow: var(--app-shadow-sm) !important; }
-  .smart-card { background: var(--app-sidebar) !important; }
+  .modern-card { background: var(--app-panel-translucent) !important; box-shadow: var(--app-shadow-sm) !important; }
 }
 .sales-overview-card .ant-card-body,
-.smart-card .ant-card-body,
 .modern-card .ant-card-body { padding: 22px; }
 .dashboard .sales-overview-card .ant-card-body,
-.dashboard .branch-overview-card .ant-card-body,
-.dashboard .smart-card .ant-card-body { background: transparent; }
+.dashboard .branch-overview-card .ant-card-body { background: transparent; }
 .sales-overview-header,
-.smart-header,
 .section-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin: 0 0 20px !important; }
 .sales-overview-header h3 { font-size: 20px !important; }
-.smart-heading-row h3,
 .section-header h3 { margin: 0 0 5px !important; color: var(--app-heading); font-size: 18px !important; font-weight: 760; letter-spacing: -0.035em; }
 .sales-overview-header h3 { margin: 0 0 5px !important; color: var(--app-heading); font-size: 20px !important; font-weight: 760; letter-spacing: -0.035em; }
 .section-description,
-.section-header .ant-typography,
-.smart-title .ant-typography { color: var(--app-muted) !important; font-size: 12px !important; line-height: 1.45; }
+.section-header .ant-typography { color: var(--app-muted) !important; font-size: 12px !important; line-height: 1.45; }
 
 .sales-overview-controls { display: flex; align-items: center; justify-content: flex-end; gap: 7px; flex-wrap: wrap; }
 .sales-period-selector {
@@ -513,65 +472,16 @@
 .sales-chart-empty strong { color: var(--app-ink); font-size: 14px; }
 .sales-chart-empty span { color: var(--app-muted); font-size: 12px; }
 .sales-chart-summary { margin: 10px 0 0; color: var(--app-muted); font-size: 11px; line-height: 1.45; }
-
-.smart-card { color: var(--app-sidebar-ink); }
-.smart-title { display: flex; align-items: center; gap: 10px; }
-.smart-heading-row { display: flex; align-items: center; gap: 8px; }
-.smart-card .smart-heading-row h3,
-.smart-card .smart-action strong,
-.smart-card .smart-product-info strong { color: var(--app-sidebar-ink) !important; }
-.smart-card .smart-title > div > .ant-typography,
-.smart-card .smart-product-info span,
-.smart-card .smart-action span { color: var(--app-smart-muted) !important; }
-.smart-icon { display: grid; width: 38px; height: 38px; flex: 0 0 38px; place-items: center; border: 1px solid var(--app-smart-accent-border); border-radius: 9px; background: var(--app-smart-accent-surface); color: var(--app-accent-light); font-size: 17px; }
-.smart-ai-pill { display: inline-flex; align-items: center; gap: 4px; padding: 3px 6px; border: 1px solid var(--app-smart-accent-border); border-radius: 5px; background: var(--app-smart-accent-surface); color: var(--app-accent-soft); font-size: 10px; font-weight: 700; }
-.smart-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; margin-top: 0; padding: 12px 0; border-top: 1px solid var(--app-smart-divider); border-bottom: 1px solid var(--app-smart-divider); }
-.smart-summary-item { display: flex; min-width: 0; flex-direction: column; gap: 4px; padding: 5px 10px; border: 0; border-left: 1px solid var(--app-smart-divider); border-radius: 0; background: transparent !important; }
-.smart-summary-item:first-child { border-left: 0; padding-left: 0; }
-.smart-summary-item strong { font-size: 18px; line-height: 1; }
-.smart-summary-item span { margin-top: 4px; color: var(--app-smart-muted); font-size: 11px; font-weight: 700; }
-.smart-summary-item.critical { background: transparent !important; color: var(--app-smart-critical-ink); box-shadow: inset 0 -2px 0 var(--app-danger); }
-.risk-critical { background: var(--app-smart-critical-surface) !important; color: var(--app-smart-critical-ink); }
-.smart-summary-item.critical span { color: var(--app-smart-critical-ink); }
-.smart-summary-item.high { background: transparent !important; color: var(--app-smart-high-ink); box-shadow: inset 0 -2px 0 var(--app-warning); }
-.risk-high { background: var(--app-smart-high-surface) !important; color: var(--app-smart-high-ink); }
-.smart-summary-item.high span { color: var(--app-smart-high-ink); }
-.smart-summary-item.medium { background: transparent !important; color: var(--app-smart-medium-ink); box-shadow: inset 0 -2px 0 var(--app-medium); }
-.risk-medium { background: var(--app-smart-medium-surface) !important; color: var(--app-smart-medium-ink); }
-.smart-summary-item.medium span { color: var(--app-smart-medium-ink); }
-.risk-low { background: var(--app-smart-low-surface) !important; color: var(--app-smart-low-ink); }
-.smart-loading,
-.smart-healthy { display: flex; min-height: 190px; align-items: center; justify-content: center; gap: 10px; }
-.smart-loading { flex-direction: column; }
-.smart-loading .ant-typography,
-.smart-healthy strong { color: var(--app-sidebar-ink) !important; }
-.smart-healthy span { color: var(--app-smart-muted) !important; }
-.smart-list { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
-.smart-product { display: grid; grid-template-columns: minmax(0, 1fr) minmax(84px, max-content) minmax(92px, max-content); align-items: center; gap: 12px; min-height: 58px; padding: 10px 12px; border: 1px solid var(--app-smart-divider); border-radius: 8px; background: var(--app-smart-row); transition: background var(--app-motion-fast) var(--app-ease-out), border-color var(--app-motion-fast) var(--app-ease-out); }
-.smart-product:hover { border-color: var(--app-smart-border); background: var(--app-smart-row-hover); }
-.smart-product-main,
 .sale-row,
 .branch-item,
 .stock-product { display: flex; align-items: center; }
-.smart-product-main { min-width: 0; gap: 8px; }
-.smart-product-avatar { display: grid; width: 30px; height: 30px; flex: 0 0 30px; place-items: center; border: 1px solid var(--app-smart-accent-border); border-radius: 8px; background: var(--app-smart-accent-surface); color: var(--app-accent-soft); font-size: 11px; font-weight: 700; }
-.smart-product-info,
 .sale-info,
 .branch-info,
 .stock-product > div:last-child,
 .stock-branch,
 .stock-level { display: flex; min-width: 0; flex-direction: column; }
-.smart-product-info,
 .sale-info,
 .branch-info { gap: 2px; }
-.smart-product-info strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.smart-product-info span,
-.smart-action span { color: var(--app-muted); font-size: 11px; }
-.smart-risk { display: inline-flex; min-width: 84px; align-items: center; gap: 4px; justify-content: flex-start; padding: 4px 6px; border: 1px solid currentColor; border-radius: 5px; font-size: 10px; font-weight: 700; white-space: nowrap; }
-.smart-action { min-width: 92px; align-items: flex-end; justify-self: end; gap: 2px; text-align: right; }
-.smart-action span,
-.smart-action strong { white-space: nowrap; }
-.smart-action strong { font-size: 13px; font-variant-numeric: tabular-nums; }
 
 .modern-card .section-header { margin-bottom: 18px !important; }
 .text-action { min-height: 32px; padding: 5px 3px; border: 0; background: transparent; color: var(--app-accent-strong); cursor: pointer; font-size: 11px; font-weight: 750; transition: color var(--app-motion-fast) var(--app-ease-out), transform var(--app-motion-fast) var(--app-ease-out); }
@@ -638,14 +548,12 @@
 .dashboard .sales-period-selector button:focus-visible { outline: 2px solid var(--app-focus); outline-offset: 2px; }
 
 @media (max-width: 1200px) {
-  .dashboard-main-grid,
   .dashboard-secondary-grid { grid-template-columns: minmax(0, 1.25fr) minmax(300px, 0.75fr); }
   .stock-item { grid-template-columns: minmax(170px, 1.4fr) 78px minmax(120px, 0.8fr) 86px; gap: 10px; }
 }
 
 @media (max-width: 900px) {
   .dashboard { padding-top: 4px; }
-  .dashboard-main-grid,
   .dashboard-secondary-grid,
   .dashboard-overview-grid { grid-template-columns: 1fr; }
   .overview-primary { min-height: 160px; }
@@ -658,22 +566,16 @@
   .dashboard-overview,
   .sales-overview-card,
   .dashboard-skeleton-card,
-  .modern-card:not(.smart-card) {
+  .modern-card {
     background: var(--app-glass-surface-mobile) !important;
-    -webkit-backdrop-filter: blur(18px) saturate(120%);
-    backdrop-filter: blur(18px) saturate(120%);
-  }
-  .smart-card {
     -webkit-backdrop-filter: blur(18px) saturate(120%);
     backdrop-filter: blur(18px) saturate(120%);
   }
   .dashboard-overview,
   .sales-overview-card .ant-card-body,
-  .smart-card .ant-card-body,
   .modern-card .ant-card-body { padding: 16px; }
   .dashboard-overview-head,
   .sales-overview-header,
-  .smart-header,
   .section-header { flex-direction: column; gap: 12px; }
   .overview-live-state { white-space: normal; }
   .overview-stat-list { gap: 0; }
@@ -688,8 +590,6 @@
   .sales-overview-summary { gap: 18px 24px; }
   .refund-overview-summary { padding-left: 0; border-left: 0; }
   .sales-chart { height: 220px; }
-  .smart-product { grid-template-columns: minmax(0, 1fr) auto; }
-  .smart-action,
   .stock-status { display: none; }
   .stock-item { grid-template-columns: 1fr 1fr; padding: 12px 0; }
   .stock-level { grid-column: 1 / -1; }
@@ -710,12 +610,10 @@
 @media (prefers-reduced-motion: reduce) {
   .dashboard-overview,
   .sales-overview-card,
-  .smart-card,
   .modern-card,
   .overview-primary-action,
   .sales-period-selector button,
   .sales-period-selector::before,
-  .smart-product,
   .sale-row,
   .branch-item,
   .stock-item::before,
@@ -736,24 +634,15 @@
   .dashboard-skeleton-card::after,
   .sales-overview-card::before,
   .sales-overview-card::after,
-  .smart-card::before,
-  .smart-card::after,
-  .modern-card:not(.smart-card)::before,
-  .modern-card:not(.smart-card)::after,
+  .modern-card::before,
+  .modern-card::after,
   .dashboard-overview-attention .overview-primary-inventory::after { display: none; }
 
   .dashboard-overview,
   .sales-overview-card,
   .dashboard-skeleton-card,
-  .modern-card:not(.smart-card) {
+  .modern-card {
     background: var(--app-panel-raised) !important;
-    box-shadow: var(--app-shadow-sm) !important;
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
-  }
-
-  .smart-card {
-    background: var(--app-sidebar) !important;
     box-shadow: var(--app-shadow-sm) !important;
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
@@ -762,13 +651,13 @@
   .overview-primary,
   .dashboard-overview-attention .overview-primary-inventory { box-shadow: var(--app-shadow-sm); -webkit-backdrop-filter: none; backdrop-filter: none; }
   .dashboard-overview-sales .overview-primary-sales {
-    background: var(--app-accent-gradient);
+    background: var(--app-glass-sales-solid);
     box-shadow: var(--app-shadow-sm);
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
   }
   .dashboard-overview-sales .overview-primary-sales .overview-mark {
-    background: var(--app-accent-strong);
+    background: var(--app-glass-sales-control-solid);
     box-shadow: none;
     -webkit-backdrop-filter: none;
     backdrop-filter: none;

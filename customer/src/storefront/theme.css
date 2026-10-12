@@ -13,6 +13,7 @@
   --shop-accent-soft: #fbede7;
   --shop-on-accent: #fdfdfd;
   --shop-glass: rgb(253 253 253 / 88%);
+  --shop-brand-filter: none;
   --shop-success: #206a42;
   --shop-success-soft: #e9f5ee;
   --shop-danger: #a03229;
@@ -28,6 +29,7 @@
     --shop-ink: #f5f5f7; --shop-muted: #b1b1b9; --shop-line: #404045;
     --shop-accent: #ff9c72; --shop-accent-hover: #ffb18f; --shop-accent-soft: #39271f; --shop-on-accent: #24160f;
     --shop-glass: rgb(20 20 22 / 88%);
+    --shop-brand-filter: brightness(0) invert(1);
     --shop-success: #83d6a2; --shop-success-soft: #1a3023; --shop-danger: #ffaba2; --shop-danger-soft: #39211f;
   }
 }
@@ -37,5 +39,6 @@
   --shop-ink: #f5f5f7; --shop-muted: #b1b1b9; --shop-line: #404045;
   --shop-accent: #ff9c72; --shop-accent-hover: #ffb18f; --shop-accent-soft: #39271f; --shop-on-accent: #24160f;
   --shop-glass: rgb(20 20 22 / 88%);
+  --shop-brand-filter: brightness(0) invert(1);
   --shop-success: #83d6a2; --shop-success-soft: #1a3023; --shop-danger: #ffaba2; --shop-danger-soft: #39211f;
 }

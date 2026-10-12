@@ -3,17 +3,13 @@ import { useNavigate } from "react-router-dom";
 
 import {
   ArrowRightOutlined,
-  BulbOutlined,
-  CheckCircleOutlined,
-  ExclamationCircleOutlined,
   InboxOutlined,
   ShoppingCartOutlined,
   ShopOutlined,
-  ThunderboltOutlined,
   WarningOutlined,
 } from "@ant-design/icons";
 
-import { Alert, Card, Col, Row, Skeleton, Spin, Typography } from "antd";
+import { Alert, Card, Col, Row, Skeleton, Typography } from "antd";
 
 import {
   BarChart,
@@ -73,10 +69,8 @@ const Dashboard = ({
   const [inventory, setInventory] = useState([]);
   const [products, setProducts] = useState([]);
   const [sales, setSales] = useState([]);
-  const [smartData, setSmartData] = useState(null);
 
   const [loading, setLoading] = useState(true);
-  const [smartLoading, setSmartLoading] = useState(true);
 
   const [error, setError] = useState(null);
 
@@ -508,139 +502,9 @@ const Dashboard = ({
 
   const branches = Object.values(branchStock);
 
-  // ========================================
-  // SMART INVENTORY
-  // ========================================
-
-  useEffect(() => {
-    const fetchSmartInventory = async () => {
-      if (inventory.length === 0) {
-        setSmartData(null);
-        setSmartLoading(false);
-        return;
-      }
-
-      try {
-        setSmartLoading(true);
-
-        const branchIds =
-          selectedBranch === "ALL"
-            ? [
-                ...new Set(
-                  inventory.map((item) => item.branch?._id).filter(Boolean),
-                ),
-              ]
-            : [selectedBranch];
-
-        if (branchIds.length === 0) {
-          setSmartData(null);
-          setSmartLoading(false);
-          return;
-        }
-
-        const responses = await Promise.all(
-          branchIds.map((branchId) => api.get(`/smart-inventory/${branchId}`)),
-        );
-
-        const combined = responses.flatMap(
-          (response) => response.data?.recommendations || [],
-        );
-
-        const criticalCount = combined.filter(
-          (item) => item.risk === "CRITICAL",
-        ).length;
-
-        const highCount = combined.filter(
-          (item) => item.risk === "HIGH",
-        ).length;
-
-        const mediumCount = combined.filter(
-          (item) => item.risk === "MEDIUM",
-        ).length;
-
-        const priority = {
-          CRITICAL: 1,
-          HIGH: 2,
-          MEDIUM: 3,
-          LOW: 4,
-        };
-
-        combined.sort(
-          (a, b) => (priority[a.risk] || 5) - (priority[b.risk] || 5),
-        );
-
-        setSmartData({
-          recommendations: combined,
-
-          criticalCount,
-
-          highCount,
-
-          mediumCount,
-        });
-      } catch (error) {
-        console.error("Smart inventory error:", error);
-
-        setSmartData(null);
-      } finally {
-        setSmartLoading(false);
-      }
-    };
-
-    fetchSmartInventory();
-  }, [inventory, selectedBranch]);
-
-  // ========================================
-  // SMART HELPERS
-  // ========================================
-
-  const getRiskClass = (risk) => {
-    if (risk === "CRITICAL") {
-      return "risk-critical";
-    }
-
-    if (risk === "HIGH") {
-      return "risk-high";
-    }
-
-    if (risk === "MEDIUM") {
-      return "risk-medium";
-    }
-
-    return "risk-low";
-  };
-
-  const getRiskIcon = (risk) => {
-    if (risk === "CRITICAL") {
-      return <ExclamationCircleOutlined />;
-    }
-
-    if (risk === "HIGH" || risk === "MEDIUM") {
-      return <WarningOutlined />;
-    }
-
-    return <CheckCircleOutlined />;
-  };
-
-  const getRiskLabel = (risk) => {
-    const normalizedRisk = String(risk || "").toLowerCase();
-    return normalizedRisk ? `${normalizedRisk.charAt(0).toUpperCase()}${normalizedRisk.slice(1)}` : "Unknown";
-  };
-
-  const smartRecommendations =
-    smartData?.recommendations
-      ?.filter((item) => item.risk !== "LOW" || item.recommendedOrder > 0)
-      .slice(0, 4) || [];
-
-  const prioritizeInventory = lowStockItems.length > 0
-    || Number(smartData?.criticalCount || 0) > 0
-    || Number(smartData?.highCount || 0) > 0;
-  const overviewTone = prioritizeInventory && todaySalesAmount === 0 && todayTransactions === 0
+  const overviewTone = lowStockItems.length > 0 && todaySalesAmount === 0 && todayTransactions === 0
     ? "attention"
     : "sales";
-  const inventoryPriorityCount = lowStockItems.length > 0
-    ? lowStockItems.length
-    : Number(smartData?.criticalCount || 0) + Number(smartData?.highCount || 0);
 
   // ========================================
   // RECENT SALES
@@ -672,17 +536,20 @@ const Dashboard = ({
           ))}
         </Row>
         <Row gutter={[16, 16]} className="dashboard-loading-main">
-          <Col xs={24} lg={16}>
+          <Col xs={24}>
             <Card className="dashboard-skeleton-card">
               <Skeleton active paragraph={{ rows: 7 }} title={{ width: "35%" }} />
             </Card>
           </Col>
-          <Col xs={24} lg={8}>
-            <Card className="dashboard-skeleton-card">
-              <Skeleton active paragraph={{ rows: 7 }} title={{ width: "45%" }} />
+        </Row>
+        <div className="dashboard-secondary-grid">
+          {[1, 2].map((item) => (
+            <Card className="dashboard-skeleton-card" key={item}>
+              <Skeleton active paragraph={{ rows: 4 }} title={{ width: "45%" }} />
             </Card>
-          </Col>
-        </Row>      </div>
+          ))}
+        </div>
+      </div>
     );
   }
 
@@ -756,10 +623,10 @@ const Dashboard = ({
               <span className="overview-mark" aria-hidden="true"><WarningOutlined /></span>
             </div>
 
-            <strong className="overview-primary-value">{inventoryPriorityCount.toLocaleString()}</strong>
+            <strong className="overview-primary-value">{lowStockItems.length.toLocaleString()}</strong>
 
             <div className="overview-primary-footer">
-              <span>{lowStockItems.length > 0 ? "low-stock items" : "items need attention"}</span>
+              <span>low-stock items</span>
               <button type="button" className="overview-primary-action" onClick={() => navigate("/inventory")}>
                 Review inventory
                 <ArrowRightOutlined />
@@ -1050,102 +917,6 @@ const Dashboard = ({
           )}
         </Card>
 
-        {/* ==================================
-            INVENTORY INTELLIGENCE
-        ================================== */}
-
-        <Card className="smart-card">
-          <div className="smart-header">
-            <div className="smart-title">
-              <div className="smart-icon">
-                <BulbOutlined />
-              </div>
-
-              <div>
-                <div className="smart-heading-row">
-                  <Title level={3}>Inventory Intelligence</Title>
-
-                  <span className="smart-ai-pill">
-                    <ThunderboltOutlined />
-                    Smart
-                  </span>
-                </div>
-
-                <Text>Products that need attention.</Text>
-              </div>
-            </div>
-          </div>
-
-          {!smartLoading && smartData && (
-            <div className="smart-summary">
-              <div className="smart-summary-item critical">
-                <strong>{smartData.criticalCount}</strong>
-
-                <span>Critical</span>
-              </div>
-
-              <div className="smart-summary-item high">
-                <strong>{smartData.highCount}</strong>
-
-                <span>High</span>
-              </div>
-
-              <div className="smart-summary-item medium">
-                <strong>{smartData.mediumCount}</strong>
-
-                <span>Medium</span>
-              </div>
-            </div>
-          )}
-
-          {smartLoading ? (
-            <div className="smart-loading">
-              <Spin />
-
-              <Text>Analyzing inventory...</Text>
-            </div>
-          ) : smartRecommendations.length === 0 ? (
-            <div className="smart-healthy">
-              <CheckCircleOutlined />
-
-              <div>
-                <strong>Inventory looks healthy</strong>
-
-                <Text>No immediate action required.</Text>
-              </div>
-            </div>
-          ) : (
-            <div className="smart-list">
-              {smartRecommendations.map((item) => (
-                <div className="smart-product" key={item.product._id}>
-                  <div className="smart-product-main">
-                    <div className="smart-product-avatar">
-                      {item.product.name?.charAt(0).toUpperCase()}
-                    </div>
-
-                    <div className="smart-product-info">
-                      <strong>{item.product.name}</strong>
-
-                      <span>Stock: {item.currentStock}</span>
-                    </div>
-                  </div>
-
-                  <div className={`smart-risk ${getRiskClass(item.risk)}`}>
-                    {getRiskIcon(item.risk)}
-
-                    {getRiskLabel(item.risk)}
-                  </div>
-
-                  <div className="smart-action">
-                    <span>Recommended</span>
-
-                    <strong>+{item.recommendedOrder}</strong>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </Card>
       </section>
 
       {/* ==================================

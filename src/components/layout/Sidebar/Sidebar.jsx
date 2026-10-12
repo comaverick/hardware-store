@@ -249,7 +249,7 @@ const Sidebar = ({
         mobileOpen ? "sidebar-mobile-open" : ""
       }`}
       id="primary-navigation"
-      aria-label="Hardware Management System navigation"
+      aria-label="Anchor Hardware navigation"
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
     >
@@ -265,23 +265,20 @@ const Sidebar = ({
           aria-expanded={mobileOpen ? true : expanded}
           onClick={handleToggle}
         >
-          <svg
+          <img
             className="sidebar-logo"
-            viewBox="0 0 40 40"
-            role="img"
-            aria-label="Hardware Management System"
-          >
-            <rect x="6" y="6" width="28" height="28" rx="7" />
-            <path d="M13 14h14M13 20h8M13 26h14M24 17v6M28 17v6" />
-            <circle cx="24" cy="14" r="1.5" />
-            <circle cx="28" cy="26" r="1.5" />
-          </svg>
+            src={`${process.env.PUBLIC_URL}/brand/anchor-hardware-mark.png`}
+            alt=""
+            aria-hidden="true"
+            width="40"
+            height="40"
+          />
         </button>
 
         <div className="sidebar-brand-text">
-          <div className="sidebar-title">Hardware Ops</div>
+          <div className="sidebar-title">ANCHOR</div>
 
-          <div className="sidebar-subtitle">Management system</div>
+          <div className="sidebar-subtitle">HARDWARE</div>
         </div>
 
         <button

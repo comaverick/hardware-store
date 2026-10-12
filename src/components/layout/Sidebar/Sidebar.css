@@ -67,19 +67,16 @@
   height: 42px;
   border: 1px solid var(--app-sidebar-item-border);
   border-radius: 11px;
-  background: var(--app-sidebar-control);
+  background: #f6f2eb;
 }
 
 .sidebar-brand-toggle:hover {
   border-color: rgba(249, 99, 2, 0.42);
-  background: var(--app-sidebar-control-hover);
+  background: #fffaf4;
   transform: translateY(-1px);
 }
 
-.sidebar-logo { width: 40px; height: 40px; overflow: visible; }
-.sidebar-logo rect { fill: var(--app-accent); }
-.sidebar-logo path { fill: none; stroke: var(--app-sidebar-ink); stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.6; }
-.sidebar-logo circle { fill: var(--app-sidebar-ink); }
+.sidebar-logo { display: block; width: 40px; height: 40px; object-fit: contain; }
 
 .sidebar-brand-text {
   min-width: 0;
@@ -108,16 +105,18 @@
 
 .sidebar-title {
   color: var(--app-sidebar-ink);
-  font-size: 14px;
+  font-size: 17px;
   font-weight: 750;
-  letter-spacing: -0.02em;
+  letter-spacing: 0.035em;
   line-height: 18px;
 }
 
 .sidebar-subtitle {
   margin-top: 3px;
   color: var(--app-sidebar-muted);
-  font-size: 10px;
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.22em;
   line-height: 14px;
 }
 

@@ -154,7 +154,7 @@ const Topbar = ({
   };
   const currentPage = {
     ...(pageTitles[location.pathname] || {
-      title: "Hardware Store",
+      title: "Anchor Hardware",
       description: "Store management system",
     }),
     category: pageCategories[location.pathname] || "Store",

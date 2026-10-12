@@ -19,8 +19,9 @@ import "./App.css";
 export { categoryIcons, ProductVisual } from "./storefront/ProductVisual";
 
 function Brand({ footer = false }) {
-  return <Link className={`shop-brand${footer ? " shop-brand--footer" : ""}`} to="/" aria-label="HS Hardware Store home">
-    <span className="shop-brand__mark">HS</span>{" "}<span>Hardware Store</span>
+  return <Link className={`shop-brand${footer ? " shop-brand--footer" : ""}`} to="/" aria-label="Anchor Hardware home">
+    <img className="shop-brand__logo" src={`${process.env.PUBLIC_URL}/brand/anchor-hardware-logo.png`}
+      alt="" aria-hidden="true" width="184" height="62" />
   </Link>;
 }
 
@@ -164,7 +165,7 @@ function AppContent() {
           <Link to={accountPath} state={accountState}>{session ? "Your account" : "Sign in"}</Link>
         </nav>
       </div>
-      <div className="shop-container shop-footer__bottom"><span>© {new Date().getFullYear()} Hardware Store.</span>
+      <div className="shop-container shop-footer__bottom"><span>© {new Date().getFullYear()} Anchor Hardware.</span>
         <span>Prices and stock may change. Confirm with your branch.</span></div>
     </footer>
     <nav className="shop-mobile-nav" aria-label="Mobile navigation">
