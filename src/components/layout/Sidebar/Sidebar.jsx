@@ -22,6 +22,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useEffect, useRef, useState } from "react";
 
 import { useAuth } from "../../../context/AuthContext";
+import { canAccessModule } from "../../../config/moduleAccess";
 
 import "./Sidebar.css";
 
@@ -189,7 +190,12 @@ const Sidebar = ({
           : []),
       ],
     },
-  ];
+  ]
+    .map((group) => ({
+      ...group,
+      items: group.items.filter((item) => canAccessModule(user?.role, item.key)),
+    }))
+    .filter((group) => group.items.length > 0);
 
   // ========================================
   // BOTTOM
@@ -314,7 +320,9 @@ const Sidebar = ({
       ================================= */}
 
       <div className="sidebar-bottom">
-        {bottomItems.map((item) => renderMenuItem(item))}
+        {bottomItems
+          .filter((item) => canAccessModule(user?.role, item.key))
+          .map((item) => renderMenuItem(item))}
       </div>
     </aside>
   );
