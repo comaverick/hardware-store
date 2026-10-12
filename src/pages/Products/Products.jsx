@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
 import {
-  AppstoreOutlined,
   DeleteOutlined,
   EditOutlined,
   EyeOutlined,
@@ -28,6 +27,7 @@ import {
 } from "antd";
 
 import api from "../../services/api";
+import ProductImage from "../../components/ProductImage";
 import { useAuth } from "../../context/AuthContext";
 
 import "./Products.css";
@@ -267,7 +267,7 @@ const Products = () => {
       render: (_, product) => (
         <div className="product-cell">
           <div className="product-icon">
-            {product.image ? <img src={product.image} alt="" /> : <AppstoreOutlined />}
+            <ProductImage src={product.image} />
           </div>
 
           <div>
@@ -578,11 +578,10 @@ const Products = () => {
             <label htmlFor="product-image-input">Product image</label>
             <div className="product-image-controls">
               <div className="product-image-preview">
-                {(!removeImage && (imagePreview || editingProduct?.image)) ? (
-                  <img src={imagePreview || editingProduct.image} alt="Product preview" />
-                ) : (
-                  <AppstoreOutlined />
-                )}
+                <ProductImage
+                  src={removeImage ? "" : imagePreview || editingProduct?.image}
+                  alt="Product preview"
+                />
               </div>
               <div className="product-image-options">
                 <input
@@ -740,11 +739,7 @@ const Products = () => {
 
             <div className="product-details-header">
               <div className="product-details-icon">
-                {selectedProduct.image ? (
-                  <img src={selectedProduct.image} alt="" />
-                ) : (
-                  <AppstoreOutlined />
-                )}
+                <ProductImage src={selectedProduct.image} alt={selectedProduct.name} />
               </div>
 
               <div>

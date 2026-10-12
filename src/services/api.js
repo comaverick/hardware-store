@@ -16,6 +16,17 @@ const apiBaseUrl = configuredApiUrl.endsWith("/api")
   ? configuredApiUrl
   : `${configuredApiUrl}/api`;
 
+export const resolveApiAssetUrl = (value) => {
+  if (typeof value !== "string" || !value.trim()) return "";
+
+  try {
+    const url = new URL(value.trim(), `${apiBaseUrl.replace(/\/api$/, "")}/`);
+    return ["http:", "https:", "blob:", "data:"].includes(url.protocol) ? url.href : "";
+  } catch {
+    return "";
+  }
+};
+
 const api = axios.create({
   baseURL: apiBaseUrl,
   headers: {
