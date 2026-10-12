@@ -171,17 +171,17 @@
 }
 .finder-branch button.ant-btn-primary:not(:disabled):not(.ant-btn-disabled) {
   color: #fff !important;
-  background: #1677ff !important;
-  border-color: #1677ff !important;
+  background: var(--app-accent-strong) !important;
+  border-color: var(--app-accent-strong) !important;
   font-weight: 600;
   text-shadow: none;
-  box-shadow: 0 4px 10px rgba(22, 119, 255, 0.22);
+  box-shadow: none;
 }
 .finder-branch button.ant-btn-primary:disabled,
 .finder-branch button.ant-btn-primary.ant-btn-disabled {
-  color: #fff !important;
-  background: #98a2b3 !important;
-  border-color: #98a2b3 !important;
+  color: var(--app-muted) !important;
+  background: var(--app-steel-soft) !important;
+  border-color: var(--app-line) !important;
   box-shadow: none;
   opacity: 1;
 }
@@ -191,7 +191,7 @@
   flex-direction: column;
   gap: 2px;
 }
-.finder-branch span,
+.finder-branch > div > span,
 .finder-reserve-summary span {
   color: #fffbe6;
   font-size: 13px;
@@ -344,16 +344,9 @@
   background: #fafafa;
 }
 
-.finder-page .finder-branch span,
+.finder-page .finder-branch > div > span,
 .finder-page .finder-reserve-summary span {
   color: #777;
-}
-
-.finder-page .finder-branch button.ant-btn-primary:not(:disabled):not(.ant-btn-disabled) {
-  color: #fff !important;
-  background: #111 !important;
-  border-color: #111 !important;
-  box-shadow: none;
 }
 
 .finder-page .finder-reserve-summary {

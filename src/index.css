@@ -128,8 +128,6 @@
   --app-sidebar-scrollbar: rgba(255, 255, 255, 0.25);
   --app-sidebar-collapsed: 78px;
   --app-sidebar-expanded: 264px;
-  --app-assistant-clearance: 92px;
-  --app-assistant-clearance-mobile: 82px;
   --app-motion-fast: 180ms;
   --app-motion-shell: 260ms;
   --app-motion-scrim: 200ms;
@@ -140,6 +138,11 @@
 
 * {
   box-sizing: border-box;
+}
+
+.product-focused-row > td {
+  background: var(--app-warning-soft) !important;
+  transition: background var(--app-motion-shell) var(--app-ease-out);
 }
 
 html {

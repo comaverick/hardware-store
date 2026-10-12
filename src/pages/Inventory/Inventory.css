@@ -235,17 +235,6 @@
   border-top: 1px solid rgba(0, 0, 0, 0.06);
 }
 
-.transfer-arrow {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-
-  margin: -4px 0 12px;
-
-  color: #8e8e93;
-  font-size: 18px;
-}
-
 /* Dashboard theme */
 .inventory-page {
   width: 100%;

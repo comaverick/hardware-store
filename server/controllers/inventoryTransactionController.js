@@ -2,7 +2,6 @@
 
 const Inventory = require("../models/BranchInventory");
 const { branchFilter } = require("../lib/branchAccess");
-const crypto = require("node:crypto");
 const { fail, positiveQuantity, runStockOperation, sendStockError } = require("../lib/stockOperations");
 
 // =========================
@@ -137,99 +136,6 @@ const adjustStock = async (req, res) => {
 };
 
 // =========================
-// TRANSFER STOCK
-// =========================
-
-const transferStock = async (req, res) => {
-  try {
-    const { fromInventoryId, toInventoryId, quantity, reason, notes } = req.body || {};
-    if (!fromInventoryId || !toInventoryId) {
-      fail(400, "Source and destination inventory are required.");
-    }
-    if (String(fromInventoryId) === String(toInventoryId)) {
-      fail(400, "Source and destination cannot be the same.");
-    }
-    const transferQuantity = positiveQuantity(quantity, "Transfer quantity must be greater than zero.");
-
-    const result = await runStockOperation(req, `transfer:${fromInventoryId}:${toInventoryId}`, async (session) => {
-      const fromInventory = await Inventory.findById(fromInventoryId).session(session);
-      const toInventory = await Inventory.findById(toInventoryId).session(session);
-      if (!fromInventory) fail(404, "Source inventory not found.");
-      if (!toInventory) fail(404, "Destination inventory not found.");
-      if (String(fromInventory.product) !== String(toInventory.product)) {
-        fail(400, "Source and destination must contain the same product.");
-      }
-      if (String(fromInventory.branch) === String(toInventory.branch)) {
-        fail(400, "Source and destination must be different branches.");
-      }
-      if (fromInventory.quantity - (fromInventory.reservedQuantity || 0) < transferQuantity) {
-        fail(409, "Insufficient unreserved stock at source branch.");
-      }
-
-      const source = await Inventory.findOneAndUpdate(
-        {
-          _id: fromInventoryId,
-          $expr: {
-            $gte: [
-              { $subtract: ["$quantity", { $ifNull: ["$reservedQuantity", 0] }] },
-              transferQuantity,
-            ],
-          },
-        },
-        { $inc: { quantity: -transferQuantity } },
-        { new: true, session, runValidators: true },
-      );
-      if (!source) fail(409, "Available stock changed. Refresh inventory and try again.");
-
-      const destination = await Inventory.findOneAndUpdate(
-        { _id: toInventoryId, product: source.product },
-        { $inc: { quantity: transferQuantity } },
-        { new: true, session, runValidators: true },
-      );
-      if (!destination) fail(409, "Destination inventory changed. Refresh inventory and try again.");
-
-      const transferReference = `TRF-${crypto.randomUUID()}`;
-      const transactions = await InventoryTransaction.create([{
-        product: source.product,
-        branch: source.branch,
-        type: "TRANSFER_OUT",
-        quantity: transferQuantity,
-        previousQuantity: source.quantity + transferQuantity,
-        newQuantity: source.quantity,
-        reason: reason || "Branch transfer",
-        reference: transferReference,
-        notes,
-        performedBy: req.user._id,
-      }, {
-        product: destination.product,
-        branch: destination.branch,
-        type: "TRANSFER_IN",
-        quantity: transferQuantity,
-        previousQuantity: destination.quantity - transferQuantity,
-        newQuantity: destination.quantity,
-        reason: reason || "Branch transfer",
-        reference: transferReference,
-        notes,
-        performedBy: req.user._id,
-      }], { session });
-      return {
-        status: 200,
-        body: {
-          message: "Stock transferred successfully.",
-          reference: transferReference,
-          source: { inventoryId: source._id, previousQuantity: source.quantity + transferQuantity, newQuantity: source.quantity },
-          destination: { inventoryId: destination._id, previousQuantity: destination.quantity - transferQuantity, newQuantity: destination.quantity },
-          transactions,
-        },
-      };
-    });
-    res.status(result.status).json(result.body);
-  } catch (error) {
-    sendStockError(res, error, "Transfer stock");
-  }
-};
-
-// =========================
 // PRODUCT TRANSACTIONS
 // =========================
 
@@ -290,5 +196,4 @@ module.exports = {
   getBranchTransactions,
   receiveStock,
   adjustStock,
-  transferStock,
 };

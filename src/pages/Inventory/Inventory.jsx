@@ -3,13 +3,11 @@ import { useSearchParams } from "react-router-dom";
 
 import {
   AppstoreOutlined,
-  ArrowRightOutlined,
   ClearOutlined,
   DownloadOutlined,
   UploadOutlined,
   InboxOutlined,
   SearchOutlined,
-  SwapOutlined,
   WarningOutlined,
   HistoryOutlined,
 } from "@ant-design/icons";
@@ -23,6 +21,7 @@ import {
   Input,
   InputNumber,
   Modal,
+  Radio,
   Row,
   Select,
   Space,
@@ -44,7 +43,6 @@ const { Text } = Typography;
 const Inventory = () => {
   const { user } = useAuth();
   const canManageStock = ["SUPER_ADMIN", "ADMIN", "MANAGER", "INVENTORY_STAFF"].includes(user?.role);
-  const canTransferStock = user?.role === "SUPER_ADMIN";
   const [searchParams] = useSearchParams();
   const focusedSku = searchParams.get("product") || "";
   const [inventory, setInventory] = useState([]);
@@ -57,7 +55,7 @@ const Inventory = () => {
 
   const [statusFilter, setStatusFilter] = useState("all");
 
-  const [actionModal, setActionModal] = useState(null);
+  const [stockUpdateOpen, setStockUpdateOpen] = useState(false);
 
   const [saving, setSaving] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
@@ -71,16 +69,17 @@ const Inventory = () => {
 
   const [historyOpen, setHistoryOpen] = useState(false);
 
-  const [receiveForm] = Form.useForm();
-  const [adjustForm] = Form.useForm();
-  const [transferForm] = Form.useForm();
-  const selectedAdjustInventoryId = Form.useWatch("inventoryId", adjustForm);
-  const reservedForAdjustment = inventory.find((item) => item._id === selectedAdjustInventoryId)?.reservedQuantity || 0;
+  const [stockUpdateForm] = Form.useForm();
+  const stockUpdateType = Form.useWatch("updateType", stockUpdateForm) || "delivery";
+  const selectedInventoryId = Form.useWatch("inventoryId", stockUpdateForm);
+  const selectedInventory = inventory.find((item) => item._id === selectedInventoryId);
+  const reservedQuantity = selectedInventory?.reservedQuantity || 0;
+  const isCorrection = stockUpdateType === "correction";
   const stockRequestRef = useRef(null);
 
   useEffect(() => {
     stockRequestRef.current = null;
-  }, [actionModal]);
+  }, [stockUpdateOpen]);
 
   const postStockAction = (path, values) => {
     const signature = JSON.stringify({ path, values });
@@ -353,7 +352,7 @@ const Inventory = () => {
   useEffect(() => {
     if (loading || !focusedSku || !filteredInventory.length) return undefined;
     const timer = window.setTimeout(() => {
-      document.querySelector(".assistant-focused-row")?.scrollIntoView({ behavior: "smooth", block: "center" });
+      document.querySelector(".product-focused-row")?.scrollIntoView({ behavior: "smooth", block: "center" });
     }, 150);
     return () => window.clearTimeout(timer);
   }, [loading, filteredInventory, focusedSku]);
@@ -382,81 +381,41 @@ const Inventory = () => {
   ).length;
 
   // =========================
-  // RECEIVE STOCK
+  // UPDATE STOCK
   // =========================
 
-  const handleReceive = async (values) => {
+  const closeStockUpdate = () => {
+    if (saving) return;
+    stockUpdateForm.resetFields();
+    setStockUpdateOpen(false);
+  };
+
+  const handleStockUpdate = async ({ updateType, inventoryId, quantity, reason, notes }) => {
+    const correction = updateType === "correction";
+    const path = correction ? "/inventory-transactions/adjust" : "/inventory-transactions/receive";
+    const values = {
+      inventoryId,
+      ...(correction ? { newQuantity: quantity, reason } : { quantity, reason: "Stock received" }),
+      notes,
+    };
+
     try {
       setSaving(true);
 
-      await postStockAction("/inventory-transactions/receive", values);
+      await postStockAction(path, values);
 
-      message.success("Stock received successfully.");
+      message.success("Stock updated successfully.");
 
-      receiveForm.resetFields();
+      stockUpdateForm.resetFields();
 
-      setActionModal(null);
+      setStockUpdateOpen(false);
 
       await fetchInventory();
     } catch (error) {
       console.error(error);
 
       message.error(
-        error.response?.data?.message || "Failed to receive stock.",
-      );
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  // =========================
-  // ADJUST STOCK
-  // =========================
-
-  const handleAdjust = async (values) => {
-    try {
-      setSaving(true);
-
-      await postStockAction("/inventory-transactions/adjust", values);
-
-      message.success("Stock adjusted successfully.");
-
-      adjustForm.resetFields();
-
-      setActionModal(null);
-
-      await fetchInventory();
-    } catch (error) {
-      console.error(error);
-
-      message.error(error.response?.data?.message || "Failed to adjust stock.");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  // =========================
-  // TRANSFER STOCK
-  // =========================
-
-  const handleTransfer = async (values) => {
-    try {
-      setSaving(true);
-
-      await postStockAction("/inventory-transactions/transfer", values);
-
-      message.success("Stock transferred successfully.");
-
-      transferForm.resetFields();
-
-      setActionModal(null);
-
-      await fetchInventory();
-    } catch (error) {
-      console.error(error);
-
-      message.error(
-        error.response?.data?.message || "Failed to transfer stock.",
+        error.response?.data?.message || "Failed to update stock.",
       );
     } finally {
       setSaving(false);
@@ -647,30 +606,12 @@ const Inventory = () => {
           </Button>
 
           {canManageStock && (
-            <>
-              <Button
-                icon={<InboxOutlined />}
-                onClick={() => setActionModal("receive")}
-              >
-                Receive Stock
-              </Button>
-
-              <Button
-                icon={<WarningOutlined />}
-                onClick={() => setActionModal("adjust")}
-              >
-                Adjust Stock
-              </Button>
-            </>
-          )}
-
-          {canTransferStock && (
             <Button
               type="primary"
-              icon={<SwapOutlined />}
-              onClick={() => setActionModal("transfer")}
+              icon={<InboxOutlined />}
+              onClick={() => setStockUpdateOpen(true)}
             >
-              Transfer Stock
+              Update Stock
             </Button>
           )}
 
@@ -798,7 +739,7 @@ const Inventory = () => {
           columns={columns}
           dataSource={filteredInventory}
           rowKey="_id"
-          rowClassName={(record) => (record.product?.sku === focusedSku ? "assistant-focused-row" : "")}
+          rowClassName={(record) => (record.product?.sku === focusedSku ? "product-focused-row" : "")}
           loading={loading}
           pagination={{
             pageSize: 10,
@@ -871,26 +812,45 @@ const Inventory = () => {
       </Modal>
 
       {/* =========================
-          RECEIVE MODAL
+          UPDATE STOCK MODAL
       ========================= */}
 
       <Modal
-        title="Receive Stock"
-        open={actionModal === "receive"}
-        onCancel={() => {
-          receiveForm.resetFields();
-          setActionModal(null);
-        }}
+        title="Update Stock"
+        open={stockUpdateOpen}
+        onCancel={closeStockUpdate}
+        closable={!saving}
+        keyboard={!saving}
+        maskClosable={!saving}
         footer={null}
       >
-        <Form form={receiveForm} layout="vertical" onFinish={handleReceive}>
+        <Form
+          form={stockUpdateForm}
+          name="stock-update"
+          layout="vertical"
+          initialValues={{ updateType: "delivery" }}
+          disabled={saving}
+          onFinish={handleStockUpdate}
+        >
+          <Form.Item label="Update type" name="updateType">
+            <Radio.Group
+              optionType="button"
+              buttonStyle="solid"
+              options={[
+                { label: "Delivery", value: "delivery" },
+                { label: "Correction", value: "correction" },
+              ]}
+              onChange={() => stockUpdateForm.resetFields(["quantity", "reason"])}
+            />
+          </Form.Item>
+
           <Form.Item
-            label="Inventory"
+            label="Product and branch"
             name="inventoryId"
             rules={[
               {
                 required: true,
-                message: "Select inventory.",
+                message: "Select a product and branch.",
               },
             ]}
           >
@@ -909,17 +869,32 @@ const Inventory = () => {
           </Form.Item>
 
           <Form.Item
-            label="Quantity Received"
+            key={stockUpdateType}
+            label={isCorrection ? "Correct stock count" : "Quantity delivered"}
             name="quantity"
+            extra={isCorrection
+              ? `Enter the actual total in stock.${reservedQuantity > 0 ? ` At least ${reservedQuantity} units must remain for reservations.` : ""}`
+              : "This quantity will be added to your current stock."}
             rules={[
               {
                 required: true,
-                message: "Enter quantity.",
+                message: isCorrection ? "Enter the correct stock count." : "Enter the quantity delivered.",
+              },
+              {
+                type: "number",
+                validator: (_, value) => {
+                  if (value == null || (isCorrection ? value >= reservedQuantity : value > 0)) {
+                    return Promise.resolve();
+                  }
+                  return Promise.reject(new Error(isCorrection
+                    ? `Stock count must be at least ${reservedQuantity}.`
+                    : "Delivered quantity must be greater than zero."));
+                },
               },
             ]}
           >
             <InputNumber
-              min={1}
+              min={isCorrection ? reservedQuantity : 0}
               style={{
                 width: "100%",
               }}
@@ -927,245 +902,37 @@ const Inventory = () => {
             />
           </Form.Item>
 
-          <Form.Item label="Reason" name="reason" initialValue="Stock received">
-            <Input placeholder="Reason" />
-          </Form.Item>
+          {isCorrection && (
+            <Form.Item
+              label="Reason"
+              name="reason"
+              preserve={false}
+              rules={[{ required: true, message: "Select a reason for the correction." }]}
+            >
+              <Select
+                placeholder="Select reason"
+                options={[
+                  { value: "Damaged stock", label: "Damaged stock" },
+                  { value: "Lost stock", label: "Lost stock" },
+                  { value: "Physical count correction", label: "Physical count correction" },
+                  { value: "Expired stock", label: "Expired stock" },
+                  { value: "Other", label: "Other" },
+                ]}
+              />
+            </Form.Item>
+          )}
 
-          <Form.Item label="Notes" name="notes">
-            <Input.TextArea rows={3} placeholder="Optional notes" />
+          <Form.Item label="Notes (optional)" name="notes">
+            <Input.TextArea rows={3} placeholder="Add any details about this stock update" />
           </Form.Item>
 
           <div className="action-modal-footer">
-            <Button
-              onClick={() => {
-                receiveForm.resetFields();
-                setActionModal(null);
-              }}
-            >
+            <Button onClick={closeStockUpdate} disabled={saving}>
               Cancel
             </Button>
 
             <Button type="primary" htmlType="submit" loading={saving}>
-              Receive Stock
-            </Button>
-          </div>
-        </Form>
-      </Modal>
-
-      {/* =========================
-          ADJUST MODAL
-      ========================= */}
-
-      <Modal
-        title="Adjust Stock"
-        open={actionModal === "adjust"}
-        onCancel={() => {
-          adjustForm.resetFields();
-          setActionModal(null);
-        }}
-        footer={null}
-      >
-        <Form form={adjustForm} layout="vertical" onFinish={handleAdjust}>
-          <Form.Item
-            label="Inventory"
-            name="inventoryId"
-            rules={[
-              {
-                required: true,
-                message: "Select inventory.",
-              },
-            ]}
-          >
-            <Select
-              showSearch
-              placeholder="Select inventory"
-              optionFilterProp="label"
-              options={inventory.map((item) => ({
-                value: item._id,
-                label:
-                  `${item.product?.name} - ` +
-                  `${item.branch?.code} ` +
-                  `(Current: ${item.quantity})`,
-              }))}
-            />
-          </Form.Item>
-
-          <Form.Item
-            label="New Quantity"
-            name="newQuantity"
-            extra={`${reservedForAdjustment} units are reserved and must remain in stock.`}
-            rules={[
-              {
-                required: true,
-                message: "Enter new quantity.",
-              },
-            ]}
-          >
-            <InputNumber
-              min={reservedForAdjustment}
-              style={{
-                width: "100%",
-              }}
-              size="large"
-            />
-          </Form.Item>
-
-          <Form.Item
-            label="Reason"
-            name="reason"
-            rules={[
-              {
-                required: true,
-                message: "Select a reason.",
-              },
-            ]}
-          >
-            <Select placeholder="Select reason">
-              <Select.Option value="Damaged stock">Damaged stock</Select.Option>
-
-              <Select.Option value="Lost stock">Lost stock</Select.Option>
-
-              <Select.Option value="Physical count correction">
-                Physical count correction
-              </Select.Option>
-
-              <Select.Option value="Expired stock">Expired stock</Select.Option>
-
-              <Select.Option value="Other">Other</Select.Option>
-            </Select>
-          </Form.Item>
-
-          <Form.Item label="Notes" name="notes">
-            <Input.TextArea rows={3} placeholder="Explain the adjustment..." />
-          </Form.Item>
-
-          <div className="action-modal-footer">
-            <Button
-              onClick={() => {
-                adjustForm.resetFields();
-                setActionModal(null);
-              }}
-            >
-              Cancel
-            </Button>
-
-            <Button type="primary" htmlType="submit" loading={saving}>
-              Adjust Stock
-            </Button>
-          </div>
-        </Form>
-      </Modal>
-
-      {/* =========================
-          TRANSFER MODAL
-      ========================= */}
-
-      <Modal
-        title="Transfer Stock"
-        open={actionModal === "transfer"}
-        onCancel={() => {
-          transferForm.resetFields();
-          setActionModal(null);
-        }}
-        footer={null}
-        width={600}
-      >
-        <Form form={transferForm} layout="vertical" onFinish={handleTransfer}>
-          <Form.Item
-            label="From Inventory"
-            name="fromInventoryId"
-            rules={[
-              {
-                required: true,
-                message: "Select source inventory.",
-              },
-            ]}
-          >
-            <Select
-              showSearch
-              placeholder="Select source branch"
-              optionFilterProp="label"
-              options={inventory.map((item) => ({
-                value: item._id,
-                label:
-                  `${item.product?.name} - ` +
-                  `${item.branch?.code} ` +
-                  `(Available: ${Math.max((item.quantity || 0) - (item.reservedQuantity || 0), 0)})`,
-              }))}
-            />
-          </Form.Item>
-
-          <div className="transfer-arrow">
-            <ArrowRightOutlined />
-          </div>
-
-          <Form.Item
-            label="To Inventory"
-            name="toInventoryId"
-            rules={[
-              {
-                required: true,
-                message: "Select destination inventory.",
-              },
-            ]}
-          >
-            <Select
-              showSearch
-              placeholder="Select destination branch"
-              optionFilterProp="label"
-              options={inventory.map((item) => ({
-                value: item._id,
-                label:
-                  `${item.product?.name} - ` +
-                  `${item.branch?.code} ` +
-                  `(Current: ${item.quantity})`,
-              }))}
-            />
-          </Form.Item>
-
-          <Form.Item
-            label="Quantity"
-            name="quantity"
-            rules={[
-              {
-                required: true,
-                message: "Enter quantity.",
-              },
-            ]}
-          >
-            <InputNumber
-              min={1}
-              style={{
-                width: "100%",
-              }}
-              size="large"
-            />
-          </Form.Item>
-
-          <Form.Item
-            label="Reason"
-            name="reason"
-            initialValue="Stock replenishment"
-          >
-            <Input />
-          </Form.Item>
-
-          <Form.Item label="Notes" name="notes">
-            <Input.TextArea rows={3} placeholder="Optional transfer notes" />
-          </Form.Item>
-
-          <div className="action-modal-footer">
-            <Button
-              onClick={() => {
-                transferForm.resetFields();
-                setActionModal(null);
-              }}
-            >
-              Cancel
-            </Button>
-
-            <Button type="primary" htmlType="submit" loading={saving}>
-              Transfer Stock
+              Update Stock
             </Button>
           </div>
         </Form>

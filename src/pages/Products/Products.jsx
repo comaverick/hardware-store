@@ -149,7 +149,7 @@ const Products = () => {
   useEffect(() => {
     if (loading || !focusedSku || !filteredProducts.length) return undefined;
     const timer = window.setTimeout(() => {
-      document.querySelector(".assistant-focused-row")?.scrollIntoView({ behavior: "smooth", block: "center" });
+      document.querySelector(".product-focused-row")?.scrollIntoView({ behavior: "smooth", block: "center" });
     }, 150);
     return () => window.clearTimeout(timer);
   }, [loading, filteredProducts, focusedSku]);
@@ -445,7 +445,7 @@ const Products = () => {
           columns={columns}
           dataSource={filteredProducts}
           rowKey="_id"
-          rowClassName={(record) => (record.sku === focusedSku ? "assistant-focused-row" : "")}
+          rowClassName={(record) => (record.sku === focusedSku ? "product-focused-row" : "")}
           loading={loading}
           pagination={{
             pageSize: 10,

@@ -3,15 +3,13 @@ import {
   cloneElement,
   isValidElement,
   useEffect,
-  useLayoutEffect,
-  useRef,
+  useMemo,
   useState,
 } from "react";
 import { useLocation } from "react-router-dom";
 
 import Sidebar from "../Sidebar/Sidebar";
 import Topbar from "../Topbar/Topbar";
-import Assistant from "../../../pages/Assistant/Assistant";
 
 import "./AppLayout.css";
 
@@ -21,28 +19,6 @@ const AppLayout = ({ children }) => {
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [branchOptions, setBranchOptions] = useState([]);
   const [selectedBranch, setSelectedBranch] = useState("ALL");
-  const [sidebarTransitioning, setSidebarTransitioning] = useState(false);
-  const previousSidebarExpanded = useRef(sidebarExpanded);
-  const sidebarMotionTimer = useRef(null);
-
-  useLayoutEffect(() => {
-    if (previousSidebarExpanded.current === sidebarExpanded) return undefined;
-
-    previousSidebarExpanded.current = sidebarExpanded;
-    setSidebarTransitioning(true);
-
-    sidebarMotionTimer.current = window.setTimeout(() => {
-      setSidebarTransitioning(false);
-      sidebarMotionTimer.current = null;
-    }, 230);
-
-    return () => {
-      if (sidebarMotionTimer.current) {
-        window.clearTimeout(sidebarMotionTimer.current);
-        sidebarMotionTimer.current = null;
-      }
-    };
-  }, [sidebarExpanded]);
 
   useEffect(() => {
     if (!mobileSidebarOpen) return undefined;
@@ -64,23 +40,25 @@ const AppLayout = ({ children }) => {
     };
   }, [mobileSidebarOpen]);
 
-  const branchScope = {
-    options: branchOptions,
-    selectedBranch,
-  };
+  const branchScope = useMemo(
+    () => ({ options: branchOptions, selectedBranch }),
+    [branchOptions, selectedBranch],
+  );
 
-  const content = isValidElement(children)
-    ? cloneElement(children, {
-      branchScope,
-      onBranchOptionsChange: setBranchOptions,
-    })
-    : children;
+  // Sidebar state should not rerender the page's product grid and checkout controls.
+  const content = useMemo(
+    () => isValidElement(children)
+      ? cloneElement(children, {
+        branchScope,
+        onBranchOptionsChange: setBranchOptions,
+      })
+      : children,
+    [children, branchScope],
+  );
 
   return (
     <Layout
-      className={`app-layout ${location.pathname === "/pos" ? "app-layout-pos" : ""} ${
-        sidebarTransitioning ? "app-layout-sidebar-moving" : ""
-      }`}
+      className={`app-layout ${location.pathname === "/pos" ? "app-layout-pos" : ""}`}
     >
       <a className="skip-link" href="#main-content">
         Skip to content
@@ -119,7 +97,6 @@ const AppLayout = ({ children }) => {
       >
         {content}
       </main>
-      <Assistant />
     </Layout>
   );
 };

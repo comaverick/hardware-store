@@ -22,7 +22,6 @@ The following authenticated write endpoints require a unique `Idempotency-Key` h
 - `POST /api/purchase-orders/:id/receive`
 - `POST /api/inventory-transactions/receive`
 - `POST /api/inventory-transactions/adjust`
-- `POST /api/inventory-transactions/transfer`
 - `POST /api/reservations/:id/checkout`
 
 Generate a new key for each intended operation. Reuse the same key and identical request body when retrying after a timeout. The server returns the original result without applying stock changes again. Reusing a key with a different body returns `409`.

@@ -6,7 +6,6 @@ const {
   getBranchTransactions,
   receiveStock,
   adjustStock,
-  transferStock,
 } = require("../controllers/inventoryTransactionController");
 
 const {
@@ -52,7 +51,5 @@ router.post(
   requireBranchAssignment,
   adjustStock,
 );
-
-router.post("/transfer", protect, authorize("SUPER_ADMIN"), transferStock);
 
 module.exports = router;

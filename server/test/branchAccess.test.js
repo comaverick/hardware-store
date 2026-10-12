@@ -144,9 +144,10 @@ test("cashiers cannot receive purchase orders", async () => {
   }
 });
 
-test("branch managers cannot make an unapproved cross-branch transfer", async () => {
-  mockLogin({ ...staff, role: "MANAGER" });
-  mock.method(AuditLog, "create", async () => ({}));
+test("the removed stock transfer endpoint is unavailable, including for super admins", async () => {
+  mockLogin({ ...staff, role: "SUPER_ADMIN", branch: null });
+  mock.method(BranchInventory, "findOneAndUpdate", () => assert.fail("No stock should be transferred"));
+  mock.method(InventoryTransaction, "create", () => assert.fail("No transfer should be logged"));
   const server = await startServer("/api/inventory-transactions", inventoryTransactionRoutes);
   try {
     const result = await fetch(`${server.url}/api/inventory-transactions/transfer`, {
@@ -157,7 +158,7 @@ test("branch managers cannot make an unapproved cross-branch transfer", async ()
       },
       body: JSON.stringify({ fromInventoryId: "inventory-a", toInventoryId: "inventory-b", quantity: 1 }),
     });
-    assert.equal(result.status, 403);
+    assert.equal(result.status, 404);
   } finally {
     await server.close();
   }

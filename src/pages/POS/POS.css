@@ -2288,14 +2288,6 @@
   }
 }
 
-/* Keep glass visible during shell motion, but reduce the blur repaint cost briefly. */
-@media (min-width: 901px) {
-  .app-layout-sidebar-moving .pos-page .pos-header {
-    -webkit-backdrop-filter: blur(8px) saturate(120%);
-    backdrop-filter: blur(8px) saturate(120%);
-  }
-}
-
 /* Ground the two primary POS workspaces with warm operational tints, not glass. */
 .pos-page .pos-products-card,
 .pos-page .pos-cart-card {

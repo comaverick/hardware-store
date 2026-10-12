@@ -29,7 +29,6 @@ app.use("/assets/scanspace", express.static(path.join(__dirname, "public", "scan
 app.use(express.json({ limit: "8mb" }));
 app.use("/api", apiRateLimiter);
 app.use("/api/auth", authRateLimiter);
-app.use("/api/assistant", aiRateLimiter);
 app.use("/api/product-finder", aiRateLimiter);
 
 connectDB();
@@ -54,7 +53,6 @@ app.use("/api/smart-inventory", smartInventoryRoutes);
 app.use("/api/reservations", reservationRoutes);
 app.use("/api/scanspace", require("./routes/scanSpaceRoutes"));
 app.use("/api/product-finder", require("./routes/productFinderRoutes"));
-app.use("/api/assistant", require("./routes/assistantRoutes"));
 app.use("/api/audit-logs", require("./routes/auditLogRoutes"));
 
 app.get("/", (req, res) => {

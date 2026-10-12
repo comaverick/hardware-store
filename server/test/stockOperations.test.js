@@ -10,7 +10,7 @@ const StockOperation = require("../models/StockOperation");
 const Reservation = require("../models/Reservation");
 const { refundSale } = require("../controllers/saleController");
 const { receivePurchaseOrder } = require("../controllers/purchaseOrderController");
-const { adjustStock, transferStock } = require("../controllers/inventoryTransactionController");
+const { adjustStock } = require("../controllers/inventoryTransactionController");
 const { getReservations } = require("../controllers/reservationController");
 const { runStockOperation } = require("../lib/stockOperations");
 
@@ -138,41 +138,6 @@ test("stock adjustment cannot go below reserved units", async () => {
   assert.equal(res.statusCode, 409);
   assert.match(res.body.message, /reserved/);
   assert.equal(state.commits, 0);
-});
-
-test("transfer uses unreserved units and logs both sides together", async () => {
-  const { session, state } = mockSession();
-  mockOperationLedger();
-  const source = { _id: "source", branch: branchA, product: productId, quantity: 10, reservedQuantity: 8 };
-  const destination = { _id: "destination", branch: branchB, product: productId, quantity: 4, reservedQuantity: 0 };
-  mock.method(Inventory, "findById", (id) => ({ session: async () => id === "source" ? source : destination }));
-  const updates = [];
-  mock.method(Inventory, "findOneAndUpdate", async (filter, update, options) => {
-    assert.equal(options.session, session);
-    updates.push({ filter, update });
-    return filter._id === "source"
-      ? { ...source, quantity: 8 }
-      : { ...destination, quantity: 6 };
-  });
-  mock.method(InventoryTransaction, "create", async (details, options) => {
-    assert.equal(options.session, session);
-    assert.equal(details.length, 2);
-    assert.deepEqual(details.map((item) => [item.previousQuantity, item.newQuantity]), [[10, 8], [4, 6]]);
-    return details;
-  });
-
-  const denied = response();
-  await transferStock(request({ fromInventoryId: "source", toInventoryId: "destination", quantity: 5 }, "transfer-denied"), denied);
-  assert.equal(denied.statusCode, 409);
-  assert.equal(updates.length, 0);
-
-  const allowed = response();
-  await transferStock(request({ fromInventoryId: "source", toInventoryId: "destination", quantity: 2 }, "transfer-allowed"), allowed);
-  assert.equal(allowed.statusCode, 200);
-  assert.equal(state.commits, 1);
-  assert.equal(updates.length, 2);
-  assert.deepEqual(updates[0].filter.$expr.$gte[1], 2);
-  assert.equal(updates[0].update.$inc.quantity, -2);
 });
 
 test("reusing an operation key returns the first result without doing the work again", async () => {
