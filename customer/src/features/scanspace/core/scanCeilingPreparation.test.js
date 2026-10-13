@@ -75,6 +75,19 @@ function fixture({
     helpers
   };
 }
+
+test('overlapping ceiling photos balance exposure without averaging away photographed detail',()=>{
+  const {mesh,frames,helpers}=fixture();
+  helpers.textureFrames=frames.slice(0,2);
+  helpers.projectColor=(f,x,y,z)=>({u:(f.frameId===0 && x<.5 || f.frameId===1 && x>.7)?1.5:x/1.2,v:z/1.2,depth:y-1});
+  helpers.sampleColor=(f,uv)=>Array(3).fill((f.frameId===0?160:200)+(uv.v>.5?4:0));
+  const result=prepareScanCeiling(mesh,frames,helpers,new Uint8Array(mesh.indices.length/3));
+  expect(result.diagnostics.exposureBalancedFrames).toBe(2);
+  const t=result.surface.texture;
+  const sample=(u,v)=>t.data[(Math.floor(v*t.height)*t.width+Math.floor(u*t.width))*4];
+  expect(Math.abs(sample(.25,.25)-sample(.8,.25))).toBeLessThan(3);
+  expect(sample(.25,.75)).toBeGreaterThan(sample(.25,.25));
+});
 test("bent photographed ceiling has a connected flat preview while captured geometry stays intact", () => {
   const {
       mesh,

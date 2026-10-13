@@ -57,4 +57,61 @@ export function classifyFoldedPhotoPanels(cells, cellSize) {
       }
     }
   }
+  // Pleats disappear in cropped or dark parts of a photo. Carry the recognized
+  // cloth silhouette through the same native-supported columns, within the
+  // robust vertical extent of its neighboring pleats. Do not grow onto the wall
+  // above the curtain or across its side boundary.
+  const columns = new Map();
+  for (const p of points) if (p.foldedPanel) {
+    if (!columns.has(p.x)) columns.set(p.x, []); columns.get(p.x).push(p.y);
+  }
+  if (columns.size * cellSize < .5) return;
+  const lows=[...columns.values()].map(a=>Math.min(...a)).sort((a,b)=>a-b);
+  const highs=[...columns.values()].map(a=>Math.max(...a)).sort((a,b)=>a-b);
+  const low=lows[Math.floor(lows.length*.25)], high=highs[Math.floor(highs.length*.75)];
+  for (const p of points) if (columns.has(p.x) && p.y>=low && p.y<=high &&
+      (p.support === undefined || p.support>=2) && Number.isFinite(p.depthOffset) && Math.abs(p.depthOffset)<=.18) p.foldedPanel=true;
+}
+
+// A curtain at a room corner can also project into the neighboring wall's
+// footprint. Share its measured fabric mask across that junction so the other
+// wall cannot recolor the thin cloth edge as a flat wall detail.
+export function protectFoldedPanelJunctions(surfaces) {
+  let protectedPixels=0;
+  const panels=surfaces.filter(s=>s.preserved?.size);
+  const nearby=new Map();
+  for(const surface of surfaces) {
+    const w=surface.wall,t=w.texture,mask=w.detailMask;
+    for(let y=0;y<t.height;y++)for(let x=0;x<t.width;x++) {
+      const i=y*t.width+x;if(mask[i])continue;
+      const q=[w.extent[0][0]+(x+.5)/t.width*(w.extent[1][0]-w.extent[0][0]),
+        w.extent[0][1]+(y+.5)/t.height*(w.extent[1][1]-w.extent[0][1])].map(v=>v*w.cellSize);
+      const p=w.normal.map((n,a)=>n*w.offset+w.axes[0][a]*q[0]+w.axes[1][a]*q[1]);
+      if(panels.some(s=>{
+        if(s===surface)return false;
+        const grid=s.wall.axes.map(axis=>Math.floor(axis.reduce((v,n,a)=>v+n*p[a],0)/s.wall.cellSize));
+        const k=`${panels.indexOf(s)}:${grid.join(',')}`;
+        if(!nearby.has(k)) {
+          const samples=[];
+          for(let dx=-4;dx<=4;dx++)for(let dy=-4;dy<=4;dy++)if(Math.hypot(dx,dy)*s.wall.cellSize<=.16) {
+            const c=s.preserved.get(key(grid[0]+dx,grid[1]+dy));if(c)samples.push(c);
+          }
+          nearby.set(k,samples);
+        }
+        const residual=s.wall.normal.reduce((v,n,a)=>v+n*p[a],0)-s.wall.offset;
+        const rgb=t.data?.subarray(i*4,i*4+3);
+        return nearby.get(k).some(cloth=>{
+          if(Math.abs(residual-(cloth.depthOffset || 0))>=.18)return false;
+          if(!rgb || !cloth.rgb)return !rgb;
+          // Agreeing photographed cloth can protect a short meshing crack.
+          // Bright flat border samples cannot expand the mask onto plaster.
+          if(rgb.reduce((sum,v)=>sum+v,0)/3>160 && (cloth.depthOffset || 0)>.065)return false;
+          return Math.hypot(...Array.from(rgb,(v,a)=>v-cloth.rgb[a]))<100;
+        });
+      })) {
+        mask[i]=255;protectedPixels++;
+      }
+    }
+  }
+  return {protectedCurtainJunctionPixels:protectedPixels};
 }

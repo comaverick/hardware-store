@@ -73,7 +73,7 @@ export function prepareScanCeiling(mesh, frames, helpers, removed, walls = [], o
   if (!helpers.project || !helpers.sampleColor || frames.length < 3) return null;
   const photos = (helpers.textureFrames || frames).filter(f => f.colorImage?.length);
   if (!photos.length) return null;
-  const minimumArea = options.excludeCells?.size ? .06 : .35;
+  const minimumArea = options.patch ? .06 : .35;
   const floorY = Number.isFinite(mesh.floorY) ? mesh.floorY : 0;
   const seeds = [],
     heights = new Map();
@@ -258,7 +258,7 @@ export function prepareScanCeiling(mesh, frames, helpers, removed, walls = [], o
   const ceilingTrim = samples => samples.every(neutral) && samples.filter(matches).length >= 2;
   const preferred = [...frameScores].sort((a, b) => b[1] - a[1]).map(([frame]) => frame);
   for (const [k, cell] of cells) {
-    const choice = preferred.map(f => cell.choices.find(c => c.frame === f && c.score >= cell.choices[0].score - .25)).find(Boolean) || cell.choices[0];
+    const choice = preferred.map(f => cell.choices.find(c => c.frame === f && c.score >= cell.choices[0].score - .5)).find(Boolean) || cell.choices[0];
     const samples = [];
     for (const [x, z] of [[.15, .15], [.85, .15], [.5, .5], [.15, .85], [.85, .85]]) {
       const uv = projectColor(choice.frame, ...world(cell.x + x, cell.z + z));
@@ -443,7 +443,7 @@ export function prepareScanCeiling(mesh, frames, helpers, removed, walls = [], o
         if (remaining.delete(k)) region.push(k);
       }
     }
-    if (region.length * CELL * CELL < (options.excludeCells?.size ? .004 : .035)) {
+    if (region.length * CELL * CELL < (options.patch ? .004 : .035)) {
       diagnostics.smallRegionCells += region.length;
       region.forEach(k => cells.delete(k));
     }
@@ -463,13 +463,35 @@ export function prepareScanCeiling(mesh, frames, helpers, removed, walls = [], o
       data: new Uint8Array(width * textureHeight * 4)
     },
     detailMask = new Uint8Array(width * textureHeight);
+  // Match exposures using the same plain ceiling points seen in overlapping
+  // photos. A per-camera gain removes tiled brightness changes without blurring
+  // plaster texture, trim, or fan pixels.
+  const exposure = new Map([[preferred[0], [1,1,1]]]);
+  for (let pass=0;pass<preferred.length;pass++) {
+    let added=false;
+    for(const frame of preferred) {
+      if(exposure.has(frame))continue;
+      const ratios=[[],[],[]];
+      for(const c of cells.values()) {
+        if(c.detail || !c.choices)continue;
+        const target=c.choices.find(q=>q.frame===frame && matches(q.rgb));
+        const reference=c.choices.find(q=>exposure.has(q.frame) && matches(q.rgb));
+        if(!target || !reference || [...target.rgb,...reference.rgb].some(v=>v<35 || v>235))continue;
+        for(let i=0;i<3;i++)ratios[i].push(reference.rgb[i]*exposure.get(reference.frame)[i]/target.rgb[i]);
+      }
+      if(ratios[0].length<16)continue;
+      exposure.set(frame,ratios.map(a=>Math.max(.8,Math.min(1.25,median(a)))));added=true;
+    }
+    if(!added)break;
+  }
+  diagnostics.exposureBalancedFrames=exposure.size;
   for (let y = 0; y < textureHeight; y++) for (let x = 0; x < width; x++) {
     const gx = min[0] + (x + .5) / width * gw,
       gz = min[1] + (y + .5) / textureHeight * gh,
       cell = cells.get(key(Math.floor(gx), Math.floor(gz)));
     const uv = cell && projectColor(cell.frame, ...world(gx+(cell.textureOffset?.[0]||0), gz+(cell.textureOffset?.[1]||0)));
     const photographed = inView(uv) ? helpers.sampleColor(cell.frame, uv) : null;
-    const rgb = photographed || cell?.rgb || palette;
+    const rgb = (photographed || cell?.rgb || palette).map((v,i)=>Math.max(0,Math.min(255,v*(exposure.get(cell?.frame)?.[i] || 1))));
     texture.data.set([...rgb.map(v => Math.round(v)), 255], (y * width + x) * 4);
     detailMask[y * width + x] = cell?.detail ? 255 : 0;
   }
@@ -606,9 +628,9 @@ export function prepareScanCeiling(mesh, frames, helpers, removed, walls = [], o
 }
 
 // A broad recessed section has its own independently observed height. Give it
-// a separate photographed patch instead of flattening it into the lower rim or
-// treating the whole section as a fixture. The first footprint excludes every
-// overlapping cell; small isolated high objects cannot propose a second level.
+// a separate photographed background instead of flattening it into the lower
+// rim. Continue the raised background behind the lip: disjoint x/z masks at
+// different heights reopen cracks when the camera moves (parallax).
 export function prepareScanCeilings(mesh, frames, helpers, removed, walls = []) {
   const originallyRemoved = removed.slice();
   const first = prepareScanCeiling(mesh, frames, helpers, removed, walls);
@@ -644,13 +666,10 @@ export function prepareScanCeilings(mesh, frames, helpers, removed, walls = []) 
     if(ids.size>=3)nativeHeights.push(median(hits.filter(h=>ids.has(h.id)).map(h=>h.y)));
   }
   if(nativeHeights.length*CELL*CELL>=.08)height=median(nativeHeights);
-  const excludeCells = new Set(), s = first.surface, [min,max] = s.extent;
-  for (let z=min[1];z<max[1];z++) for(let x=min[0];x<max[0];x++)
-    if(s.footprint[(z-min[1])*(max[0]-min[0])+x-min[0]])excludeCells.add(key(x,z));
   // Both levels inspect the original ceiling, before a lower cutaway can
   // discard an upper source triangle. Only their final display ownership joins.
   const secondRemoved = originallyRemoved.slice();
-  const second = prepareScanCeiling(mesh,frames,helpers,secondRemoved,walls,{height,excludeCells,id:"prepared-ceiling-raised"});
+  const second = prepareScanCeiling(mesh,frames,helpers,secondRemoved,walls,{height,patch:true,id:"prepared-ceiling-raised"});
   if (second) {
     first.fragments = first.fragments.filter(f=>!secondRemoved[f.face]);
     for(let face=0;face<removed.length;face++)if(secondRemoved[face])removed[face]=1;

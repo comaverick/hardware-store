@@ -36,11 +36,15 @@ export function prepareFoldedPhotoPanel(wall, preserved, helpers) {
     for (const frame of frames) {
       const projections = points.map(q => helpers.projectColor(frame, ...q));
       if (projections.some(uv => !inView(uv))) continue;
-      const depthUV = helpers.project?.(frame, ...center);
-      if (!inView(depthUV)) continue;
-      const i = Math.floor(depthUV.v * frame.rows) * frame.columns + Math.floor(depthUV.u * frame.columns);
-      const d = (frame.originalFilteredDepth || frame.filteredDepth)?.[i];
-      if (!frame.measuredMask?.[i] || !(d > 0) || Math.abs(d - depthUV.depth) > .22) continue;
+      if (helpers.photoVisible) {
+        if (!helpers.photoVisible(frame, center, .14)) continue;
+      } else {
+        const depthUV = helpers.project?.(frame, ...center);
+        if (!inView(depthUV)) continue;
+        const i = Math.floor(depthUV.v * frame.rows) * frame.columns + Math.floor(depthUV.u * frame.columns);
+        const d = (frame.originalFilteredDepth || frame.filteredDepth)?.[i];
+        if (!frame.measuredMask?.[i] || !(d > 0) || Math.abs(d - depthUV.depth) > .22) continue;
+      }
       const camera = frame.viewTransformMatrix || frame.transformMatrix;
       if (camera?.length !== 16) continue;
       const ray = center.map((v, i) => camera[i + 12] - v), angle = dot(ray, wall.normal) / Math.hypot(...ray);

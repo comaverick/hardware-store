@@ -70,8 +70,10 @@ function CapturedSurface({ mesh, low, geometryOnly, applied, surfaces, design })
   const capturedWallProps = { finish: applied?.walls, map: resources.texture, reference: wallReference,
     vertexColors: true, observedSide: !!mesh.observedSideOriented, side: THREE.DoubleSide };
   const hasFloorFinish = !!applied?.floor;
-  const floorLighting = useMemo(() => hasFloorFinish ? createFloorLighting(mesh, surfaces) : null,
-    [hasFloorFinish, mesh, surfaces]);
+  const floorLighting = useMemo(() => hasFloorFinish ? design?.floor
+    ? createFloorLighting({ ...design.fragments, texture: mesh.texture },
+      { labels: design.fragments.finishLabels, floorAxes: surfaces.floorAxes })
+    : createFloorLighting(mesh, surfaces) : null, [hasFloorFinish, mesh, surfaces, design]);
   const finishGeometry = useMemo(() => hasFinishes || design
     ? createScanFinishGeometry(resources.geometry, mesh, surfaces || {
       labels: new Uint8Array(mesh.indices.length / 3), floorAxes: [[1, 0, 0], [0, 0, 1]],
@@ -86,9 +88,7 @@ function CapturedSurface({ mesh, low, geometryOnly, applied, surfaces, design })
   }, [fragments]);
   const fragmentFinishGeometry = useMemo(() => {
     if (!fragmentResources || !hasFinishes) return null;
-    // Adjoining floor/ceiling faces keep their finish ownership after their
-    // display edges move. Photographs still use the original atlas UV channel.
-    const labels = Uint8Array.from(fragments.sourceFaces, face => surfaces.labels[face]);
+    const labels = fragments.finishLabels;
     return createScanFinishGeometry(fragmentResources.geometry, fragments,
       { labels, floorAxes: surfaces.floorAxes }, null, floorLighting);
   }, [fragmentResources, fragments, hasFinishes, surfaces, floorLighting]);

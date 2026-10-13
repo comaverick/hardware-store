@@ -450,8 +450,9 @@ function encodeDesignSurfaces(mesh) {
     removedSourceFaces: encodeArray(design.removedSourceFaces, "u8"),
     fragments: { ...encodeGeometry(design.fragments), colors: encodeArray(design.fragments.colors, "u8"),
       sourceFaces: encodeArray(design.fragments.sourceFaces, "u32"),
+      finishLabels: encodeArray(design.fragments.finishLabels, "u8"),
       estimatedTriangleMask: encodeArray(design.fragments.estimatedTriangleMask, "u8") },
-    walls: design.walls.map(encodeSurface), ceilings: (design.ceilings || []).map(encodeSurface),
+    walls: design.walls.map(encodeSurface), ceilings: (design.ceilings || []).map(encodeSurface), floor: design.floor,
     diagnostics: design.diagnostics };
 }
 
@@ -464,6 +465,7 @@ function decodeDesignSurfaces(value, mesh) {
     const fragments = { ...decodeGeometry(value.fragments),
       colors: decodeArray(value.fragments.colors, "u8", "design fragment colors"),
       sourceFaces: decodeArray(value.fragments.sourceFaces, "u32", "design fragment sources"),
+      finishLabels: decodeArray(value.fragments.finishLabels, "u8", "design fragment finishes"),
       estimatedTriangleMask: decodeArray(value.fragments.estimatedTriangleMask, "u8", "design fragment estimates") };
     const decodeSurface = source => {
       const geometry = decodeGeometry(source);
@@ -484,7 +486,7 @@ function decodeDesignSurfaces(value, mesh) {
     const walls = value.walls.map(decodeSurface), ceilings = (value.ceilings || []).map(decodeSurface);
     const design = { version: SCAN_DESIGN_SURFACE_VERSION,
       sourceAlgorithmVersion: Number(value.sourceAlgorithmVersion) || SCAN_DESIGN_ALGORITHM_VERSION,
-      mode: "estimated-planar-design-surface", sourceKey: value.sourceKey, walls, ceilings, fragments,
+      mode: "estimated-planar-design-surface", sourceKey: value.sourceKey, walls, ceilings, fragments, floor: value.floor || null,
       removedSourceFaces: decodeArray(value.removedSourceFaces, "u8", "design replacements"),
       diagnostics: { walls: walls.length, area: walls.reduce((sum, wall) => sum + wall.area, 0),
         estimatedArea: walls.reduce((sum, wall) => sum + wall.estimatedArea, 0), measuredGeometryChanged: false } };

@@ -221,6 +221,11 @@ export function identifyScanSurfaces(scan) {
       counts.ceiling = design.ceilings.reduce((sum, ceiling) => sum + ceiling.indices.length / 3, 0);
       surfaceAreas.ceiling = design.ceilings.reduce((sum, ceiling) => sum + ceiling.area, 0);
     }
+    if (design.floor) {
+      for (let face = 0; face < labels.length; face++) if (labels[face] === 2) labels[face] = 0;
+      counts.floor = design.floor.triangleCount;
+      surfaceAreas.floor = design.floor.area;
+    }
   }
   for (let face = 0; face < faceCount; face++) {
     if (labels[face]) {
@@ -239,5 +244,6 @@ export function identifyScanSurfaces(scan) {
     [u, v].forEach((axis, index) => { const value = dot(axis, p); min[index] = Math.min(min[index], value); max[index] = Math.max(max[index], value); });
   }
   if (max[1] - min[1] > max[0] - min[0]) [u, v] = [v, u];
+  if (design?.floor) [u,v] = design.floor.axes;
   return { labels, counts, areas: surfaceAreas, floorAxes: [u, v] };
 }

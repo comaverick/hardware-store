@@ -31,6 +31,7 @@ export function alignFinishedScan(mesh, diagnostics, floorY = 0) {
       positions: translatedPositions(wall.positions, floorY) })),
     ceilings: (design.ceilings || []).map(ceiling => ({ ...translatedPlane(ceiling, floorY),
       positions: translatedPositions(ceiling.positions, floorY) })),
+    floor: design.floor ? translatedPlane(design.floor, floorY) : null,
     fragments: { ...design.fragments, positions: translatedPositions(design.fragments.positions, floorY) },
   };
   return { mesh: result, diagnostics: { ...diagnostics,
