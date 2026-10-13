@@ -9,7 +9,7 @@ import { floorFinishes, paintColors, sanitizeScanCustomization } from "../core/s
 function appliedFinishes(customization) {
   const applied = sanitizeScanCustomization(customization);
   const items = new Map();
-  for (const [surface, label] of [["walls", "Walls"], ["floor", "Floor"], ["ceiling", "Ceiling"]]) {
+  for (const [surface, label] of [["walls", "Walls"], ["floor", "Floor"]]) {
     const selection = applied?.[surface];
     if (!selection) continue;
     const key = surface === "floor" ? `floor:${selection.finishId}` : `paint:${selection.color}:${selection.finish}`;

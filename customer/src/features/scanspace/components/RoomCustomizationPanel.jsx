@@ -4,14 +4,12 @@ import {
   Check,
   GridFour,
   PaintRoller,
-  Rectangle,
 } from "@phosphor-icons/react";
 import { defaultFinishSelections, finishSelections, floorFinishes, paintColors, paintFinishes } from "../core/scanCustomization";
 
 const surfaces = [
   { id: "walls", label: "Walls", icon: PaintRoller },
   { id: "floor", label: "Flooring", icon: GridFour },
-  { id: "ceiling", label: "Ceiling", icon: Rectangle },
 ];
 export default function RoomCustomizationPanel({ customization, availability, onApply, onReset }) {
   const panelId = useId();
@@ -100,7 +98,7 @@ export default function RoomCustomizationPanel({ customization, availability, on
         tabIndex={0}
       >
         <div className="ss-customization-section-heading">
-          <h3>{surface === "floor" ? "Floor finishes" : surface === "walls" ? "Wall paint" : "Ceiling paint"}</h3>
+          <h3>{surface === "floor" ? "Floor finishes" : "Wall paint"}</h3>
           <p>Store finishes</p>
         </div>
         {surface === "floor" ? (
@@ -139,7 +137,7 @@ export default function RoomCustomizationPanel({ customization, availability, on
           </>
         ) : (
           <>
-            <div className="ss-paint-swatches" role="group" aria-label={`${surface === "walls" ? "Wall" : "Ceiling"} paint colors`}>
+            <div className="ss-paint-swatches" role="group" aria-label="Wall paint colors">
               {paintColors.map(choice => (
                 <button
                   key={choice.color}
@@ -188,7 +186,7 @@ export default function RoomCustomizationPanel({ customization, availability, on
           aria-describedby={`${panelId}-availability`}
           onClick={() => {
             onApply(surface, selections[surface]);
-            setNotice(`${surface === "walls" ? "Wall paint" : surface === "floor" ? "Flooring" : "Ceiling paint"} applied to your room.`);
+            setNotice(`${surface === "walls" ? "Wall paint" : "Flooring"} applied to your room.`);
           }}>
           <PaintRoller size={18} aria-hidden="true" />
           Apply to room

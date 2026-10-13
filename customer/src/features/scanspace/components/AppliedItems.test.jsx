@@ -89,11 +89,12 @@ test("Add selected adds only checked products, with quantities, prices, and imag
   } });
 });
 
-test("Add all includes unchecked items and combines identical wall and ceiling paint", async () => {
+test("Add all includes unchecked items and ignores saved ceiling paint", async () => {
   renderItems({ ...paintAndFloor, ceiling: { ...paintAndFloor.walls } });
   await screen.findByRole("link", { name: products[2].name });
   expect(screen.getAllByRole("spinbutton")).toHaveLength(2);
-  expect(screen.getByText("Walls · Ceiling · 4 L can")).toBeInTheDocument();
+  expect(screen.getByText("Walls · 4 L can")).toBeInTheDocument();
+  expect(screen.queryByText(/Ceiling/)).not.toBeInTheDocument();
   fireEvent.change(screen.getByRole("spinbutton", { name: `Quantity for ${products[2].name}` }), { target: { value: "3" } });
   fireEvent.change(screen.getByRole("spinbutton", { name: `Quantity for ${products[4].name}` }), { target: { value: "4" } });
   fireEvent.click(screen.getByRole("checkbox", { name: `Select ${products[4].name}` }));

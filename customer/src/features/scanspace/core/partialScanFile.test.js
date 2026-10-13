@@ -152,7 +152,7 @@ test.each([measuredScan, rawScan])("scan and design exports restore applied fini
   scan.customization = { version: 1, walls: { color: "#a0afa4", finish: "Satin" },
     floor: { finishId: "stone", direction: "crosswise" }, ceiling: { color: "#ffffff", finish: "Matte" } };
   const restored = parsePartialScan(serializePartialScan(scan));
-  expect(restored.customization).toEqual(scan.customization);
+  expect(restored.customization).toEqual({ version: 1, walls: scan.customization.walls, floor: scan.customization.floor });
   if (scan.rawCapture) expect(restored.rawCapture.keyframes[0].positions).toEqual(scan.rawCapture.keyframes[0].positions);
   else expect(restored.mesh.positions).toEqual(scan.mesh.positions);
 });

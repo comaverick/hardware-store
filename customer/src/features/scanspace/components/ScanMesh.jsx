@@ -52,9 +52,9 @@ function FloorFinish({ material, lighting, observedSide, attach, captured }) {
 function CapturedMaterial({ mesh, resources, sided, low, attach }) {
   return resources.texture ? (
     <meshBasicMaterial {...sided} attach={attach} vertexColors map={resources.texture}
-      side={THREE.DoubleSide} toneMapped={false} />
+      side={sided.side ?? THREE.DoubleSide} toneMapped={false} />
   ) : mesh.portableColors ? (
-    <meshBasicMaterial {...sided} attach={attach} vertexColors side={THREE.DoubleSide} toneMapped={false} />
+    <meshBasicMaterial {...sided} attach={attach} vertexColors side={sided.side ?? THREE.DoubleSide} toneMapped={false} />
   ) : (
     <meshStandardMaterial {...sided} attach={attach} vertexColors side={THREE.DoubleSide}
       roughness={0.92} metalness={0} flatShading={low} />
@@ -96,6 +96,9 @@ function CapturedSurface({ mesh, low, geometryOnly, applied, surfaces, design })
   const floorMaterial = useFloorFinishMaterial(finishId, direction);
   const sided = mesh.observedSideOriented ? {
     onBeforeCompile: shadeUnobservedBacks, customProgramCacheKey: observedSideProgramKey,
+    // Prepared surfaces provide the room background. Unobserved backs of
+    // curled capture sheets should not cover it with gray-green silhouettes.
+    side: design ? THREE.FrontSide : THREE.DoubleSide,
   } : {};
   const floorProps = { material: floorMaterial, lighting: floorLighting,
     observedSide: !!mesh.observedSideOriented, captured: { mesh, resources, sided, low } };
@@ -120,13 +123,11 @@ function CapturedSurface({ mesh, low, geometryOnly, applied, surfaces, design })
       ) : hasFinishes ? (
         <>
           <CapturedMaterial key="captured-group" attach="material-0" {...{ mesh, resources, sided, low }} />
-          {[[1, "walls"], [2, "floor"], [3, "ceiling"]].map(([index, kind]) =>
+          {[[1, "walls"], [2, "floor"]].map(([index, kind]) =>
             applied[kind] ? kind === "walls" ? <WallPaint key={kind} attach={`material-${index}`} {...capturedWallProps} />
-              : kind === "floor" ? <FloorFinish key={kind} attach={`material-${index}`} {...floorProps} /> : (
-              <meshStandardMaterial key={kind} {...sided} attach={`material-${index}`}
-                color={applied[kind].color} roughness={paintRoughness(applied[kind].finish)}
-                metalness={0} side={THREE.DoubleSide} />
-            ) : <CapturedMaterial key={kind} attach={`material-${index}`} {...{ mesh, resources, sided, low }} />)}
+              : <FloorFinish key={kind} attach={`material-${index}`} {...floorProps} />
+              : <CapturedMaterial key={kind} attach={`material-${index}`} {...{ mesh, resources, sided, low }} />)}
+          <CapturedMaterial key="ceiling" attach="material-3" {...{ mesh, resources, sided, low }} />
         </>
       ) : (
         <CapturedMaterial key="captured-single" {...{ mesh, resources, sided, low }} />
@@ -138,13 +139,11 @@ function CapturedSurface({ mesh, low, geometryOnly, applied, surfaces, design })
     <mesh geometry={fragmentFinishGeometry || fragmentResources.geometry} frustumCulled={false} name="captured-boundary-details">
       {hasFinishes ? <>
         <CapturedMaterial key="details" attach="material-0" {...{ mesh, resources, sided, low }} />
-        {[[1, "walls"], [2, "floor"], [3, "ceiling"]].map(([index, kind]) => applied[kind]
+        {[[1, "walls"], [2, "floor"]].map(([index, kind]) => applied[kind]
           ? kind === "walls" ? <WallPaint key={kind} attach={`material-${index}`} {...capturedWallProps} />
-          : kind === "floor" ? <FloorFinish key={kind} attach={`material-${index}`} {...floorProps} />
-          : <meshStandardMaterial key={kind} {...sided} attach={`material-${index}`}
-            color={applied[kind].color} roughness={paintRoughness(applied[kind].finish)}
-            metalness={0} side={THREE.DoubleSide} />
+          : <FloorFinish key={kind} attach={`material-${index}`} {...floorProps} />
           : <CapturedMaterial key={kind} attach={`material-${index}`} {...{ mesh, resources, sided, low }} />)}
+        <CapturedMaterial key="ceiling" attach="material-3" {...{ mesh, resources, sided, low }} />
       </> : <CapturedMaterial key="details-single" {...{ mesh, resources, sided, low }} />}
     </mesh>
   </group> : primary;
@@ -190,6 +189,6 @@ export default function ScanMesh({ mesh, low = false, geometryOnly = false, cust
   return design && !geometryOnly ? <group name="prepared-room">
     {captured}
     {design.walls.map(wall => <DesignWall key={wall.id} wall={wall} finish={applied?.walls} />)}
-    {(design.ceilings || []).map(wall => <DesignWall key={wall.id} wall={wall} kind="ceiling" finish={applied?.ceiling} />)}
+    {(design.ceilings || []).map(wall => <DesignWall key={wall.id} wall={wall} kind="ceiling" />)}
   </group> : captured;
 }

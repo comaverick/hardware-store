@@ -2,7 +2,7 @@ import { MAX_SCAN_ARRAY_BYTES, MAX_SCAN_MESH_BYTES } from "./textureDetail.js";
 import { sanitizeCaptureDiagnostics } from "./captureExperience.js";
 import { sanitizeScanCustomization } from "./scanCustomization.js";
 import { getScanDesignSurfaces, validScanDesignSurfaces, scanDesignByteLength,
-  SCAN_DESIGN_SURFACE_VERSION, SCAN_DESIGN_ALGORITHM_VERSION } from "./scanDesignSurfaces.js";
+  SCAN_DESIGN_SURFACE_VERSION, SCAN_DESIGN_ALGORITHM_VERSION, MAX_SCAN_CEILINGS } from "./scanDesignSurfaces.js";
 
 export const SCAN_FILE_FORMAT = "scanspace-scan";
 // Kept so exports created before the unified scan UI continue to open.
@@ -457,7 +457,7 @@ function encodeDesignSurfaces(mesh) {
 
 function decodeDesignSurfaces(value, mesh) {
   if (value?.version !== SCAN_DESIGN_SURFACE_VERSION || !Array.isArray(value.walls) || value.walls.length > 8 ||
-    (value.ceilings !== undefined && (!Array.isArray(value.ceilings) || value.ceilings.length > 1))) return null;
+    (value.ceilings !== undefined && (!Array.isArray(value.ceilings) || value.ceilings.length > MAX_SCAN_CEILINGS))) return null;
   try {
     const decodeGeometry = source => Object.fromEntries(DESIGN_GEOMETRY_ARRAYS.map(([name, type]) =>
       [name, decodeArray(source[name], type, `design ${name}`)]));

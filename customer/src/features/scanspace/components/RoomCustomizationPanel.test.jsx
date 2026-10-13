@@ -4,6 +4,7 @@ import RoomCustomizationPanel from "./RoomCustomizationPanel";
 test("finish choices stay separate from applying and shopping", () => {
   const onApply = jest.fn();
   const { container } = render(<RoomCustomizationPanel availability={{ walls: 1, floor: 1, ceiling: 1 }} onApply={onApply} />);
+  expect(screen.getAllByRole("tab").map(tab => tab.textContent)).toEqual(["Walls", "Flooring"]);
   expect(container.querySelector('input[type="color"]')).toBeNull();
   expect(screen.queryByText("Custom color")).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /Add/ })).not.toBeInTheDocument();

@@ -4,9 +4,10 @@ test("imported finishes accept only supported colors, sheen, flooring and direct
   expect(sanitizeScanCustomization({ version: 1,
     walls: { color: "#A0AFA4", finish: "Satin", arbitrary: true },
     floor: { finishId: "unknown", direction: "crosswise" },
-    ceiling: { color: "bad", finish: "Matte" },
+    ceiling: { color: "#ffffff", finish: "Matte" },
   })).toEqual({ version: 1, walls: { color: "#a0afa4", finish: "Satin" } });
   expect(sanitizeScanCustomization({ version: 2, floor: { finishId: "oak", direction: "lengthwise" } })).toBeNull();
+  expect(sanitizeScanCustomization({ version: 1, ceiling: { color: "#ffffff", finish: "Matte" } })).toBeNull();
 });
 
 test("saved choices restore without pre-applying defaults to other surfaces", () => {

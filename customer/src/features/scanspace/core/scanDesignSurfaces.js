@@ -1,13 +1,15 @@
 import { independentFrameIds, structuralSupportAt } from "./structuralDepth";
 import { classifyWallPhotoDetails, wallPhotoTextureDetail } from "./scanWallPhotoDetails";
-import { prepareScanCeiling } from "./scanCeilingPreparation";
+import { prepareScanCeilings } from "./scanCeilingPreparation";
 import { prepareFoldedPhotoPanel } from "./scanPhotoPanelPreparation";
+import { repairFloorPhotos } from "./scanFloorPhotoRepair";
 
 // An editable surface is an approximation of the room envelope. It never
 // replaces the measured mesh or supplies new measured area/depth to capture.
 export const SCAN_DESIGN_SURFACE_VERSION = 2;
-export const SCAN_DESIGN_ALGORITHM_VERSION = 60;
+export const SCAN_DESIGN_ALGORITHM_VERSION = 61;
 export const MAX_SCAN_DESIGN_BYTES = 8 * 1024 * 1024;
+export const MAX_SCAN_CEILINGS = 2;
 const MAX_CELLS = 24000;
 const MAX_WALLS = 8;
 const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
@@ -55,7 +57,7 @@ export function validScanDesignSurfaces(design, mesh) {
   if (design?.version !== SCAN_DESIGN_SURFACE_VERSION || design.sourceAlgorithmVersion !== SCAN_DESIGN_ALGORITHM_VERSION ||
       design.sourceKey !== scanDesignSourceKey(mesh) ||
       !Array.isArray(design.walls) || design.walls.length > MAX_WALLS ||
-      (design.ceilings !== undefined && (!Array.isArray(design.ceilings) || design.ceilings.length > 1)) ||
+      (design.ceilings !== undefined && (!Array.isArray(design.ceilings) || design.ceilings.length > MAX_SCAN_CEILINGS)) ||
       !(design.walls.length || design.ceilings?.length) ||
       !(design.removedSourceFaces instanceof Uint8Array) ||
       design.removedSourceFaces.length !== mesh.indices.length / 3 || design.removedSourceFaces.some(x => x > 1) ||
@@ -993,8 +995,8 @@ export function buildScanDesignSurfaces(mesh, planes, frames = [], helpers = {},
   // Ceiling ownership is established on the complete captured mesh, before
   // wall clipping turns its bent upper triangles into retained fragments.
   const ceilingRemoved = new Uint8Array(removed.length);
-  const ceiling = prepareScanCeiling(mesh, frames, helpers, ceilingRemoved, built.map(p => p.wall));
-  const ceilings = [ceiling].filter(Boolean);
+  const ceilings = prepareScanCeilings(mesh, frames, helpers, ceilingRemoved, built.map(p => p.wall));
+  const ceiling = ceilings[0];
   const owners = new Uint8Array(removed.length), clippedEdges = [];
   const fragments = { positions: [], normals: [], colors: [], uvs: [], indices: [], sourceFaces: [], estimatedTriangleMask: [] };
   for (const surface of built) for (const { face, points, extended } of surface.candidates) {
@@ -1059,6 +1061,7 @@ export function buildScanDesignSurfaces(mesh, planes, frames = [], helpers = {},
     }
   }
   for (let face = 0; face < removed.length; face++) if (ceilingRemoved[face]) removed[face] = 1;
+  const floorPhotoRepair = repairFloorPhotos(mesh, planes, helpers, fragments, removed);
   if (!built.length && !ceiling) return null;
   const design = { version: SCAN_DESIGN_SURFACE_VERSION, mode: "estimated-planar-design-surface", sourceAlgorithmVersion: SCAN_DESIGN_ALGORITHM_VERSION,
     sourceKey: scanDesignSourceKey(mesh), removedSourceFaces: removed, walls: built.map(p => p.wall),
@@ -1072,8 +1075,9 @@ export function buildScanDesignSurfaces(mesh, planes, frames = [], helpers = {},
       preservedFoldedPhotoArea: built.reduce((sum, p) => sum + p.preserved.size * cell * cell, 0),
       repairedPhotoPanelArea,
       removedTriangles: removed.reduce((sum, x) => sum + x, 0), fragmentTriangles: fragments.indices.length / 3,
-      ...boundaryRepair, ...backgroundCleanup,
+      ...boundaryRepair, ...backgroundCleanup, ...floorPhotoRepair,
       ceiling: ceiling?.diagnostics || null,
+      ceilingLevels: ceilings.map(c=>c.diagnostics),
       wallPlacement: built.map(({ wall }) => ({ id: wall.id, setbackMeters: wall.setbackMeters })),
       cellSize: cell, measuredGeometryChanged: false } };
   // Extra detail must not discard the entire preparation on a large scan.

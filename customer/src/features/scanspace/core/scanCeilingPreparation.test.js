@@ -196,6 +196,16 @@ test("the local ceiling cutaway interpolates photographed boundaries without cli
   expect(prepareScanCeiling(other.mesh, other.frames, other.helpers, protectedFaces)).not.toBeNull();
   expect(protectedFaces[stable]).toBe(0);
 });
+
+test("a ceiling silhouette cannot cut a source face where the replacement has no photograph", () => {
+  const { mesh, frames, helpers } = fixture(), fin = addFin(mesh, .52, .52);
+  helpers.sampleColor = (f, uv) => uv.u > .4 && uv.u < .6 && uv.v > .4 && uv.v < .6 ? null : [180, 178, 170];
+  const removed = new Uint8Array(mesh.indices.length / 3);
+  const result = prepareScanCeiling(mesh, frames, helpers, removed);
+  expect(result).not.toBeNull();
+  expect(removed[fin]).toBe(0);
+  expect(result.fragments.some(f => f.face === fin)).toBe(false);
+});
 test("independently observed free space cannot be filled by a ceiling color match", () => {
   const {
     mesh,
@@ -224,8 +234,72 @@ test('an enclosed missing mesh patch uses two translated photos while exterior g
   const index=(x,z)=>(z-min[1])*(max[0]-min[0])+x-min[0];
   expect(s.footprint[index(15,15)]).toBe(2);
   expect(s.positions.every(Number.isFinite)).toBe(true);
-  // A camera rotation without translation cannot provide a second photo vote.
+  // A camera rotation without translation cannot provide a second photo vote
+  // or a native three-view witness for the single-photo fallback.
   for(const f of frames)f.viewTransformMatrix=frames[0].transformMatrix.slice();
+  for (const f of frames.slice(1)) for (let z=12;z<18;z++) for(let x=12;x<18;x++) f.measuredMask[z*30+x]=0;
   const stationary=prepareScanCeiling(mesh,frames,helpers,new Uint8Array(mesh.indices.length/3));
   expect(stationary.surface.footprint[index(15,15)]).toBe(0);
+});
+
+test("three native ceiling observations can texture a meshing gap from one visible photograph", () => {
+  const { mesh, frames, helpers } = fixture({ opening: true });
+  frames[1].colorImage = null;
+  frames[2].colorImage = null;
+  const result = prepareScanCeiling(mesh, frames, helpers, new Uint8Array(mesh.indices.length / 3));
+  expect(result.diagnostics.nativePhotoGapCells).toBeGreaterThanOrEqual(36);
+  const s = result.surface, [min, max] = s.extent;
+  expect(s.footprint[(15 - min[1]) * (max[0] - min[0]) + 15 - min[0]]).toBe(2);
+  // The same color cannot bridge a fixture that is below the ceiling.
+  for (const f of frames) for (let z = 12; z < 18; z++) for (let x = 12; x < 18; x++) f.filteredDepth[z * 30 + x] = 1.25;
+  const hidden = prepareScanCeiling(mesh, frames, helpers, new Uint8Array(mesh.indices.length / 3));
+  expect(hidden.surface.footprint[(15 - min[1]) * (max[0] - min[0]) + 15 - min[0]]).toBe(0);
+});
+
+test("an RGB-only color pose uses native ceiling witnesses when its borrowed depth view looks elsewhere", () => {
+  const { mesh, frames, helpers } = fixture({ opening: true });
+  const photo = { ...frames[0], frameId: 20, textureOnly: true };
+  frames.forEach(f=>{f.colorImage=null;});
+  const project=helpers.project;
+  helpers.projectColor=project;
+  helpers.project=(f,...p)=>f.textureOnly?null:project(f,...p);
+  helpers.textureFrames=[photo];
+  const result=prepareScanCeiling(mesh,frames,helpers,new Uint8Array(mesh.indices.length/3));
+  expect(result.diagnostics.nativePhotoGapCells).toBeGreaterThanOrEqual(36);
+  expect(result.surface.area).toBeGreaterThan(1);
+  // A dark fixture in that photograph still cannot become plain ceiling.
+  helpers.sampleColor=(f,uv)=>uv.u>.4&&uv.u<.6&&uv.v>.4&&uv.v<.6?[15,15,15]:[180,178,170];
+  const protectedResult=prepareScanCeiling(mesh,frames,helpers,new Uint8Array(mesh.indices.length/3));
+  const s=protectedResult.surface,[min,max]=s.extent;
+  expect(s.footprint[(15-min[1])*(max[0]-min[0])+15-min[0]]).toBe(0);
+});
+
+test("a broad raised ceiling section keeps a separate height and survives portable export", () => {
+  const { mesh, frames, helpers } = fixture();
+  const originalCount = mesh.positions.length / 3;
+  const raised = mesh.positions.slice();
+  for (let i=0;i<raised.length;i+=3) { raised[i]+=1.2;raised[i+1]+=.28; }
+  mesh.positions = new Float32Array([...mesh.positions,...raised]);
+  mesh.normals = new Float32Array([...mesh.normals,...mesh.normals]);
+  mesh.colors = new Uint8Array([...mesh.colors,...mesh.colors]);
+  mesh.indices = new Uint32Array([...mesh.indices,...Array.from(mesh.indices,i=>i+originalCount)]);
+  mesh.bounds.max.x=2.4;mesh.bounds.max.y=3;
+  for(const f of frames){
+    f.columns=60;f.filteredDepth=new Float32Array(1800);f.measuredMask=new Uint8Array(1800).fill(1);
+    for(let y=0;y<30;y++)for(let x=0;x<60;x++)f.filteredDepth[y*60+x]=x<30?1.6:1.88;
+  }
+  helpers.project=(f,x,y,z)=>({u:x/2.4,v:z/1.2,depth:y-1});
+  helpers.unproject=(f,i,d)=>[(i%60+.5)*.04,1+d,(Math.floor(i/60)+.5)*.04];
+  const original=mesh.positions.slice(), design=buildScanDesignSurfaces(mesh,[],frames,helpers);
+  expect(design.ceilings).toHaveLength(2);
+  expect(Math.abs(design.ceilings[0].offset-design.ceilings[1].offset)).toBeGreaterThan(.2);
+  const first=design.ceilings[0],second=design.ceilings[1];
+  const occupied=s=>new Set(Array.from(s.footprint,(v,i)=>v?`${i%(s.extent[1][0]-s.extent[0][0])+s.extent[0][0]},${Math.floor(i/(s.extent[1][0]-s.extent[0][0]))+s.extent[0][1]}`:null).filter(Boolean));
+  const cells=occupied(first);
+  expect([...occupied(second)].some(k=>cells.has(k))).toBe(false);
+  expect(mesh.positions).toEqual(original);
+  mesh.designSurfaces=design;
+  const restored=parsePartialScan(serializePartialScan({mesh})).mesh;
+  expect(restored.designSurfaces.ceilings).toHaveLength(2);
+  expect(restored.designSurfaces.ceilings.map(s=>s.positions)).toEqual(design.ceilings.map(s=>s.positions));
 });

@@ -64,8 +64,8 @@ test("applied finishes attach to mesh groups and survive inspection and reset", 
     expect(floorLighting.colorSpace).toBe(THREE.NoColorSpace);
     expect(rendered.material[2].toneMapped).toBe(false);
     const lightingUv = rendered.geometry.attributes.uv2.array;
-    expect(rendered.material[3].color.getHexString()).toBe("e5d3a4");
-    expect(rendered.material[3].roughness).toBe(.78);
+    expect(rendered.material[3].isMeshBasicMaterial).toBe(true);
+    expect(rendered.material[3].vertexColors).toBe(true);
     const repainted = { ...design, walls: { color: "#d9b09a", finish: "Matte" } };
     rendered = await update(repainted);
     expect(rendered.material[1].color.getHexString()).toBe("d9b09a");
@@ -205,12 +205,12 @@ test("paint and reset use the prepared wall while Geometry retains the measured 
   }
 });
 
-test("prepared ceilings accept finishes while Geometry keeps the complete captured mesh", async () => {
+test("saved ceiling finishes are ignored while Geometry keeps the complete captured mesh", async () => {
   const mesh = {
     positions: new Float32Array([0, 2.6, 0, 1.2, 2.6, 0, 1.2, 2.6, 1.2, 0, 2.6, 1.2]),
     normals: new Float32Array([0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0]),
     colors: new Uint8Array(12).fill(180), indices: new Uint32Array([0, 1, 2, 0, 2, 3]),
-    floorY: 0, portableColors: true,
+    floorY: 0, portableColors: true, observedSideOriented: true,
   };
   const frames = [0, 1, 2].map(frameId => ({
     frameId, camera: [frameId * .12, 1, .6],
@@ -239,12 +239,17 @@ test("prepared ceilings accept finishes while Geometry keeps the complete captur
     expect(ceiling.material.map).not.toBeNull();
     expect(ceiling.material.side).toBe(THREE.FrontSide);
     expect(scene.getObjectByName("prepared-ceiling-back")).toBeUndefined();
+    const captured = scene.children[0].children[0];
+    expect((captured.isMesh ? captured : captured.children[0]).material.side).toBe(THREE.FrontSide);
+    const capturedMap = ceiling.material.map;
     scene = await update({ version: 1, ceiling: { color: "#e5d3a4", finish: "Eggshell" } });
-    expect(scene.getObjectByName("prepared-ceiling").material.color.getHexString()).toBe("e5d3a4");
+    expect(scene.getObjectByName("prepared-ceiling").material.isMeshBasicMaterial).toBe(true);
+    expect(scene.getObjectByName("prepared-ceiling").material.map).toBe(capturedMap);
     scene = await update(null, true);
     expect(scene.getObjectByName("prepared-ceiling")).toBeUndefined();
     expect(scene.children[0].geometry.attributes.position.array).toBe(mesh.positions);
     expect(scene.children[0].material.clippingPlanes).toBeNull();
+    expect(scene.children[0].material.side).toBe(THREE.DoubleSide);
   } finally {
     await act(async () => root.unmount());
     global.IS_REACT_ACT_ENVIRONMENT = previous;
