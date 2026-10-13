@@ -396,6 +396,19 @@ export function identifyScanSurfaces(scan) {
     [u, v].forEach((axis, index) => { const value = dot(axis, p); min[index] = Math.min(min[index], value); max[index] = Math.max(max[index], value); });
   }
   if (max[1] - min[1] > max[0] - min[0]) [u, v] = [v, u];
-  if (design?.floor) [u,v] = design.floor.axes;
+  if (design?.floor) {
+    [u,v] = design.floor.axes;
+    const reference=design.walls.slice().sort((a,b)=>b.area-a.area)[0];
+    if(reference) {
+      const normal=design.floor.normal,along=[reference.normal[2],0,-reference.normal[0]];
+      let aligned=unit(along.map((value,i)=>value-normal[i]*dot(along,normal)));
+      const across=unit([normal[1]*aligned[2]-normal[2]*aligned[1],normal[2]*aligned[0]-normal[0]*aligned[2],normal[0]*aligned[1]-normal[1]*aligned[0]]);
+      if(Math.abs(dot(across,u))>Math.abs(dot(aligned,u)))aligned=across;
+      if(dot(aligned,u)<0)aligned=aligned.map(value=>-value);
+      const second=unit([normal[1]*aligned[2]-normal[2]*aligned[1],normal[2]*aligned[0]-normal[0]*aligned[2],normal[0]*aligned[1]-normal[1]*aligned[0]]);
+      if(dot(second,v)<0)second.forEach((value,i)=>{second[i]=-value;});
+      [u,v]=[aligned,second];
+    }
+  }
   return { labels, counts, areas: surfaceAreas, floorAxes: [u, v] };
 }

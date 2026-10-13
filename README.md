@@ -6,6 +6,8 @@ Receipt and printer configuration controls are available only to Super Admins an
 
 Run `npm test -- --watch=false --runInBand` for frontend checks, `python -m unittest discover -s server/test -p test_receipt_settings.py` for thermal receipt formatting checks, and `npm run build` for the production build.
 
+Run the receipt print service on the Windows computer connected to the GEZHI USB printer with `py -3.11 server/printer_server.py`. Install `pywin32` with `py -3.11 -m pip install pywin32` if needed. The service allows the staff app on `localhost:3000` or `localhost:3001` (and their `127.0.0.1` equivalents), plus the production staff URL. Set `PRINTER_ALLOWED_ORIGINS` to a comma-separated list to override these origins. When there is one GEZHI queue, the service selects it automatically rather than the office printer default; administrators can choose another queue in Receipts & printing. USB status reads Windows' current device list directly so simultaneous status and print requests do not start overlapping PowerShell processes. Restart the print service after updating it. Run `py -3.11 -m unittest discover -s server/test -p "test_*.py"` for printer connection, HTTP, and receipt formatting checks.
+
 # Getting Started with Create React App
 
 This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).

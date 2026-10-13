@@ -71,6 +71,21 @@ test("a prepared floor leaves an uncovered native rim editable and counts each v
   expect(scan.mesh.positions).toEqual(originalPositions);
 });
 
+test('floor finish axes follow the main room wall while staying on the tilted floor',()=>{
+  const scan=withPreparedFloor(roomScan()),angle=.23,n=[-.02,Math.sqrt(1-.02**2-.04**2),-.04];
+  scan.mesh.designSurfaces.floor.normal=n;
+  scan.mesh.designSurfaces.walls=[{normal:[-Math.sin(angle),0,Math.cos(angle)],area:4,indices:new Uint32Array()}];
+  const before=scan.mesh.positions.slice(),axes=identifyScanSurfaces(scan).floorAxes;
+  const dot=(a,b)=>a.reduce((sum,v,i)=>sum+v*b[i],0);
+  for(const axis of axes) {
+    expect(Math.hypot(...axis)).toBeCloseTo(1,7);
+    expect(dot(axis,n)).toBeCloseTo(0,7);
+  }
+  expect(dot(axes[0],axes[1])).toBeCloseTo(0,7);
+  expect(Math.atan2(axes[0][2],axes[0][0])).toBeCloseTo(angle,2);
+  expect(scan.mesh.positions).toEqual(before);
+});
+
 test("prepared floor ownership rejects upright trim, bent curtain geometry and raised noisy sheets", () => {
   const positions = new Float32Array([
     .2, 0, .2, .4, 0, .2, .4, 0, .4, // genuine floor

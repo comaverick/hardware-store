@@ -7,12 +7,13 @@ import { prepareScanFloor } from "./scanFloorPreparation";
 import { createScanPhotoVisibility } from "./scanPhotoVisibility";
 import { repairCapturedCeilingPhotos } from "./scanCapturedPhotoRepair";
 import { compactTexturedMesh } from "./compactTexturedMesh";
+import { cleanPreparedWallPlaceholders } from "./scanWallPlaceholderCleanup";
 import { protectFoldedPanelJunctions, foldedPanelWallBorders } from "./scanPhotoPanels";
 
 // An editable surface is an approximation of the room envelope. It never
 // replaces the measured mesh or supplies new measured area/depth to capture.
 export const SCAN_DESIGN_SURFACE_VERSION = 2;
-export const SCAN_DESIGN_ALGORITHM_VERSION = 64;
+export const SCAN_DESIGN_ALGORITHM_VERSION = 66;
 export const MAX_SCAN_DESIGN_BYTES = 8 * 1024 * 1024;
 export const MAX_SCAN_CEILINGS = 2;
 const MAX_CELLS = 24000;
@@ -1132,6 +1133,9 @@ export function buildScanDesignSurfaces(mesh, planes, frames = [], helpers = {},
       ceilingLevels: ceilings.map(c=>c.diagnostics),
       wallPlacement: built.map(({ wall }) => ({ id: wall.id, setbackMeters: wall.setbackMeters })),
       cellSize: cell, measuredGeometryChanged: false } };
+  Object.assign(design.diagnostics,cleanPreparedWallPlaceholders(mesh,design));
+  design.diagnostics.removedTriangles=removed.reduce((sum,x)=>sum+x,0);
+  design.diagnostics.fragmentTriangles=design.fragments.indices.length/3;
   // Extra detail must not discard the entire preparation on a large scan.
   // Scale only its photographs to fit the existing phone/portable budget;
   // geometry, footprint, ownership and photo UVs remain identical.

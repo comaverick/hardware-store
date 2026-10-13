@@ -108,6 +108,21 @@ test('wood skirting is protected upright on the wall without protecting higher s
   expect(wall.detailMask[at(.3)]).toBe(0);
 });
 
+test('the repaired photo strip has a constant translation rather than repeating cables tile by tile',()=>{
+  const {mesh,floor,helpers}=fixture(),wall=trimWall();
+  helpers.sampleColor=(f,uv)=>uv.v<.13?[30,25,20]:[200,190,170];
+  const fragments={positions:[],normals:[],colors:[],uvs:[],indices:[],sourceFaces:[],estimatedTriangleMask:[],finishLabels:[]};
+  prepareScanFloor(mesh,[floor],helpers,fragments,new Uint8Array(mesh.indices.length/3),[wall]);
+  const shifts=[];
+  for(let id=0;id<fragments.positions.length/3;id++) {
+    const x=fragments.positions[id*3],z=fragments.positions[id*3+2];
+    if(x>.3 && x<.7 && z>.04 && z<.2)shifts.push((1-fragments.uvs[id*2+1])*1.2-z);
+  }
+  expect(shifts.length).toBeGreaterThan(20);
+  expect(Math.max(...shifts)-Math.min(...shifts)).toBeLessThan(1e-6);
+  expect(shifts[0]).toBeCloseTo(.4,6);
+});
+
 test('a captured floor fragment beyond the prepared footprint keeps floor ownership and area',()=>{
   const {mesh,floor,helpers}=fixture();
   const fragments={positions:[-.05,-.25,.4,.01,-.25,.4,.01,-.25,.5],normals:[0,1,0,0,1,0,0,1,0],

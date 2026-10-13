@@ -213,7 +213,6 @@ const POS = () => {
 
       setSelectedPrinter(data.selectedPrinter || data.defaultPrinter || "");
 
-      setPrinterOnline(true);
     } catch (error) {
       console.error("Printer detection error:", error);
 
@@ -243,7 +242,7 @@ const POS = () => {
 
       const data = await response.json();
 
-      setPrinterOnline(data.online === true);
+      setPrinterOnline(data.success === true && data.online === true);
 
       if (data.printer) {
         setSelectedPrinter(data.printer);
@@ -259,21 +258,24 @@ const POS = () => {
     }
   };
 
-  // Check printer every 5 seconds
+  // Wait for each status check before scheduling the next one.
   useEffect(() => {
     let mounted = true;
+    let nextCheck;
+    const controller = new AbortController();
 
     const checkStatus = async () => {
       try {
         const response = await printerFetch("/status", {
           cache: "no-store",
+          signal: controller.signal,
         });
 
         const data = await response.json();
 
         if (!mounted) return;
 
-        if (response.ok && data.online === true) {
+        if (response.ok && data.success === true && data.online === true) {
           setPrinterOnline(true);
 
           if (data.printer) {
@@ -286,18 +288,18 @@ const POS = () => {
         if (!mounted) return;
 
         setPrinterOnline(false);
+      } finally {
+        if (mounted) nextCheck = setTimeout(checkStatus, 2000);
       }
     };
 
     // Check immediately
     checkStatus();
 
-    // Then check every 2 seconds
-    const interval = setInterval(checkStatus, 2000);
-
     return () => {
       mounted = false;
-      clearInterval(interval);
+      clearTimeout(nextCheck);
+      controller.abort();
     };
   }, []);
 
@@ -327,7 +329,7 @@ const POS = () => {
       }
 
       setSelectedPrinter(printer);
-      setPrinterOnline(true);
+      setPrinterOnline(data.online === true);
 
       message.success(`Printer selected: ${printer}`);
     } catch (error) {

@@ -1,7 +1,8 @@
+import ctypes
 import json
 import os
 import platform
-import subprocess
+from ctypes import wintypes
 try:
     import win32print
 except ImportError:
@@ -18,6 +19,11 @@ PORT = int(os.environ.get("PORT", "5100"))
 
 GEZHI_VID = "28E9"
 GEZHI_PID = "0289"
+
+CM_GETIDLIST_FILTER_ENUMERATOR = 0x00000001
+CM_GETIDLIST_FILTER_PRESENT = 0x00000100
+CR_SUCCESS = 0x00000000
+CR_BUFFER_SMALL = 0x0000001A
 
 selected_printer = None
 
@@ -73,9 +79,25 @@ def get_selected_printer():
         return selected_printer
 
     try:
-        return get_default_printer()
+        default_printer = get_default_printer()
     except Exception:
-        return None
+        default_printer = None
+
+    # Receipt printing should not fall back to an unrelated office printer.
+    try:
+        receipt_printers = [
+            printer["name"]
+            for printer in get_printers()
+            if "gezhi" in printer["name"].casefold()
+        ]
+        if default_printer in receipt_printers:
+            return default_printer
+        if len(receipt_printers) == 1:
+            return receipt_printers[0]
+    except Exception:
+        pass
+
+    return default_printer
 
 
 # =========================
@@ -88,42 +110,42 @@ def is_gezhi_usb_connected():
         return False
 
     try:
-
-        # Ask Windows Plug-and-Play for currently
-        # connected USB devices.
-        command = [
-            "powershell",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-
-            (
-                "Get-PnpDevice -PresentOnly | "
-                "Where-Object { "
-                "$_.InstanceId -like "
-                "'USB\\VID_28E9&PID_0289*' "
-                "} | "
-                "Measure-Object | "
-                "Select-Object -ExpandProperty Count"
-            )
+        # Query present devices directly. Spawning PowerShell for every poll
+        # can time out when status and print requests arrive together.
+        cfgmgr32 = ctypes.WinDLL("cfgmgr32")
+        get_size = cfgmgr32.CM_Get_Device_ID_List_SizeW
+        get_size.argtypes = [
+            ctypes.POINTER(wintypes.ULONG), wintypes.LPCWSTR, wintypes.ULONG
         ]
+        get_size.restype = wintypes.ULONG
+        get_devices = cfgmgr32.CM_Get_Device_ID_ListW
+        get_devices.argtypes = [
+            wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.ULONG, wintypes.ULONG
+        ]
+        get_devices.restype = wintypes.ULONG
+        flags = CM_GETIDLIST_FILTER_ENUMERATOR | CM_GETIDLIST_FILTER_PRESENT
+        prefix = f"USB\\VID_{GEZHI_VID}&PID_{GEZHI_PID}".upper()
 
-        result = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=3
-        )
+        # A device can be plugged in between the size and list queries.
+        for _ in range(3):
+            size = wintypes.ULONG()
+            result = get_size(ctypes.byref(size), "USB", flags)
+            if result != CR_SUCCESS:
+                raise OSError(f"Windows USB detection failed (code {result})")
+            if size.value == 0:
+                return False
+            buffer = ctypes.create_unicode_buffer(size.value)
+            result = get_devices("USB", buffer, size.value, flags)
+            if result == CR_BUFFER_SMALL:
+                continue
+            if result != CR_SUCCESS:
+                raise OSError(f"Windows USB detection failed (code {result})")
+            return any(
+                device.upper().startswith((prefix + "\\", prefix + "&"))
+                for device in buffer[:].split("\0")
+            )
 
-        output = result.stdout.strip()
-
-        try:
-            count = int(output)
-        except ValueError:
-            count = 0
-
-        return count > 0
+        raise OSError("Windows USB device list kept changing; try again")
 
     except Exception as error:
 
@@ -603,7 +625,9 @@ class PrintServer(
             value.strip()
             for value in os.environ.get(
                 "PRINTER_ALLOWED_ORIGINS",
-                "https://hardware-store-rho.vercel.app,http://localhost:3000"
+                "https://hardware-store-rho.vercel.app,"
+                "http://localhost:3000,http://localhost:3001,"
+                "http://127.0.0.1:3000,http://127.0.0.1:3001"
             ).split(",")
             if value.strip()
         }
@@ -623,22 +647,20 @@ class PrintServer(
         data
     ):
 
-        self.send_response(status)
-
-        self._headers()
-
-        self.send_header(
-            "Content-Type",
-            "application/json"
-        )
-
-        self.end_headers()
-
-        self.wfile.write(
-            json.dumps(
-                data
-            ).encode("utf-8")
-        )
+        body = json.dumps(data).encode("utf-8")
+        try:
+            self.send_response(status)
+            self._headers()
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+            # A browser may cancel a request while navigating or timing out.
+            # The disconnected client must not turn a completed print into
+            # a print error or trigger another attempt to write a response.
+            self.close_connection = True
 
     # =========================
     # GET

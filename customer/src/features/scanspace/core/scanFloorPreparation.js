@@ -20,11 +20,11 @@ function wallPixel(w,point) {
 // contamination so it can be repaired on the floor and retained upright on the wall.
 // Nearby shadows alone cannot protect it; require the same trim in the wall photo
 // and a contrasting plaster sample above that strip.
-export function photographedWallTrim(point,rgb,walls) {
+export function photographedWallTrim(point,rgb,walls,maxDistance=.08) {
   if(!rgb)return false;
   return walls.some(w=>{
     const distance=dot(w.normal,point)-w.offset;
-    if(distance<-.015 || distance>.08)return false;
+    if(distance<-.015 || distance>maxDistance)return false;
     const above=wallPixel(w,[point[0],point[1]+.25,point[2]]);
     if(!above || mean(above)<mean(rgb)*1.5)return false;
     const matches=[-.02,-.01,0,.01,.02].map(dy=>wallPixel(w,[point[0],point[1]+dy,point[2]]))
@@ -251,29 +251,65 @@ export function prepareScanFloor(mesh, planes, helpers, fragments, removed, wall
   const clean=new Map();
   for(const c of cells.values()) {
     const center=world(c.x+.5,c.y+.5);
-    const contaminated=choice=>photographedWallTrim(center,choice.rgb,walls) || c.points.some(corner=>{
-      const point=corner.map((v,i)=>v*.8+center[i]*.2);
-      if(!walls.some(w=>Math.abs(dot(w.normal,point)-w.offset)<=.08))return false;
-      return photographedWallTrim(point,helpers.sampleColor(choice.frame,helpers.projectColor(choice.frame,...point)),walls);
+    // The fitted floor can sit a few centimetres above the captured floor.
+    // Its photo projection then crosses the skirting farther from the wall.
+    // Check the entire tile, including its edges, before accepting a photo.
+    const samples=[...c.points,...c.points.map((p,i)=>p.map((v,j)=>(v+c.points[(i+1)%4][j])/2)),center];
+    const contaminated=choice=>samples.some(point=>{
+      if(!walls.some(w=>Math.abs(dot(w.normal,point)-w.offset)<=.24))return false;
+      return photographedWallTrim(point,helpers.sampleColor(choice.frame,helpers.projectColor(choice.frame,...point)),walls,.24);
     });
     const choices=c.choices.filter(q=>!contaminated(q));
+    c.cleanChoices=choices;
     const best=Math.max(...(choices.length?choices:c.choices).map(q=>q.score));
     c.choice=preferred.map(f=>(choices.length?choices:c.choices).find(q=>q.frame===f && q.score>=best*.5)).find(Boolean);
     if(choices.length)clean.set(key(c.x,c.y),c);
   }
+  const photoStrips=new Map();
+  for(const c of cells.values())if(!clean.has(key(c.x,c.y))) {
+    const center=world(c.x+.5,c.y+.5);
+    const wall=walls.slice().sort((a,b)=>(dot(a.normal,center)-a.offset)-(dot(b.normal,center)-b.offset))[0];
+    if(wall) {
+      const tangent=wall.axes?.[0] || [-wall.normal[2],0,wall.normal[0]],along=dot(tangent,center);
+      if(!photoStrips.has(wall))photoStrips.set(wall,{shift:floor.axes.map(a=>Math.round(dot(a,wall.normal)*.4/CELL)),tangent,min:along,max:along});
+      const strip=photoStrips.get(wall);strip.min=Math.min(strip.min,along);strip.max=Math.max(strip.max,along);
+    }
+  }
+  for(const [wall,strip]of photoStrips) {
+    const scores=new Map();
+    for(const c of cells.values())if(dot(wall.normal,world(c.x+.5,c.y+.5))-wall.offset<.24) {
+      const donor=clean.get(key(c.x+strip.shift[0],c.y+strip.shift[1]));
+      for(const q of donor?.cleanChoices || [])scores.set(q.frame,(scores.get(q.frame)||0)+1);
+    }
+    strip.frames=preferred.slice().sort((a,b)=>(scores.get(b)||0)-(scores.get(a)||0));
+  }
   let repairedTrimCells=0;
   for(const c of cells.values()) {
     let choice=c.choice;
-    if(!clean.has(key(c.x,c.y))) {
-      let donor;
+    const center=world(c.x+.5,c.y+.5);
+    const stripWall=[...photoStrips.keys()].find(w=>{
+      const strip=photoStrips.get(w),along=dot(strip.tangent,center);
+      return dot(w.normal,center)-w.offset<.24 && along>=strip.min-CELL && along<=strip.max+CELL;
+    });
+    if(stripWall || !clean.has(key(c.x,c.y))) {
+      let donor,translated=false;
+      // Use one fixed inward translation along each wall before considering
+      // isolated nearest tiles. A varying donor repeats cables and grout lines
+      // into a staircase even when each individual photograph is valid.
+      const wall=stripWall || walls.slice().sort((a,b)=>(dot(a.normal,center)-a.offset)-(dot(b.normal,center)-b.offset))[0];
+      if(wall) {
+        const strip=photoStrips.get(wall),shift=strip?.shift || floor.axes.map(a=>Math.round(dot(a,wall.normal)*.4/CELL));
+        donor=clean.get(key(c.x+shift[0],c.y+shift[1]));
+        if(donor){choice=(strip?.frames || preferred).map(f=>donor.cleanChoices.find(q=>q.frame===f)).find(Boolean);translated=true;}
+      }
       // Copy a nearby photographed floor tile into the narrow contaminated
       // border. Geometry stays in place; the upright wall retains the wood.
-      for(let radius=1;radius<=4 && !donor;radius++)for(let dx=-radius;dx<=radius;dx++)for(let dy=-radius;dy<=radius;dy++) {
+      for(let radius=1;radius<=8 && !donor;radius++)for(let dx=-radius;dx<=radius;dx++)for(let dy=-radius;dy<=radius;dy++) {
         if(Math.max(Math.abs(dx),Math.abs(dy))!==radius)continue;
         const candidate=clean.get(key(c.x+dx,c.y+dy));
         if(candidate && (!donor || Math.hypot(dx,dy)<Math.hypot(donor.x-c.x,donor.y-c.y)))donor=candidate;
       }
-      if(donor){choice=donor.choice;repairedTrimCells++;}
+      if(donor){if(!translated)choice=donor.choice;repairedTrimCells++;}
     }
     const t=choice.frame.atlasUVTransform;
     const start=fragments.positions.length/3;
