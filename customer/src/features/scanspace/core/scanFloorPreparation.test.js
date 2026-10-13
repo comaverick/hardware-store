@@ -2,7 +2,7 @@ import { buildScanDesignSurfaces, validScanDesignSurfaces } from "./scanDesignSu
 import { identifyScanSurfaces } from "./scanSurfaces";
 import { alignFinishedScan } from "./scanCoordinates";
 import { serializePartialScan, parsePartialScan } from "./partialScanFile";
-import { prepareScanFloor, photographedWallTrim } from "./scanFloorPreparation";
+import { prepareScanFloor, photographedWallTrim, protectWallSkirting } from "./scanFloorPreparation";
 
 function fixture() {
   const positions=[],normals=[],colors=[],uvs=[],indices=[];
@@ -46,8 +46,10 @@ test('native floor support closes a meshing hole without changing the capture an
   expect(restored.designSurfaces.floor.offset).toBe(0);
   expect(validScanDesignSurfaces(restored.designSurfaces,restored)).toBe(true);
   const surfaces=identifyScanSurfaces({mesh:restored});
-  expect(surfaces.labels.some(x=>x===2)).toBe(false);
-  expect(surfaces.counts.floor).toBe(design.floor.triangleCount);
+  const remainingFloor=surfaces.labels.filter(x=>x===2).length;
+  expect(remainingFloor).toBeGreaterThan(0);
+  for(let face=0;face<surfaces.labels.length;face++)if(restored.designSurfaces.removedSourceFaces[face])expect(surfaces.labels[face]).not.toBe(2);
+  expect(surfaces.counts.floor).toBe(design.floor.triangleCount+remainingFloor);
   const corner=restored.designSurfaces.fragments.indices[0]*3+1;
   restored.designSurfaces.fragments.positions[corner]+=.1;
   expect(validScanDesignSurfaces(restored.designSurfaces,restored)).toBe(false);
@@ -80,17 +82,84 @@ function trimWall() {
     footprint:new Uint8Array(30*33).fill(2),texture:{width,height,data}};
 }
 
-test('wood skirting keeps its captured finish while the neighboring floor remains editable',()=>{
+test('a projected skirting photo is repaired on the floor and every floor tile remains editable',()=>{
   const {mesh,floor,helpers}=fixture(),wall=trimWall();
   helpers.sampleColor=(f,uv)=>uv.v<.075?[30,25,20]:[200,190,170];
   const fragments={positions:[],normals:[],colors:[],uvs:[],indices:[],sourceFaces:[],estimatedTriangleMask:[],finishLabels:[]};
   const result=prepareScanFloor(mesh,[floor],helpers,fragments,new Uint8Array(mesh.indices.length/3),[wall]);
-  expect(result.preservedTrimTriangles).toBeGreaterThan(0);
+  expect(result.repairedTrimPhotoTriangles).toBeGreaterThan(0);
   expect(fragments.finishLabels.filter(x=>x===2)).toHaveLength(result.triangleCount);
   for(let face=0;face<fragments.indices.length/3;face++) {
     const z=[0,1,2].reduce((s,c)=>s+fragments.positions[fragments.indices[face*3+c]*3+2]/3,0);
-    if(z<.06)expect(fragments.finishLabels[face]).toBe(0);
-    if(z>.10)expect(fragments.finishLabels[face]).toBe(2);
+    expect(fragments.finishLabels[face]).toBe(2);
+    if(z<.06) {
+      const photoV=1-[0,1,2].reduce((s,c)=>s+fragments.uvs[fragments.indices[face*3+c]*2+1]/3,0);
+      expect(photoV).toBeGreaterThanOrEqual(.075);
+    }
+  }
+});
+
+test('wood skirting is protected upright on the wall without protecting higher shadows or plaster',()=>{
+  const wall=trimWall(),floor={normal:[0,1,0],offset:-.25};
+  wall.detailMask=new Uint8Array(wall.texture.width*wall.texture.height);
+  expect(protectWallSkirting(floor,[wall])).toBeGreaterThan(0);
+  const at=y=>Math.floor((y+.32)/1.32*wall.texture.height)*wall.texture.width+30;
+  expect(wall.detailMask[at(-.2)]).toBe(255);
+  expect(wall.detailMask[at(.3)]).toBe(0);
+});
+
+test('a captured floor fragment beyond the prepared footprint keeps floor ownership and area',()=>{
+  const {mesh,floor,helpers}=fixture();
+  const fragments={positions:[-.05,-.25,.4,.01,-.25,.4,.01,-.25,.5],normals:[0,1,0,0,1,0,0,1,0],
+    colors:Array(9).fill(255),uvs:Array(6).fill(.5),indices:[0,1,2],sourceFaces:[0],estimatedTriangleMask:[0],finishLabels:[2]};
+  const result=prepareScanFloor(mesh,[floor],helpers,fragments,new Uint8Array(mesh.indices.length/3));
+  expect(fragments.finishLabels[0]).toBe(2);
+  expect(fragments.positions.slice(0,9)).toEqual([-.05,-.25,.4,.01,-.25,.4,.01,-.25,.5]);
+  expect(result.triangleCount).toBe(fragments.finishLabels.filter(x=>x===2).length);
+  expect(result.area).toBeGreaterThan(result.estimatedArea);
+});
+
+test('supported floor rims folded below the plane are repaired without moving native capture vertices',()=>{
+  const {mesh,floor,helpers}=fixture(),last=mesh.indices.length/3-1;
+  // The outer cell lacks independent plane coverage, but the captured edge
+  // shares vertices with the existing floor rather than an isolated object.
+  floor.cells.delete('9,-10');
+  mesh.positions[mesh.indices[last*3+1]*3+1]-=.07;
+  mesh.positions[mesh.indices[last*3+2]*3+1]-=.07;
+  const original=mesh.positions.slice(),removed=new Uint8Array(mesh.indices.length/3);
+  const fragments={positions:[],normals:[],colors:[],uvs:[],indices:[],sourceFaces:[],estimatedTriangleMask:[],finishLabels:[]};
+  const result=prepareScanFloor(mesh,[floor],helpers,fragments,removed);
+  expect(result.repairedRimTriangles).toBeGreaterThan(0);
+  expect(removed[last]).toBe(1);
+  expect(mesh.positions).toEqual(original);
+  const repaired=fragments.sourceFaces.indexOf(last);
+  expect(repaired).toBeGreaterThanOrEqual(0);
+  expect(fragments.finishLabels[repaired]).toBe(2);
+  for(let c=0;c<3;c++)expect(fragments.positions[fragments.indices[repaired*3+c]*3+1]).toBeCloseTo(-.25);
+});
+
+test('an isolated low captured sheet cannot extend floor preparation',()=>{
+  const {mesh,floor,helpers}=fixture(),last=mesh.indices.length/3-1;
+  for(const id of mesh.indices.slice(last*3,last*3+3)) {
+    mesh.positions[id*3]+=.4;mesh.positions[id*3+1]-=.025;mesh.positions[id*3+2]+=.4;
+  }
+  const removed=new Uint8Array(mesh.indices.length/3);
+  const fragments={positions:[],normals:[],colors:[],uvs:[],indices:[],sourceFaces:[],estimatedTriangleMask:[],finishLabels:[]};
+  prepareScanFloor(mesh,[floor],helpers,fragments,removed);
+  expect(removed[last]).toBe(0);
+  expect(fragments.sourceFaces.includes(last)).toBe(false);
+});
+
+test('a connected upward floor placeholder is seated while a photographed raised object is retained',()=>{
+  for(const placeholder of [true,false]) {
+    const {mesh,floor,helpers}=fixture(),last=mesh.indices.length/3-1;
+    for(const id of mesh.indices.slice(last*3,last*3+3))if(placeholder){mesh.uvs[id*2]=.001;mesh.uvs[id*2+1]=.001;}
+    mesh.positions[mesh.indices[last*3+1]*3+1]+=.04;
+    mesh.positions[mesh.indices[last*3+2]*3+1]+=.04;
+    const removed=new Uint8Array(mesh.indices.length/3);
+    const fragments={positions:[],normals:[],colors:[],uvs:[],indices:[],sourceFaces:[],estimatedTriangleMask:[],finishLabels:[]};
+    prepareScanFloor(mesh,[floor],helpers,fragments,removed);
+    expect(removed[last]).toBe(placeholder?1:0);
   }
 });
 

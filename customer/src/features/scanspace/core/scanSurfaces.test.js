@@ -49,6 +49,119 @@ test("a prepared ceiling keeps captured walls editable and counts its replacemen
   expect(surfaces.areas.walls).toBeCloseTo(5.6);
 });
 
+function withPreparedFloor(scan, removed = new Uint8Array(scan.mesh.indices.length / 3), fragments) {
+  scan.mesh.designSurfaces = {
+    version: SCAN_DESIGN_SURFACE_VERSION, sourceAlgorithmVersion: SCAN_DESIGN_ALGORITHM_VERSION,
+    sourceKey: scanDesignSourceKey(scan.mesh), removedSourceFaces: removed, walls: [], ceilings: [],
+    floor: { normal: [0, 1, 0], offset: 0, axes: [[1, 0, 0], [0, 0, 1]], area: 3, triangleCount: 2 },
+    fragments,
+  };
+  return scan;
+}
+
+test("a prepared floor leaves an uncovered native rim editable and counts each visible sheet once", () => {
+  const scan = roomScan(), removed = new Uint8Array(scan.mesh.indices.length / 3);
+  removed[0] = 1;
+  withPreparedFloor(scan, removed);
+  const originalPositions = scan.mesh.positions.slice(), surfaces = identifyScanSurfaces(scan);
+  expect(Array.from(surfaces.labels).slice(0, 2)).toEqual([0, 2]);
+  expect(surfaces.counts.floor).toBe(3);
+  expect(surfaces.areas.floor).toBeCloseTo(6);
+  expect(surfaces.floorAxes).toEqual(scan.mesh.designSurfaces.floor.axes);
+  expect(scan.mesh.positions).toEqual(originalPositions);
+});
+
+test("prepared floor ownership rejects upright trim, bent curtain geometry and raised noisy sheets", () => {
+  const positions = new Float32Array([
+    .2, 0, .2, .4, 0, .2, .4, 0, .4, // genuine floor
+    .2, 0, .01, .4, 0, .01, .4, .05, .01, // upright skirting
+    .2, 0, .2, .4, .05, .2, .4, 0, .4, // curled curtain, tilted .94
+    .2, .06, .2, .4, .06, .2, .4, .06, .4, // loose near-floor sheet
+  ]);
+  const scan = withPreparedFloor({ mesh: { positions, indices: new Uint32Array(Array.from({ length: 12 }, (_, i) => i)),
+    texture: { width: 1, height: 1, data: new Uint8Array([160, 150, 140, 255]) }, uvs: new Float32Array(24) },
+    captureQuality: { structuralDepth: { planes: [{ kind: "floor", normal: [0, 1, 0], offset: 0 }] } } });
+  // The curled triangle was used by an actual reconstructed upright curtain.
+  scan.mesh.designSurfaces.fragments = {
+    positions: new Float32Array([.2, 0, .2, .4, 0, .2, .4, 1, .2]),
+    indices: new Uint32Array([0, 1, 2]), sourceFaces: new Uint32Array([2]),
+    finishLabels: new Uint8Array([0]), estimatedTriangleMask: new Uint8Array([1]),
+  };
+  const surfaces = identifyScanSurfaces(scan);
+  expect(Array.from(surfaces.labels)).toEqual([2, 0, 0, 0]);
+  expect(surfaces.counts.floor).toBe(3);
+});
+
+test("a low native skirting cap matching the upright wall photograph keeps its captured finish", () => {
+  const scan = withPreparedFloor({
+    mesh: { positions: new Float32Array([.2, 0, .02, .4, 0, .02, .4, 0, .04]),
+      indices: new Uint32Array([0, 1, 2]), uvs: new Float32Array(6),
+      texture: { width: 1, height: 1, data: new Uint8Array([30, 25, 20, 255]) } },
+    captureQuality: { structuralDepth: { planes: [{ kind: "floor", normal: [0, 1, 0], offset: 0 }] } },
+  });
+  const data = new Uint8Array(8 * 4);
+  for (let y = 0; y < 8; y++) data.set(y < 2 ? [30, 25, 20, 255] : [230, 225, 220, 255], y * 4);
+  scan.mesh.designSurfaces.walls.push({ normal: [0, 0, 1], offset: 0, axes: [[1, 0, 0], [0, 1, 0]],
+    cellSize: .04, extent: [[0, 0], [30, 8]], footprint: new Uint8Array(30 * 8).fill(1),
+    texture: { width: 1, height: 8, data }, indices: new Uint32Array(), area: 0 });
+  expect(Array.from(identifyScanSurfaces(scan).labels)).toEqual([0]);
+});
+
+test("folded native floor undersides receive flooring inside its bounds while objects and wall details stay protected", () => {
+  const curl = (x, z) => [x, -.068, z, x + .02, -.081, z, x + .02, -.098, z + .02];
+  const positions = new Float32Array([
+    ...curl(.2, .2), // orientation fails ordinary floor classification
+    .2, .06, .2, .24, .06, .2, .24, .06, .24, // above-floor object
+    ...curl(.3, .3), // source of a reconstructed upright curtain
+    ...curl(.8, .2), // outside the prepared floor bounds
+    .2, -.13, .2, .24, -.13, .2, .24, -.13, .24, // too far below the floor
+    ...curl(.2, .1), // under a wall edge, where skirting/curtains must stay captured
+    .2, 0, .2, .24, 0, .2, .24, 0, .24, // already replaced native floor
+  ]);
+  const removed = new Uint8Array(7); removed[6] = 1;
+  const scan = withPreparedFloor({ mesh: { positions, indices: new Uint32Array(Array.from({ length: 21 }, (_, i) => i)) },
+    captureQuality: { structuralDepth: { planes: [{ kind: "floor", normal: [0, 1, 0], offset: 0 }] } } }, removed, {
+    positions: new Float32Array([
+      .1, 0, .1, .6, 0, .1, .6, 0, .6,
+      .3, 0, .3, .4, 0, .3, .4, 1, .3,
+    ]), indices: new Uint32Array([0, 1, 2, 3, 4, 5]),
+    finishLabels: new Uint8Array([2, 0]), estimatedTriangleMask: new Uint8Array([1, 1]), sourceFaces: new Uint32Array([6, 2]),
+  });
+  scan.mesh.designSurfaces.walls.push({ normal: [0, 0, 1], offset: 0, indices: new Uint32Array(), area: 0 });
+  const originalPositions = positions.slice(), surfaces = identifyScanSurfaces(scan);
+  expect(Array.from(surfaces.labels)).toEqual([2, 0, 0, 0, 0, 0, 0]);
+  expect(surfaces.counts.floor).toBe(3);
+  expect(scan.mesh.positions).toEqual(originalPositions);
+});
+
+test("matching photographed floor seeds carry their finish across bent atlas seam edges while distinct objects stay captured", () => {
+  const seed = [.2, .06, .2, .3, .07, .2, .3, .06, .3];
+  const positions = new Float32Array([
+    ...seed,
+    .2, .06, .2, .3, .07, .2, .25, 0, .2, // bent side sharing two positions through an atlas seam
+    .2, .06, .2, .3, .07, .2, .3, .075, .25, // differently photographed raised object
+    .35, .03, .29, .37, .04, .29, .36, 0, .29, // matching color alone cannot authorize a disconnected side
+    .26, .07, .3, .3, .075, .3, .3, .07, .34, // matching photographed foreground curtain source
+  ]);
+  const floorUv = [.05, .1, .35, .1, .35, .8], objectUv = [.65, .1, .85, .1, .85, .8];
+  const scan = withPreparedFloor({ mesh: { positions,
+    indices: new Uint32Array(Array.from({ length: 15 }, (_, i) => i)),
+    uvs: new Float32Array([...floorUv, ...floorUv, ...objectUv, ...floorUv, ...floorUv]),
+    texture: { width: 4, height: 1, data: new Uint8Array([
+      160, 150, 135, 255, 160, 150, 135, 255, 250, 250, 250, 255, 250, 250, 250, 255,
+    ]) } }, captureQuality: { structuralDepth: { planes: [{ kind: "floor", normal: [0, 1, 0], offset: 0 }] } } },
+  new Uint8Array(5), {
+    positions: new Float32Array([.1, 0, .1, .5, 0, .1, .5, 0, .5, .26, 0, .3, .3, 0, .3, .3, 1, .3]),
+    indices: new Uint32Array([0, 1, 2, 3, 4, 5]), uvs: new Float32Array([...floorUv, ...floorUv]),
+    finishLabels: new Uint8Array([2, 0]), estimatedTriangleMask: new Uint8Array([1, 1]), sourceFaces: new Uint32Array([0, 4]),
+  });
+  const originalPositions = positions.slice(), originalUvs = scan.mesh.uvs.slice(), surfaces = identifyScanSurfaces(scan);
+  expect(Array.from(surfaces.labels)).toEqual([2, 2, 0, 0, 0]);
+  expect(surfaces.counts.floor).toBe(4);
+  expect(scan.mesh.positions).toEqual(originalPositions);
+  expect(scan.mesh.uvs).toEqual(originalUvs);
+});
+
 test("a tilted measured plane stays editable while a distant parallel sheet stays captured", () => {
   const scan = roomScan();
   const normal = [0, .9950371902, .099503719];

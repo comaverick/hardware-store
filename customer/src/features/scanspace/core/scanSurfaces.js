@@ -1,6 +1,7 @@
 import { getScanDesignSurfaces } from "./scanDesignSurfaces";
 import { classifyWallPhotoDetails, wallPhotoTextureDetail } from "./scanWallPhotoDetails";
 import { planesForScanMesh } from "./scanCoordinates";
+import { photographedWallTrim } from "./scanFloorPreparation";
 
 const kinds = [null, "walls", "floor", "ceiling"];
 const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
@@ -150,6 +151,146 @@ function preserveWallPhotoDetails(mesh, labels, planeIds, planes, centers, areas
   }
 }
 
+// A repaired curtain can have inherited a low, curled source triangle. Its
+// reconstructed upright geometry is evidence of foreground ownership; source
+// provenance alone must never make it an editable floor.
+function uprightForegroundSources(design) {
+  const protectedFaces = new Set(), fragments = design.fragments, floor = design.floor;
+  if (!fragments?.indices || !fragments.sourceFaces || !floor) return protectedFaces;
+  for (let face = 0; face < fragments.indices.length / 3; face++) {
+    if (fragments.finishLabels?.[face] !== 0 || !fragments.estimatedTriangleMask?.[face]) continue;
+    const points = [0, 1, 2].map(corner => {
+      const offset = fragments.indices[face * 3 + corner] * 3;
+      return Array.from(fragments.positions.subarray(offset, offset + 3));
+    });
+    const a = points[1].map((value, axis) => value - points[0][axis]);
+    const b = points[2].map((value, axis) => value - points[0][axis]);
+    const normal = unit([a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]);
+    if (Math.abs(dot(normal, floor.normal)) < .6 &&
+        points.some(point => dot(floor.normal, point) - floor.offset > .08))
+      protectedFaces.add(fragments.sourceFaces[face]);
+  }
+  return protectedFaces;
+}
+
+function uncoveredPreparedFloor(mesh, face, normal, floor, walls, foregroundSources) {
+  if (foregroundSources.has(face) || Math.abs(dot(normal, floor.normal)) < .9) return false;
+  const points = [0, 1, 2].map(corner => {
+    const offset = mesh.indices[face * 3 + corner] * 3;
+    return Array.from(mesh.positions.subarray(offset, offset + 3));
+  });
+  if (points.some(point => Math.abs(dot(floor.normal, point) - floor.offset) > .055)) return false;
+  const center = [0, 1, 2].map(axis => points.reduce((sum, point) => sum + point[axis] / 3, 0));
+  return !photographedWallTrim(center, facePhotoColor(mesh, face), walls);
+}
+
+function preparedFloorBounds(design) {
+  const fragments = design.fragments, axes = design.floor.axes;
+  if (!fragments?.indices || !axes) return null;
+  const min = [Infinity, Infinity], max = [-Infinity, -Infinity];
+  for (let face = 0; face < fragments.indices.length / 3; face++) {
+    if (fragments.finishLabels?.[face] !== 2) continue;
+    for (let corner = 0; corner < 3; corner++) {
+      const offset = fragments.indices[face * 3 + corner] * 3;
+      const point = fragments.positions.subarray(offset, offset + 3);
+      for (let axis = 0; axis < 2; axis++) {
+        const value = dot(axes[axis], point);
+        min[axis] = Math.min(min[axis], value); max[axis] = Math.max(max[axis], value);
+      }
+    }
+  }
+  return min.every(Number.isFinite) ? { min, max } : null;
+}
+
+// Noisy capture rims sometimes fold down below the fitted floor. They remain
+// measured triangles, but their visible underside needs the flooring finish.
+// Limit this ownership to the prepared floor bounds and room interior; raised
+// objects, wall skirting and reconstructed cloth retain their photographs.
+function capturedFloorUnderside(mesh, face, floor, walls, bounds, foregroundSources, maximumHeight = .004) {
+  if (!bounds || foregroundSources.has(face)) return false;
+  for (let corner = 0; corner < 3; corner++) {
+    const offset = mesh.indices[face * 3 + corner] * 3;
+    const point = mesh.positions.subarray(offset, offset + 3);
+    const height = dot(floor.normal, point) - floor.offset;
+    if (height < -.12 || height > maximumHeight || walls.some(wall => dot(wall.normal, point) - wall.offset < .15)) return false;
+    if (floor.axes.some((axis, index) => {
+      const value = dot(axis, point);
+      return value < bounds.min[index] - .04 || value > bounds.max[index] + .04;
+    })) return false;
+  }
+  return true;
+}
+
+function genuineFacePhoto(mesh, face) {
+  if (!mesh.texture?.data?.length || !mesh.uvs?.length) return null;
+  const uv = [0, 1, 2].map(corner => {
+    const offset = mesh.indices[face * 3 + corner] * 2;
+    return Array.from(mesh.uvs.subarray(offset, offset + 2));
+  });
+  if ([0, 1].every(axis => Math.max(...uv.map(p => p[axis])) - Math.min(...uv.map(p => p[axis])) < 1e-6)) return null;
+  return facePhotoColor(mesh, face);
+}
+
+function preparedFloorPhotoPalette(mesh, design) {
+  const palette = new Map(), fragments = design.fragments, floor = design.floor;
+  if (!fragments?.indices) return palette;
+  const photos = { ...fragments, texture: mesh.texture };
+  for (let face = 0; face < fragments.indices.length / 3; face++) {
+    if (fragments.finishLabels?.[face] !== 2) continue;
+    const rgb = genuineFacePhoto(photos, face); if (!rgb) continue;
+    const center = [0, 1, 2].map(axis => [0, 1, 2].reduce((sum, corner) =>
+      sum + fragments.positions[fragments.indices[face * 3 + corner] * 3 + axis] / 3, 0));
+    const q = floor.axes.map(axis => dot(axis, center)), k = q.map(value => Math.floor(value / .08)).join(",");
+    if (!palette.has(k)) palette.set(k, []);
+    palette.get(k).push({ q, rgb });
+  }
+  return palette;
+}
+
+function matchesPreparedFloorPhoto(mesh, face, center, floor, palette) {
+  const rgb = genuineFacePhoto(mesh, face); if (!rgb) return false;
+  const q = floor.axes.map(axis => dot(axis, center)), grid = q.map(value => Math.floor(value / .08));
+  for (let y = -2; y <= 2; y++) for (let x = -2; x <= 2; x++) {
+    const samples = palette.get(`${grid[0] + x},${grid[1] + y}`) || [];
+    if (samples.some(sample => Math.hypot(sample.q[0] - q[0], sample.q[1] - q[1]) <= .14 &&
+      Math.hypot(...sample.rgb.map((value, channel) => value - rgb[channel])) <= 35)) return true;
+  }
+  return false;
+}
+
+function capturedFaceEdges(mesh, face) {
+  const points = [0, 1, 2].map(corner => {
+    const offset = mesh.indices[face * 3 + corner] * 3;
+    return Array.from(mesh.positions.subarray(offset, offset + 3), value => Math.round(value * 1e5)).join(",");
+  });
+  return [[0, 1], [1, 2], [2, 0]].map(([a, b]) => [points[a], points[b]].sort().join("|"));
+}
+
+// Marble photographed at a bent capture edge can rise slightly above the fit.
+// Recover only measured floor seeds matching a nearby floor photograph, then
+// their matching side faces sharing two actual captured vertex positions.
+function restorePhotographedFloorEdges(mesh, design, originalLabels, labels, centers, areas, bounds, foregroundSources) {
+  const floor = design.floor, palette = preparedFloorPhotoPalette(mesh, design);
+  if (!palette.size) return;
+  const edges = new Set(), candidates = [];
+  for (let face = 0; face < labels.length; face++) {
+    if (design.removedSourceFaces[face] || !areas[face] ||
+        !capturedFloorUnderside(mesh, face, floor, design.walls, bounds, foregroundSources, .08) ||
+        !matchesPreparedFloorPhoto(mesh, face, centers.subarray(face * 3, face * 3 + 3), floor, palette)) continue;
+    const faceEdges = capturedFaceEdges(mesh, face);
+    if (originalLabels[face] === 2) { labels[face] = 2; faceEdges.forEach(edge => edges.add(edge)); }
+    else if (!labels[face]) candidates.push({ face, edges: faceEdges });
+  }
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const candidate of candidates) {
+      if (labels[candidate.face] || !candidate.edges.some(edge => edges.has(edge))) continue;
+      labels[candidate.face] = 2; candidate.edges.forEach(edge => edges.add(edge)); changed = true;
+    }
+  }
+}
+
 export function identifyScanSurfaces(scan) {
   const mesh = scan.mesh;
   const counts = { walls: 0, floor: 0, ceiling: 0 };
@@ -222,7 +363,18 @@ export function identifyScanSurfaces(scan) {
       surfaceAreas.ceiling = design.ceilings.reduce((sum, ceiling) => sum + ceiling.area, 0);
     }
     if (design.floor) {
-      for (let face = 0; face < labels.length; face++) if (labels[face] === 2) labels[face] = 0;
+      const foregroundSources = uprightForegroundSources(design), bounds = preparedFloorBounds(design);
+      const originalLabels = labels.slice();
+      for (let face = 0; face < labels.length; face++) {
+        if (design.removedSourceFaces[face]) { if (labels[face] === 2) labels[face] = 0; continue; }
+        if (!areas[face]) continue;
+        const strongFloor = labels[face] === 2 && uncoveredPreparedFloor(mesh, face,
+          Array.from(normals.subarray(face * 3, face * 3 + 3)), design.floor, design.walls, foregroundSources);
+        if (strongFloor || capturedFloorUnderside(mesh, face, design.floor, design.walls, bounds, foregroundSources))
+          labels[face] = 2;
+        else if (labels[face] === 2) labels[face] = 0;
+      }
+      restorePhotographedFloorEdges(mesh, design, originalLabels, labels, centers, areas, bounds, foregroundSources);
       counts.floor = design.floor.triangleCount;
       surfaceAreas.floor = design.floor.area;
     }

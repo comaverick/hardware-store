@@ -12,7 +12,7 @@ import { protectFoldedPanelJunctions, foldedPanelWallBorders } from "./scanPhoto
 // An editable surface is an approximation of the room envelope. It never
 // replaces the measured mesh or supplies new measured area/depth to capture.
 export const SCAN_DESIGN_SURFACE_VERSION = 2;
-export const SCAN_DESIGN_ALGORITHM_VERSION = 63;
+export const SCAN_DESIGN_ALGORITHM_VERSION = 64;
 export const MAX_SCAN_DESIGN_BYTES = 8 * 1024 * 1024;
 export const MAX_SCAN_CEILINGS = 2;
 const MAX_CELLS = 24000;
@@ -97,8 +97,8 @@ export function validScanDesignSurfaces(design, mesh) {
   if (design.floor) for (let face=0;face<fragments.finishLabels.length;face++) if(fragments.finishLabels[face]===2) {
     for(let c=0;c<3;c++) {
       const i=fragments.indices[face*3+c]*3;
-      if(Math.abs(dot(design.floor.normal,fragments.positions.subarray(i,i+3))-design.floor.offset)>.003 ||
-          dot(design.floor.normal,fragments.normals.subarray(i,i+3))<.95)return false;
+      if(Math.abs(dot(design.floor.normal,fragments.positions.subarray(i,i+3))-design.floor.offset)>.055 ||
+          dot(design.floor.normal,fragments.normals.subarray(i,i+3))<.9)return false;
     }
   }
   const ids = new Set();
@@ -1094,12 +1094,14 @@ export function buildScanDesignSurfaces(mesh, planes, frames = [], helpers = {},
     }
   }
   for (let face = 0; face < removed.length; face++) if (ceilingRemoved[face]) removed[face] = 1;
+  const floorPhotoStart = fragments.indices.length / 3;
   const floorPhotoRepair = repairFloorPhotos(mesh, planes, helpers, fragments, removed);
   // Source ownership documents provenance; it is not a material label. Generated
   // curtain triangles can come from a curled source face classified as floor.
   fragments.finishLabels = Array(fragments.indices.length / 3).fill(0);
   const floorPlane = (planes || []).find(p => p.kind === "floor" && p.normal?.[1] > .9);
-  if (floorPlane) for (let face = 0; face < clothStart; face++) {
+  if (floorPlane) for (let face = 0; face < fragments.indices.length / 3; face++) {
+    if(face >= clothStart && face < floorPhotoStart)continue;
     const ps = [0,1,2].map(c => fragments.positions.slice(fragments.indices[face*3+c]*3, fragments.indices[face*3+c]*3+3));
     const n = cross(ps[1].map((v,i)=>v-ps[0][i]),ps[2].map((v,i)=>v-ps[0][i]));
     if (Math.abs(dot(unit(n),floorPlane.normal)) > .9 &&
@@ -1124,7 +1126,8 @@ export function buildScanDesignSurfaces(mesh, planes, frames = [], helpers = {},
       removedTriangles: removed.reduce((sum, x) => sum + x, 0), fragmentTriangles: fragments.indices.length / 3,
       ...boundaryRepair, ...backgroundCleanup, ...floorPhotoRepair, ...ceilingPhotoRepair,
       floor: floor && { area: floor.area, repairedGapCells: floor.gapCells, triangleCount: floor.triangleCount,
-        preservedWallTrimTriangles: floor.preservedTrimTriangles },
+        repairedTrimPhotoTriangles: floor.repairedTrimPhotoTriangles, flattenedTrimTriangles: floor.flattenedTrimTriangles,
+        protectedWallTrimPixels: floor.protectedWallTrimPixels, repairedRimTriangles: floor.repairedRimTriangles },
       ceiling: ceiling?.diagnostics || null,
       ceilingLevels: ceilings.map(c=>c.diagnostics),
       wallPlacement: built.map(({ wall }) => ({ id: wall.id, setbackMeters: wall.setbackMeters })),
