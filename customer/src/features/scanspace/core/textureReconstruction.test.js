@@ -36,6 +36,17 @@ const triangleMesh = () => ({
   colors: new Uint8Array(9).fill(30),
 });
 
+test('the compact white fallback cannot borrow the first photograph through linear filtering', () => {
+  const original=triangleMesh();original.estimatedTriangleMask=new Uint8Array([1]);
+  const result=texturedMesh(original,[cameraFrame(60)]);
+  const x=result.uvs[0]*result.texture.width-.5,y=result.uvs[1]*result.texture.height-.5;
+  for(const dx of [0,1])for(const dy of [0,1]){
+    const i=((Math.floor(y)+dy)*result.texture.width+Math.floor(x)+dx)*4;
+    expect(result.texture.data.subarray(i,i+4)).toEqual(new Uint8Array([255,255,255,255]));
+  }
+  expect(result.texture.data[(4*result.texture.width+4)*4]).toBe(60);
+});
+
 test("a locally sharp painting view wins over a globally sharper curtain view and round-trips unchanged", () => {
   const frames = [cameraFrame(), cameraFrame()];
   frames.forEach((frame, index) => {

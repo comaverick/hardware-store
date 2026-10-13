@@ -215,3 +215,17 @@ test("independently observed free space cannot be filled by a ceiling color matc
     expect(x > .56 && x < .64 && z > .56 && z < .64).toBe(false);
   }
 });
+
+test('an enclosed missing mesh patch uses two translated photos while exterior gaps stay open', () => {
+  const {mesh,frames,helpers}=fixture({opening:true});
+  const result=prepareScanCeiling(mesh,frames,helpers,new Uint8Array(mesh.indices.length/3));
+  expect(result.diagnostics.repairedGapCells).toBeGreaterThanOrEqual(36);
+  const s=result.surface,[min,max]=s.extent;
+  const index=(x,z)=>(z-min[1])*(max[0]-min[0])+x-min[0];
+  expect(s.footprint[index(15,15)]).toBe(2);
+  expect(s.positions.every(Number.isFinite)).toBe(true);
+  // A camera rotation without translation cannot provide a second photo vote.
+  for(const f of frames)f.viewTransformMatrix=frames[0].transformMatrix.slice();
+  const stationary=prepareScanCeiling(mesh,frames,helpers,new Uint8Array(mesh.indices.length/3));
+  expect(stationary.surface.footprint[index(15,15)]).toBe(0);
+});

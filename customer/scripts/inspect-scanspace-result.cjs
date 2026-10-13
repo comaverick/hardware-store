@@ -44,6 +44,10 @@ function load(file) {
     ? execFileSync('git', ['show', `${revision}:${path.relative(gitRoot, file).split(path.sep).join('/')}`],
       { cwd: workspace, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 })
     : fs.readFileSync(file, 'utf8');
+  if (path.extname(file) === '.json') {
+    loaded.exports = JSON.parse(source);
+    return loaded.exports;
+  }
   loaded._compile(babel.transformSync(source, {
     plugins: ['@babel/plugin-transform-modules-commonjs'], babelrc: false, configFile: false,
   }).code, file);
@@ -62,6 +66,14 @@ if (checkpoints) {
     const candidate = rebuild(mesh, planes, frames, helpers, options);
     saveCheckpoint('after-rebuild', candidate, planes, frames, options);
     return candidate;
+  };
+  const design = load('src/features/scanspace/core/scanDesignSurfaces.js');
+  const prepare = design.buildScanDesignSurfaces;
+  design.buildScanDesignSurfaces = (mesh, planes, frames, helpers, options) => {
+    fs.mkdirSync(output, { recursive: true });
+    fs.writeFileSync(path.join(output, 'design-inputs.v8'),
+      serialize({ mesh, planes, frames, textureFrames: helpers.textureFrames, options }));
+    return prepare(mesh, planes, frames, helpers, options);
   };
 }
 const { fuseRgbdKeyframes } = load('src/features/scanspace/core/fusion.js');
@@ -86,6 +98,7 @@ const report = { revision: revision || 'working-tree', captureSha256, stageTimes
 fs.writeFileSync(path.join(output, 'report.json'), JSON.stringify(report, null, 2));
 if (!result.mesh) throw new Error(result.diagnostics.reason || 'No reconstructed mesh.');
 const mesh = result.mesh;
+fs.writeFileSync(path.join(output, 'result.v8'), serialize(result));
 const manifest = { bounds: mesh.bounds, vertexCount: mesh.vertexCount,
   triangleCount: mesh.triangleCount, attributes: {} };
 for (const name of ['positions', 'indices', 'colors', 'uvs', 'normals', 'estimatedTriangleMask']) {

@@ -17,6 +17,13 @@ test('atlas sizing respects a smaller device limit and reserves geometry space',
   expect(Math.max(layout.width, layout.height)).toBeLessThanOrEqual(2048);
   expect(layout.width * layout.height * 4 + 250000 * 117).toBeLessThan(MAX_SCAN_MESH_BYTES);
 });
+
+test('twelve photographs use three rows and keep more native detail without a full-size blank tile', () => {
+  const images=Array.from({length:12},()=>({colorWidth:512,colorHeight:1024}));
+  const layout=textureAtlasLayout(images,162562);
+  expect(layout.rows).toBe(3);
+  expect(layout.tileHeight).toBeGreaterThan(800);
+});
 test('a sharper valid local view cannot lose to seam voting, without banning flat or sole-source photos', () => {
   const sharp = { localFocus: 12, localDetail: 20, pixelDensity: 160 };
   const blurred = { localFocus: 2, localDetail: 12, pixelDensity: 170 };

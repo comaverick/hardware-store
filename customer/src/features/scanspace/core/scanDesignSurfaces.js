@@ -1,11 +1,12 @@
 import { independentFrameIds, structuralSupportAt } from "./structuralDepth";
 import { classifyWallPhotoDetails, wallPhotoTextureDetail } from "./scanWallPhotoDetails";
 import { prepareScanCeiling } from "./scanCeilingPreparation";
+import { prepareFoldedPhotoPanel } from "./scanPhotoPanelPreparation";
 
 // An editable surface is an approximation of the room envelope. It never
 // replaces the measured mesh or supplies new measured area/depth to capture.
 export const SCAN_DESIGN_SURFACE_VERSION = 2;
-export const SCAN_DESIGN_ALGORITHM_VERSION = 59;
+export const SCAN_DESIGN_ALGORITHM_VERSION = 60;
 export const MAX_SCAN_DESIGN_BYTES = 8 * 1024 * 1024;
 const MAX_CELLS = 24000;
 const MAX_WALLS = 8;
@@ -97,7 +98,7 @@ export function validScanDesignSurfaces(design, mesh) {
         !Number.isFinite(wall.estimatedArea) || wall.estimatedArea < 0 || wall.estimatedArea > wall.area) return false;
     const texture = wall.texture;
     if (!texture || !Number.isInteger(texture.width) || !Number.isInteger(texture.height) ||
-        texture.width < 1 || texture.height < 1 || texture.width > 768 || texture.height > 768 ||
+        texture.width < 1 || texture.height < 1 || texture.width > 1024 || texture.height > 1024 ||
         !(texture.data instanceof Uint8Array) || texture.data.length !== texture.width * texture.height * 4 ||
         !(wall.detailMask instanceof Uint8Array) || wall.detailMask.length !== texture.width * texture.height) return false;
     for (let i = 0; i < wall.positions.length; i += 3)
@@ -558,8 +559,8 @@ function buildWall(mesh, sourcePlane, frames, helpers, cell, junctionPlanes = []
   const preserved = new Map([...cells].filter(([,p]) => p.foldedPanel));
   for (const k of preserved.keys()) cells.delete(k);
   if (cells.size * cell * cell < .2) return null;
-  const width = Math.max(2, Math.min(768, Math.ceil((max[0] - min[0]) * cell * 192))),
-    height = Math.max(2, Math.min(768, Math.ceil((max[1] - min[1]) * cell * 192)));
+  const width = Math.max(2, Math.min(1024, Math.ceil((max[0] - min[0]) * cell * 288))),
+    height = Math.max(2, Math.min(1024, Math.ceil((max[1] - min[1]) * cell * 288)));
   const texture = { width, height, data: new Uint8Array(width * height * 4) }, detailMask = new Uint8Array(width * height);
   for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
     const gx = min[0] + (x + .5) / width * (max[0] - min[0]), gy = min[1] + (y + .5) / height * (max[1] - min[1]);
@@ -987,11 +988,13 @@ export function buildScanDesignSurfaces(mesh, planes, frames = [], helpers = {},
     p.normal?.length === 3 && p.normal.every(Number.isFinite) && Number.isFinite(p.offset) &&
     Math.hypot(...p.normal) > .5 && Math.abs(unit(p.normal)[1]) < .3).slice(0, MAX_WALLS);
   const built = selected.map(p => buildWall(mesh, p, frames, helpers, cell, planes)).filter(Boolean);
+  for (const surface of built) surface.photoPanel = prepareFoldedPhotoPanel(surface.wall, surface.preserved, helpers);
   const removed = new Uint8Array(mesh.indices.length / 3);
   // Ceiling ownership is established on the complete captured mesh, before
   // wall clipping turns its bent upper triangles into retained fragments.
   const ceilingRemoved = new Uint8Array(removed.length);
   const ceiling = prepareScanCeiling(mesh, frames, helpers, ceilingRemoved, built.map(p => p.wall));
+  const ceilings = [ceiling].filter(Boolean);
   const owners = new Uint8Array(removed.length), clippedEdges = [];
   const fragments = { positions: [], normals: [], colors: [], uvs: [], indices: [], sourceFaces: [], estimatedTriangleMask: [] };
   for (const surface of built) for (const { face, points, extended } of surface.candidates) {
@@ -1002,6 +1005,10 @@ export function buildScanDesignSurfaces(mesh, planes, frames = [], helpers = {},
       const p = cells.get(key(x, y));
       const center = [0, 1, 2].map(axis => polygon.reduce((sum, v) => sum + v.p[axis], 0) / polygon.length);
       const residual = dot(wall.normal, center) - wall.offset;
+      const panel = surface.photoPanel?.cells.get(key(x, y));
+      if (panel && Math.abs(residual - panel.depthOffset) <= .35) {
+        panel.sourceFace ??= face; replacedArea += area; return;
+      }
       const actualForeground = p?.foreground && residual > .012 && residual >= p.foregroundOffset - .025;
       const extraOwned = !extended || (p?.photoFrame && !p.detail && !p.foreground && p.support >= 3 &&
         surface.nativeWallSupport(wall.normal.map((n, axis) => n * wall.offset +
@@ -1034,13 +1041,28 @@ export function buildScanDesignSurfaces(mesh, planes, frames = [], helpers = {},
     }
   }
   const boundaryRepair = reconnectWallBoundaries(mesh, built, removed, owners, fragments, clippedEdges, planes, ceilingRemoved);
-  for (const fragment of ceiling?.fragments || []) appendFragment(fragments, fragment.points, fragment.face, true);
+  for (const c of ceilings) for (const fragment of c.fragments || []) appendFragment(fragments, fragment.points, fragment.face, true);
   const backgroundCleanup = trimWallBackground(mesh, built, removed, fragments, ceilingRemoved);
+  let repairedPhotoPanelArea = 0;
+  for (const surface of built) if (surface.photoPanel) {
+    // A native-supported cloth cell can contain a meshing crack. Carry source
+    // ownership only from a nearby repaired cloth cell, never from another wall.
+    const seeds = [...surface.photoPanel.cells.values()].filter(p => p.sourceFace !== undefined);
+    for (const p of surface.photoPanel.cells.values()) {
+      if (p.sourceFace === undefined) {
+        const closest = seeds.reduce((best, q) => !best || Math.hypot(p.x-q.x,p.y-q.y) < Math.hypot(p.x-best.x,p.y-best.y) ? q : best, null);
+        if (!closest || Math.hypot(p.x-closest.x,p.y-closest.y)*cell > .2) continue;
+        p.sourceFace = closest.sourceFace;
+      }
+      for (const corners of p.triangles) appendFragment(fragments, corners.map(i => p.vertices[i]), p.sourceFace, true);
+      repairedPhotoPanelArea += cell * cell;
+    }
+  }
   for (let face = 0; face < removed.length; face++) if (ceilingRemoved[face]) removed[face] = 1;
   if (!built.length && !ceiling) return null;
   const design = { version: SCAN_DESIGN_SURFACE_VERSION, mode: "estimated-planar-design-surface", sourceAlgorithmVersion: SCAN_DESIGN_ALGORITHM_VERSION,
     sourceKey: scanDesignSourceKey(mesh), removedSourceFaces: removed, walls: built.map(p => p.wall),
-    ceilings: ceiling ? [ceiling.surface] : [],
+    ceilings: ceilings.map(c => c.surface),
     fragments: { positions: new Float32Array(fragments.positions), normals: new Float32Array(fragments.normals),
       colors: new Uint8Array(fragments.colors), uvs: new Float32Array(fragments.uvs),
       indices: new Uint32Array(fragments.indices), sourceFaces: new Uint32Array(fragments.sourceFaces),
@@ -1048,10 +1070,31 @@ export function buildScanDesignSurfaces(mesh, planes, frames = [], helpers = {},
     diagnostics: { walls: built.length, area: built.reduce((sum, p) => sum + p.wall.area, 0),
       estimatedArea: built.reduce((sum, p) => sum + p.wall.estimatedArea, 0),
       preservedFoldedPhotoArea: built.reduce((sum, p) => sum + p.preserved.size * cell * cell, 0),
+      repairedPhotoPanelArea,
       removedTriangles: removed.reduce((sum, x) => sum + x, 0), fragmentTriangles: fragments.indices.length / 3,
       ...boundaryRepair, ...backgroundCleanup,
       ceiling: ceiling?.diagnostics || null,
       wallPlacement: built.map(({ wall }) => ({ id: wall.id, setbackMeters: wall.setbackMeters })),
       cellSize: cell, measuredGeometryChanged: false } };
+  // Extra detail must not discard the entire preparation on a large scan.
+  // Scale only its photographs to fit the existing phone/portable budget;
+  // geometry, footprint, ownership and photo UVs remain identical.
+  const surfaces = [...design.walls, ...design.ceilings], bytes = scanDesignByteLength(design);
+  if (bytes > MAX_SCAN_DESIGN_BYTES) {
+    const photoBytes = surfaces.reduce((sum, s) => sum + s.texture.data.byteLength + s.detailMask.byteLength, 0);
+    const available = MAX_SCAN_DESIGN_BYTES - (bytes - photoBytes);
+    if (available <= 0) return null;
+    const scale = Math.min(1, Math.sqrt(available / photoBytes) * .995);
+    for (const s of surfaces) {
+      const source = s.texture, width = Math.max(2, Math.floor(source.width * scale)), height = Math.max(2, Math.floor(source.height * scale));
+      const data = new Uint8Array(width * height * 4), detail = new Uint8Array(width * height);
+      for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+        const i = Math.min(source.height-1, Math.floor((y+.5)/height*source.height))*source.width +
+          Math.min(source.width-1, Math.floor((x+.5)/width*source.width));
+        data.set(source.data.subarray(i*4,i*4+4),(y*width+x)*4); detail[y*width+x] = s.detailMask[i];
+      }
+      s.texture = { width, height, data }; s.detailMask = detail;
+    }
+  }
   return scanDesignByteLength(design) <= MAX_SCAN_DESIGN_BYTES ? design : null;
 }

@@ -16,7 +16,7 @@ jest.mock("antd", () => ({
     "Button", "Card", "Col", "Empty", "Form", "Input", "InputNumber", "Modal",
     "Radio", "Row", "Select", "Space", "Statistic", "Table", "Tag", "Typography",
   ].map((name) => [name, jest.requireActual(`antd/lib/${name === "InputNumber" ? "input-number" : name.toLowerCase()}`).default])),
-  message: { success: jest.fn(), error: jest.fn() },
+  message: { success: jest.fn(), error: jest.fn(), warning: jest.fn() },
 }));
 jest.mock("@ant-design/icons", () => Object.fromEntries([
   "AppstoreOutlined", "ClearOutlined", "DownloadOutlined", "UploadOutlined",
@@ -159,4 +159,87 @@ test("a failed delivery can be retried without creating a second stock operation
   submitStockUpdate(dialog);
   await waitFor(() => expect(api.post).toHaveBeenCalledTimes(2));
   expect(api.post.mock.calls[1]).toEqual(firstCall);
+});
+
+const importedRows = [{
+  line: 2, sku: "FST-NAIL-002", barcode: "", productName: "", branchCode: "BR-001", branch: "",
+  quantity: "10", reorderLevel: "20", shelfLocation: "B-02",
+}];
+
+const importReview = {
+  preview: true, imported: 1, created: 0, updated: 1, skipped: 0, errors: [],
+  previewRows: [{
+    line: 2, productName: "Common Nail 2 inch", sku: "FST-NAIL-002",
+    branchName: "Main Store", branchCode: "BR-001", action: "Add stock",
+    quantity: 10, previousQuantity: 20, newQuantity: 30, reorderLevel: 5, shelfLocation: "A-01",
+  }],
+};
+
+const openInventoryImport = async (quantity = "10") => {
+  render(<MemoryRouter><Inventory /></MemoryRouter>);
+  await screen.findByText("Common Nail 2 inch");
+  fireEvent.click(screen.getByText("Import Inventory", { selector: "button span" }).closest("button"));
+  const dialog = await screen.findByRole("dialog", { hidden: true });
+  const file = new File([
+    `SKU,Branch Code,Quantity,Reorder Level,Shelf Location\nFST-NAIL-002,BR-001,${quantity},20,B-02`,
+  ], "delivery.csv", { type: "text/csv" });
+  fireEvent.change(within(dialog).getByLabelText("Inventory CSV file"), { target: { files: [file] } });
+  await within(dialog).findByText("delivery.csv - 1 row(s) ready");
+  fireEvent.click(within(dialog).getByText("Review import", { selector: "button span" }).closest("button"));
+  return dialog;
+};
+
+const confirmInventoryImport = async (dialog) => {
+  const button = within(dialog).getByText("Confirm import", { selector: "button span" }).closest("button");
+  await waitFor(() => expect(button).not.toHaveClass("ant-btn-loading"));
+  fireEvent.click(button);
+};
+
+test("an import previews existing stock additions and confirms them with a request key", async () => {
+  api.post.mockResolvedValueOnce({ data: importReview }).mockResolvedValueOnce({ data: importReview });
+  const dialog = await openInventoryImport();
+  await within(dialog).findByText("Confirm import", { selector: "button span" });
+  expect(api.post).toHaveBeenNthCalledWith(1, "/inventory/import", { rows: importedRows, preview: true });
+  expect(within(dialog).getByRole("columnheader", { name: "Quantity to add" })).toBeInTheDocument();
+  const row = within(dialog).getByRole("row", { name: /Common Nail 2 inch/ });
+  expect(within(row).getByRole("cell", { name: "Add stock" })).toBeInTheDocument();
+  expect(within(row).getByRole("cell", { name: "20" })).toBeInTheDocument();
+  expect(within(row).getByRole("cell", { name: "10" })).toBeInTheDocument();
+  expect(within(row).getByRole("cell", { name: "30" })).toBeInTheDocument();
+  expect(within(row).getByRole("cell", { name: "A-01" })).toBeInTheDocument();
+  await confirmInventoryImport(dialog);
+  await waitFor(() => expect(api.post).toHaveBeenNthCalledWith(2,
+    "/inventory/import", { rows: importedRows },
+    { headers: { "Idempotency-Key": expect.any(String) } },
+  ));
+  await waitFor(() => expect(api.get).toHaveBeenCalledTimes(2));
+  expect(message.success).toHaveBeenCalledWith("1 inventory row(s) imported.");
+});
+
+test("a failed import keeps its preview and retries with the same request key", async () => {
+  api.post.mockResolvedValueOnce({ data: importReview })
+    .mockRejectedValueOnce({ response: { data: { message: "The server is unavailable." } } })
+    .mockResolvedValueOnce({ data: importReview });
+  const dialog = await openInventoryImport();
+  await within(dialog).findByText("Confirm import", { selector: "button span" });
+  await confirmInventoryImport(dialog);
+  await waitFor(() => expect(message.error).toHaveBeenCalledWith("The server is unavailable."));
+  const firstAttempt = api.post.mock.calls[1];
+  expect(within(dialog).getByRole("cell", { name: "30" })).toBeInTheDocument();
+  await confirmInventoryImport(dialog);
+  await waitFor(() => expect(api.post).toHaveBeenCalledTimes(3));
+  expect(api.post.mock.calls[2]).toEqual(firstAttempt);
+});
+
+test("an invalid import shows row errors and keeps confirmation unavailable", async () => {
+  api.post.mockResolvedValueOnce({ data: {
+    preview: true, imported: 0, created: 0, updated: 0, skipped: 1, previewRows: [],
+    errors: [{ line: 2, message: "Quantity must be a number greater than or equal to 0." }],
+  } });
+  const dialog = await openInventoryImport("invalid");
+  expect(await within(dialog).findByText("1 row(s) need attention")).toBeInTheDocument();
+  expect(within(dialog).getByText(/Line 2: Quantity must be/)).toBeInTheDocument();
+  expect(within(dialog).queryByText("Confirm import", { selector: "button span" })).not.toBeInTheDocument();
+  expect(message.warning).toHaveBeenCalledWith("No valid rows to import. Review the row errors below.");
+  expect(api.post).toHaveBeenCalledTimes(1);
 });

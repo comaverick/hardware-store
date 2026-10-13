@@ -7,6 +7,15 @@ const median = values => values.slice().sort((a, b) => a - b)[Math.floor(values.
 const luminance = rgb => (rgb[0] + rgb[1] + rgb[2]) / 3;
 const distance = (a, b) => Math.hypot(...a.map((v, i) => v - b[i]));
 const inView = uv => uv && Math.min(uv.u, uv.v) >= .01 && Math.max(uv.u, uv.v) <= .99;
+function convexHull(points) {
+  const sorted = points.slice().sort((a,b) => a[0]-b[0] || a[1]-b[1]);
+  const turn = (a,b,c) => (b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]);
+  const side = points => { const result=[]; for(const p of points){while(result.length>1 && turn(result.at(-2),result.at(-1),p)<=0)result.pop();result.push(p);}return result; };
+  const lower=side(sorted),upper=side(sorted.slice().reverse());return [...lower.slice(0,-1),...upper.slice(0,-1)];
+}
+const insideHull = (p,hull) => hull.length >= 3 && hull.every((a,i) => {
+  const b=hull[(i+1)%hull.length];return (b[0]-a[0])*(p[1]-a[1])-(b[1]-a[1])*(p[0]-a[0])>=-1e-7;
+});
 function facePoints(mesh, face) {
   return [0, 1, 2].map(c => Array.from(mesh.positions.subarray(mesh.indices[face * 3 + c] * 3, mesh.indices[face * 3 + c] * 3 + 3)));
 }
@@ -249,10 +258,39 @@ export function prepareScanCeiling(mesh, frames, helpers, removed, walls = []) {
     cell.frame = choice.frame;
     cell.rgb = choice.rgb;
   }
-  // Close small enclosed depth cracks only where the source mesh already
-  // supplied a footprint and an actual photograph confirms plain ceiling.
-  // Missing outer boundaries, fixture gaps and stable alternate levels stay open.
+  // Include actual enclosed meshing holes, rather than only cells containing a
+  // surviving triangle. Never grow through the exterior boundary. The rim has
+  // native depth ownership; two translated photographs must confirm every
+  // missing cell, and observed free space/fixtures still veto it.
   let repairedGapCells = 0;
+  const sourceHull = convexHull([...observedFootprint].map(k=>k.split(',').map(Number)));
+  const xs = [...cells.values()].map(p => p.x), zs = [...cells.values()].map(p => p.z);
+  const gapMin = [Math.min(...xs)-1, Math.min(...zs)-1], gapMax = [Math.max(...xs)+1, Math.max(...zs)+1];
+  if ((gapMax[0]-gapMin[0]+1)*(gapMax[1]-gapMin[1]+1) <= MAX_CELLS) {
+    for (let x = gapMin[0]; x <= gapMax[0]; x++) for (let z = gapMin[1]; z <= gapMax[1]; z++) observedFootprint.add(key(x,z));
+  }
+  const photoObservers = new Map(photos.map((f,i) => [i,{...f,camera:Array.from((f.viewTransformMatrix || f.transformMatrix).slice(12,15))}]));
+  function repairPhotograph(x,z) {
+    const p=world(x+.5,z+.5), through=[];
+    if (walls.some(w => w.normal.reduce((s,n,i) => s+n*p[i],0)-w.offset < -.01)) return null;
+    for(const f of frames){
+      if(f.textureOnly)continue;
+      const uv=helpers.project(f,...p);if(!inView(uv))continue;
+      const i=Math.floor(uv.v*f.rows)*f.columns+Math.floor(uv.u*f.columns),d=(f.originalFilteredDepth||f.filteredDepth)?.[i];
+      if(f.measuredMask?.[i] && d-uv.depth>MAX_MOVEMENT && f.freeSpaceMask?.[i] && (f.depthConfidence?.[i]??255)>=140)through.push(f.frameId);
+    }
+    if(independent(through).size>=2)return null;
+    const choices=preferred.map(frame=>{
+      const samples=[[.1,.1],[.9,.1],[.5,.5],[.1,.9],[.9,.9]].map(([dx,dz])=>{
+        const uv=projectColor(frame,...world(x+dx,z+dz));return inView(uv)&&helpers.sampleColor(frame,uv);
+      });
+      if(samples.some(rgb=>!rgb))return null;
+      return {frame,rgb:samples[2],samples,plain:samples.every(matches)};
+    }).filter(Boolean);
+    const plain=choices.filter(c=>c.plain);
+    if(independentFrameIds(plain.map(c=>photos.indexOf(c.frame)),photoObservers,.06).size>=2)return {...plain[0],detail:false};
+    return null;
+  }
   const gaps = new Set([...observedFootprint].filter(k => !cells.has(k)));
   while (gaps.size) {
     const region = [gaps.values().next().value];
@@ -260,7 +298,7 @@ export function prepareScanCeiling(mesh, frames, helpers, removed, walls = []) {
     let enclosed = true;
     for (let i = 0; i < region.length; i++) {
       const [x, z] = region[i].split(',').map(Number);
-      if (protectedCells.has(region[i])) enclosed = false;
+      if (protectedCells.has(region[i]) || x === gapMin[0] || x === gapMax[0] || z === gapMin[1] || z === gapMax[1]) enclosed = false;
       for (const [dx, dz] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
         const k = key(x + dx, z + dz);
         if (!observedFootprint.has(k)) enclosed = false;
@@ -269,30 +307,40 @@ export function prepareScanCeiling(mesh, frames, helpers, removed, walls = []) {
     }
     const points = region.map(k => k.split(',').map(Number));
     const span = [0, 1].map(a => (Math.max(...points.map(p => p[a])) - Math.min(...points.map(p => p[a])) + 1) * CELL);
-    if (!enclosed || region.length * CELL * CELL > .05 || Math.hypot(...span) > .35) continue;
+    if (!enclosed || region.length * CELL * CELL > .16 || Math.hypot(...span) > .7) continue;
     const repairs = [];
     for (const [x, z] of points) {
-      const p = world(x + .5, z + .5);
-      const choice = preferred.map(frame => {
-        const uv = projectColor(frame, ...p),
-          rgb = inView(uv) && helpers.sampleColor(frame, uv);
-        return rgb && matches(rgb) ? {
-          frame,
-          rgb
-        } : null;
-      }).find(Boolean);
-      if (!choice) break;
+      const choice = repairPhotograph(x,z);
+      if(!choice)break;
       repairs.push({
         x,
         z,
         frame: choice.frame,
         rgb: choice.rgb,
-        detail: false
+        detail: !!choice.detail,
+        photoRepair: true
       });
     }
     if (repairs.length === region.length) {
       repairs.forEach(p => cells.set(key(p.x, p.z), p));
       repairedGapCells += repairs.length;
+    }
+  }
+  // A recessed ceiling can have cracks connected to the rim of its sparse
+  // depth mesh. Its observed silhouette plus independent plain-ceiling photos
+  // can support a local display estimate, without expanding to the room bounds.
+  // Keep it close to the observed cells and exclude beams, fixtures/free space.
+  {
+    const near=new Set();
+    for(const c of cells.values())for(let dx=-7;dx<=7;dx++)for(let dz=-7;dz<=7;dz++){
+      if(Math.hypot(dx,dz)*CELL<=.28)near.add(key(c.x+dx,c.z+dz));
+    }
+    for(const k of near){
+      if(cells.has(k)||protectedCells.has(k))continue;
+      const [x,z]=k.split(',').map(Number);
+      if(!insideHull([x,z],sourceHull))continue;
+      const choice=repairPhotograph(x,z);if(!choice)continue;
+      cells.set(k,{x,z,frame:choice.frame,rgb:choice.rgb,detail:choice.detail,photoRepair:true});repairedGapCells++;
     }
   }
   // Keep sizeable connected observed regions; do not create detached tiles.
@@ -319,8 +367,8 @@ export function prepareScanCeiling(mesh, frames, helpers, removed, walls = []) {
   const gw = max[0] - min[0],
     gh = max[1] - min[1];
   if (gw * gh > MAX_CELLS) return null;
-  const width = Math.min(512, Math.ceil(gw * CELL * 128)),
-    textureHeight = Math.min(512, Math.ceil(gh * CELL * 128));
+  const width = Math.min(768, Math.ceil(gw * CELL * 192)),
+    textureHeight = Math.min(768, Math.ceil(gh * CELL * 192));
   const texture = {
       width,
       height: textureHeight,

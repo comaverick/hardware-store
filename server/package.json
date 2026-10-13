@@ -6,7 +6,7 @@
   "scripts": {
     "test:customers": "node --test test/customerRoutes.test.js",
     "test:auth": "node --test test/authMiddleware.test.js test/branchAccess.test.js test/customerAuthRoutes.test.js",
-    "test:stock": "node --test test/stockOperations.test.js test/reservationFulfillment.test.js",
+    "test:stock": "node --test test/stockOperations.test.js test/inventoryImport.test.js test/reservationFulfillment.test.js",
     "test:reservations": "node --test test/customerReservationRoutes.test.js test/reservationFulfillment.test.js test/storefrontRoutes.test.js",
     "test:scanspace": "node --test test/scanspace*.test.js",
     "test:products": "node --test test/productImages.test.js",

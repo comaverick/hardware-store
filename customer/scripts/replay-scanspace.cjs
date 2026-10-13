@@ -9,6 +9,7 @@ const babel = require("@babel/core");
 const cache = new Map();
 function load(file) {
   file = path.resolve(__dirname, "..", file);
+  if (path.extname(file) === ".json") return JSON.parse(fs.readFileSync(file, "utf8"));
   if (cache.has(file)) return cache.get(file).exports;
   const loaded = new Module(file, module);
   loaded.filename = file;

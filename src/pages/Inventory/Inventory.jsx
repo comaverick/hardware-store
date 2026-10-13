@@ -76,18 +76,23 @@ const Inventory = () => {
   const reservedQuantity = selectedInventory?.reservedQuantity || 0;
   const isCorrection = stockUpdateType === "correction";
   const stockRequestRef = useRef(null);
+  const importRequestRef = useRef(null);
 
   useEffect(() => {
     stockRequestRef.current = null;
   }, [stockUpdateOpen]);
 
-  const postStockAction = (path, values) => {
+  useEffect(() => {
+    importRequestRef.current = null;
+  }, [importOpen]);
+
+  const postStockAction = (path, values, requestRef = stockRequestRef) => {
     const signature = JSON.stringify({ path, values });
-    if (stockRequestRef.current?.signature !== signature) {
-      stockRequestRef.current = { signature, key: createRequestKey() };
+    if (requestRef.current?.signature !== signature) {
+      requestRef.current = { signature, key: createRequestKey() };
     }
     return api.post(path, values, {
-      headers: { "Idempotency-Key": stockRequestRef.current.key },
+      headers: { "Idempotency-Key": requestRef.current.key },
     });
   };
 
@@ -298,8 +303,10 @@ const Inventory = () => {
 
   const handleImportFile = (event) => {
     const file = event.target.files?.[0];
-    if (!file) return;
+    if (!file || importing) return;
+    importRequestRef.current = null;
     setImportFileName(file.name);
+    setImportRows([]);
     setImportResult(null);
     setImportPreview([]);
     const reader = new FileReader();
@@ -309,14 +316,15 @@ const Inventory = () => {
   };
 
   const handleReviewImport = async () => {
-    if (!importRows.length) return;
+    if (!importRows.length || importing) return;
     try {
       setImporting(true);
       const response = await api.post("/inventory/import", { rows: importRows, preview: true });
       const result = response.data || {};
       setImportResult(result);
       setImportPreview(result.previewRows || []);
-      message.success(`${result.imported || 0} record(s) ready to import.`);
+      if (result.imported) message.success(`${result.imported} row(s) ready to add stock.`);
+      else message.warning("No valid rows to import. Review the row errors below.");
     } catch (error) {
       message.error(error.response?.data?.message || "Failed to review inventory import.");
     } finally {
@@ -325,13 +333,18 @@ const Inventory = () => {
   };
 
   const handleImport = async () => {
-    if (!importPreview.length) return;
+    if (!importPreview.length || importing) return;
     try {
       setImporting(true);
-      const response = await api.post("/inventory/import", { rows: importRows });
+      const response = await postStockAction("/inventory/import", { rows: importRows }, importRequestRef);
       const result = response.data || {};
       setImportResult(result);
-      message.success(`${result.imported || 0} inventory record(s) imported.`);
+      if (!result.imported) {
+        setImportPreview([]);
+        message.warning("No stock was imported. Review the row errors below.");
+        return;
+      }
+      message.success(`${result.imported} inventory row(s) imported.`);
       if (result.errors?.length) message.warning(`${result.errors.length} row(s) were skipped or had errors.`);
       setImportOpen(false);
       setImportRows([]);
@@ -766,10 +779,14 @@ const Inventory = () => {
         onOk={importPreview.length ? handleImport : handleReviewImport}
         okText={importPreview.length ? "Confirm import" : "Review import"}
         confirmLoading={importing}
-        width={900}
+        cancelButtonProps={{ disabled: importing }}
+        closable={!importing}
+        keyboard={!importing}
+        maskClosable={!importing}
+        width={1100}
       >
         <Text type="secondary">
-          Upload a CSV using common columns such as Product, SKU, Barcode, Branch, Quantity, Reorder Level, and Shelf. Headers and separators are detected automatically. Review the proposed additions before confirming. Existing product/branch records are skipped safely.
+          Upload a CSV using common columns such as Product, SKU, Barcode, Branch, Quantity, Reorder Level, and Shelf. Headers and separators are detected automatically. Quantity is the stock to add: existing product/branch records are restocked and new records are created. Reorder Level and Shelf Location apply to new inventory records. Review the quantities and proposed totals before confirming.
         </Text>
         <div className="inventory-import-template">
           <div>
@@ -781,7 +798,7 @@ const Inventory = () => {
           </Button>
         </div>
         <div className="inventory-import-upload">
-          <input type="file" accept=".csv,text/csv" onChange={handleImportFile} />
+          <input type="file" aria-label="Inventory CSV file" accept=".csv,text/csv" onChange={handleImportFile} disabled={importing} />
           {importFileName && <Text type="secondary">{importFileName} - {importRows.length} row(s) ready</Text>}
         </div>
         {(importRows.length > 0 || importPreview.length > 0) && (
@@ -790,11 +807,17 @@ const Inventory = () => {
             rowKey="line"
             dataSource={(importPreview.length ? importPreview : importRows).slice(0, 10)}
             pagination={false}
+            scroll={{ x: 1000 }}
             columns={[
               { title: "Line", dataIndex: "line" },
               { title: "Product", dataIndex: "productName", render: (value, row) => value || row.sku || row.barcode },
               { title: "Branch", dataIndex: "branchCode", render: (value, row) => value || row.branch || row.branchName },
-              { title: "Quantity", dataIndex: "quantity" },
+              ...(importPreview.length ? [
+                { title: "Action", dataIndex: "action" },
+                { title: "Current stock", dataIndex: "previousQuantity" },
+              ] : []),
+              { title: "Quantity to add", dataIndex: "quantity" },
+              ...(importPreview.length ? [{ title: "New total", dataIndex: "newQuantity" }] : []),
               { title: "Reorder", dataIndex: "reorderLevel" },
               { title: "Shelf", dataIndex: "shelfLocation" },
             ]}

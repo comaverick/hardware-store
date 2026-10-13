@@ -4,8 +4,11 @@ export const MAX_SCAN_MESH_BYTES = 36 * 1024 * 1024;
 
 export function textureAtlasLayout(images, triangleCount = 0, maxTextureSize = 4096) {
   if (!images.length) return null;
-  const columns = Math.ceil(Math.sqrt(images.length + 1));
-  const rows = Math.ceil((images.length + 1) / columns);
+  // Color-only faces sample a white 2x2 patch in the unused atlas gutter.
+  // Reserving an entire photograph tile for that constant used a whole extra
+  // row on a 12-photo capture and needlessly reduced every image's resolution.
+  const columns = Math.ceil(Math.sqrt(images.length));
+  const rows = Math.ceil(images.length / columns);
   const padding = 4;
   // Expanded triangle: positions/normals 72, RGB 9, UV 24, indices 12 bytes.
   const budget = Math.min(MAX_SCAN_ARRAY_BYTES,

@@ -965,7 +965,7 @@ test("allows validated multi-view surface fusion without a room heading sweep", 
   expect(result.mesh?.kind).toBe("projective-tsdf-surface-net");
   expect(result.mesh?.triangleCount).toBeGreaterThan(0);
   expect(result.diagnostics.completionMode).toBe("surface");
-  expect(result.diagnostics.algorithmVersion).toBe(59);
+  expect(result.diagnostics.algorithmVersion).toBe(60);
   expect(result.diagnostics.planarConsolidation.planes.length).toBeGreaterThan(0);
   expect(result.diagnostics.globalSurfaceConsensus).toBeUndefined();
   expect(result.diagnostics.measuredSurfaceQuality.assessed).toBe(true);
@@ -1001,9 +1001,13 @@ test("independent texture observations cannot add depth support, warp or duplica
   expect(after.diagnostics.independentTextureFrames).toBe(2);
   expect(after.diagnostics.keyframes).toBe(before.diagnostics.keyframes);
   expect(after.diagnostics.confirmedVoxels).toBe(before.diagnostics.confirmedVoxels);
-  expect(after.mesh.positions).toEqual(before.mesh.positions);
-  expect(after.mesh.indices).toEqual(before.mesh.indices);
-  expect(after.mesh.normals).toEqual(before.mesh.normals);
+  // Identical corners share storage, but a new photo can require another UV
+  // seam. Compare the actual triangles rather than that storage arrangement.
+  const corners = (mesh, name) => Float32Array.from({ length: mesh.indices.length * 3 },
+    (_, i) => mesh[name][mesh.indices[Math.floor(i / 3)] * 3 + i % 3]);
+  expect(after.mesh.indices.length).toBe(before.mesh.indices.length);
+  expect(corners(after.mesh, "positions")).toEqual(corners(before.mesh, "positions"));
+  expect(corners(after.mesh, "normals")).toEqual(corners(before.mesh, "normals"));
   expect(after.observations).toEqual(before.observations);
   const noGeometry = fuseRgbdKeyframes([], { ...options, textureKeyframes: [photo, foregroundPhoto] });
   expect(noGeometry.mesh).toBeNull();

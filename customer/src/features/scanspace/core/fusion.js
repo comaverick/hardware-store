@@ -5,6 +5,7 @@ import { alignFinishedScan } from "./scanCoordinates";
 import { repairCeilingRegions } from "./ceilingRecovery.js";
 import { createColorGapRepair } from "./colorGapRepair.js";
 import { blendRepairColors } from "./repairColors.js";
+import { compactTexturedMesh } from "./compactTexturedMesh.js";
 import { rebuildStructuralSurfaces } from "./structuralSurface.js";
 import { pruneContradictedSurfaceTriangles } from "./surfaceEvidence.js";
 import { conformSurfaceTopology, orientManifoldFaces, pruneUnsupportedFragments, surfaceTopologyDiagnostics, triangulatePlanarLoop } from "./surfaceTopology.js";
@@ -4201,7 +4202,10 @@ function buildAtlas(frames, precomputedCalibration = null, triangleCount = 0, op
         data[target + 3] = 255;
       }
     frame.atlasTile = tile;
+    frame.atlasUVTransform = [(tileX * strideX + padding + .5) / width,
+      (tileY * strideY + padding + .5) / height, (tileWidth - 1) / width, (tileHeight - 1) / height];
   });
+  for (const y of [1,2]) for (const x of [1,2]) data.set([255,255,255,255],(y*width+x)*4);
   return {
     data,
     width,
@@ -4211,6 +4215,7 @@ function buildAtlas(frames, precomputedCalibration = null, triangleCount = 0, op
     strideX,
     strideY,
     padding,
+    blankUV: [2 / width, 2 / height],
     columns,
     frames: images,
     referenceSharpness,
@@ -4899,13 +4904,7 @@ export function texturedMesh(mesh, frames, precomputedCalibration = null, option
         uvs.push((tileY * atlas.strideY + atlas.padding + v * (atlas.tileHeight - 1) + 0.5) / atlas.height);
         colors.push(255, 255, 255);
       } else {
-        const blankTile = atlas.frames.length;
-        const tileX = blankTile % atlas.columns;
-        const tileY = Math.floor(blankTile / atlas.columns);
-        uvs.push(
-          (tileX * atlas.strideX + atlas.strideX * 0.5) / atlas.width,
-          (tileY * atlas.strideY + atlas.strideY * 0.5) / atlas.height,
-        );
+        uvs.push(...atlas.blankUV);
         if (record.estimated && repairedColors?.blended[recordIndex])
           colors.push(...repairedColors.colors.subarray(vertex * 3, vertex * 3 + 3));
         else if (record.estimated) colors.push(115, 122, 118);
@@ -5786,7 +5785,7 @@ export function fuseRgbdKeyframes(keyframes, options = {}, report) {
       },
     );
   report?.("texturing", 88);
-  const textured = texturedMesh(surface, textureFrames, colorCalibration, options);
+  const textured = compactTexturedMesh(texturedMesh(surface, textureFrames, colorCalibration, options));
   if (stages.surfaceRepair && textured.repairColorBlending) {
     stages.surfaceRepair.colorBlendedTriangles = textured.repairColorBlending.triangles;
     stages.surfaceRepair.colorBlendedArea = textured.repairColorBlending.area;

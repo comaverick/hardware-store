@@ -22,6 +22,7 @@ The following authenticated write endpoints require a unique `Idempotency-Key` h
 - `POST /api/purchase-orders/:id/receive`
 - `POST /api/inventory-transactions/receive`
 - `POST /api/inventory-transactions/adjust`
+- `POST /api/inventory/import` (confirmation only; previews are read-only)
 - `POST /api/reservations/:id/checkout`
 
 Generate a new key for each intended operation. Reuse the same key and identical request body when retrying after a timeout. The server returns the original result without applying stock changes again. Reusing a key with a different body returns `409`.
@@ -31,6 +32,12 @@ Refund items should include the sale line `itemId`, plus `quantity` and optional
 Stock changes and their history are committed in MongoDB transactions. The MongoDB deployment must support transactions (a replica set or sharded cluster). The unique index on `StockOperation.actor` and `StockOperation.key` must be built before stock writes; the server waits for the model index to initialize.
 
 Run `npm run test:stock` for the focused stock operation tests.
+
+## Inventory CSV imports
+
+`POST /api/inventory/import` accepts `{ rows, preview: true }` to review a CSV and `{ rows }` to confirm it. Each row's `quantity` is added to the current stock for that product and branch. Missing inventory records are created. Reorder levels and shelf locations from the CSV are used only when creating a record; existing settings and reservations are preserved.
+
+The preview includes the current quantity, quantity to add, and resulting total. Duplicate product/branch rows within the same file, invalid quantities, unknown products, and inaccessible branches are reported by line and skipped. Confirmation records positive additions as `STOCK_IN` history in the same transaction as the inventory update and requires an idempotency key, so retrying a request does not add stock twice. Totals are recalculated at confirmation using the latest stock.
 
 ## Reservation pickup
 

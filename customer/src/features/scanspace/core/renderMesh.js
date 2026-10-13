@@ -37,6 +37,7 @@ export function createScanMeshResources(mesh) {
     texture.generateMipmaps = false;
     texture.minFilter = THREE.LinearFilter;
     texture.magFilter = THREE.LinearFilter;
+    texture.anisotropy = 4;
     texture.needsUpdate = true;
   }
   return { geometry, texture };
