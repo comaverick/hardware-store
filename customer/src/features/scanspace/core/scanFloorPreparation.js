@@ -6,6 +6,33 @@ const key = (x,y) => `${x},${y}`;
 const inView = uv => uv && Math.min(uv.u,uv.v)>=.01 && Math.max(uv.u,uv.v)<=.99;
 const neighbors = [[-1,0],[1,0],[0,-1],[0,1]];
 
+const mean=rgb=>rgb.reduce((sum,v)=>sum+v,0)/3;
+function wallPixel(w,point) {
+  if(!w.texture?.data || !w.extent || !w.footprint)return null;
+  const q=w.axes.map(a=>dot(a,point)/w.cellSize),[min,max]=w.extent;
+  const gx=Math.floor(q[0])-min[0],gy=Math.floor(q[1])-min[1],gw=max[0]-min[0];
+  if(gx<0 || gy<0 || gx>=gw || gy>=max[1]-min[1] || !w.footprint[gy*gw+gx])return null;
+  const x=Math.floor((q[0]-min[0])/gw*w.texture.width),y=Math.floor((q[1]-min[1])/(max[1]-min[1])*w.texture.height);
+  return Array.from(w.texture.data.subarray((y*w.texture.width+x)*4,(y*w.texture.width+x)*4+3));
+}
+
+// The floor fit can cross a photographed skirting cap. Close the geometry but
+// preserve its captured material: a finish may change only the actual flooring.
+// Nearby shadows alone cannot protect it; require the same trim in the wall photo
+// and a contrasting plaster sample above that strip.
+export function photographedWallTrim(point,rgb,walls) {
+  if(!rgb)return false;
+  return walls.some(w=>{
+    const distance=dot(w.normal,point)-w.offset;
+    if(distance<-.015 || distance>.08)return false;
+    const above=wallPixel(w,[point[0],point[1]+.25,point[2]]);
+    if(!above || mean(above)<mean(rgb)*1.5)return false;
+    const matches=[-.02,-.01,0,.01,.02].map(dy=>wallPixel(w,[point[0],point[1]+dy,point[2]]))
+      .filter(c=>c && Math.hypot(...c.map((v,i)=>v-rgb[i]))<55);
+    return matches.length>=2;
+  });
+}
+
 // One editable floor owns the native-supported footprint. Object fragments keep
 // their photographs even when a bent hem lies close to the measured floor.
 // This optional display sheet never changes measured geometry or coverage.
@@ -70,7 +97,7 @@ export function prepareScanFloor(mesh, planes, helpers, fragments, removed, wall
       const ray=center.map((v,i)=>transform[i+12]-v),distance=Math.hypot(...ray),angle=dot(ray,floor.normal)/distance;
       if(angle<.25)continue;
       const score=angle*Math.sqrt(frame.colorWidth*frame.colorHeight)/distance;
-      choices.push({frame,projections,score}); votes.set(frame,(votes.get(frame)||0)+score);
+      choices.push({frame,projections,score,rgb}); votes.set(frame,(votes.get(frame)||0)+score);
     }
     if(!choices.length){cells.delete(k);continue;}
     c.points=points;c.choices=choices;
@@ -100,10 +127,18 @@ export function prepareScanFloor(mesh, planes, helpers, fragments, removed, wall
   }
   Object.assign(fragments,retained);
   const firstFace=fragments.indices.length/3;
+  let preservedTrimCells=0;
   for(const c of cells.values()) {
     const best=Math.max(...c.choices.map(q=>q.score));
     const choice=preferred.map(f=>c.choices.find(q=>q.frame===f && q.score>=best*.5)).find(Boolean);
     const t=choice.frame.atlasUVTransform;
+    const center=world(c.x+.5,c.y+.5);
+    const trim=photographedWallTrim(center,choice.rgb,walls) || c.points.some(corner=>{
+      const point=corner.map((v,i)=>v*.8+center[i]*.2);
+      if(!walls.some(w=>Math.abs(dot(w.normal,point)-w.offset)<=.08))return false;
+      return photographedWallTrim(point,helpers.sampleColor(choice.frame,helpers.projectColor(choice.frame,...point)),walls);
+    });
+    if(trim)preservedTrimCells++;
     const start=fragments.positions.length/3;
     for(let i=0;i<4;i++) {
       fragments.positions.push(...c.points[i]);fragments.normals.push(...floor.normal);fragments.colors.push(255,255,255);
@@ -111,8 +146,9 @@ export function prepareScanFloor(mesh, planes, helpers, fragments, removed, wall
     }
     const a=floor.axes[0],b=floor.axes[1],sign=dot([a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]],floor.normal);
     fragments.indices.push(...(sign>0?[0,1,2,0,2,3]:[0,2,1,0,3,2]).map(i=>start+i));
-    fragments.sourceFaces.push(sourceFace,sourceFace);fragments.estimatedTriangleMask.push(1,1);fragments.finishLabels.push(2,2);
+    fragments.sourceFaces.push(sourceFace,sourceFace);fragments.estimatedTriangleMask.push(1,1);fragments.finishLabels.push(trim?0:2,trim?0:2);
   }
-  return {normal:floor.normal,offset:floor.offset,axes:floor.axes,area:cells.size*CELL*CELL,
-    estimatedArea:cells.size*CELL*CELL,triangleCount:cells.size*2,firstFace,gapCells,source:'independent-depth-footprint'};
+  return {normal:floor.normal,offset:floor.offset,axes:floor.axes,area:(cells.size-preservedTrimCells)*CELL*CELL,
+    estimatedArea:(cells.size-preservedTrimCells)*CELL*CELL,triangleCount:(cells.size-preservedTrimCells)*2,
+    preservedTrimTriangles:preservedTrimCells*2,firstFace,gapCells,source:'independent-depth-footprint'};
 }

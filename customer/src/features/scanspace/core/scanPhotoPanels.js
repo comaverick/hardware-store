@@ -73,6 +73,30 @@ export function classifyFoldedPhotoPanels(cells, cellSize) {
       (p.support === undefined || p.support>=2) && Number.isFinite(p.depthOffset) && Math.abs(p.depthOffset)<=.18) p.foldedPanel=true;
 }
 
+// A pleat detector's padded silhouette can reach the plaster beside a curtain.
+// Give a smooth neutral border back to an adjoining wall only when translated
+// native depth also observes that wall's orientation at the actual surface.
+export function foldedPanelWallBorders(cells, cellSize, normal, pointAt, adjoiningWalls) {
+  const cloth=[...cells.values()].filter(p=>p.foldedPanel);
+  if(!cloth.length || !adjoiningWalls.length)return [];
+  const min=Math.min(...cloth.map(p=>p.x)),max=Math.max(...cloth.map(p=>p.x)),released=[];
+  const colors=new Map();
+  for(const p of cloth)if(p.rgb) {if(!colors.has(p.x))colors.set(p.x,[]);colors.get(p.x).push(p.rgb);}
+  for(const p of cloth) {
+    const column=colors.get(p.x) || [];
+    const rgb=p.rgb || (column.length>=3 ? [0,1,2].map(i=>column.map(c=>c[i]).sort((a,b)=>a-b)[Math.floor(column.length/2)]) : null);
+    if(Math.min(p.x-min,max-p.x)*cellSize>.12 || !rgb || p.framedPicture ||
+        rgb.reduce((sum,v)=>sum+v,0)/3<140 || Math.max(...rgb)-Math.min(...rgb)>25 ||
+        !Number.isFinite(p.depthOffset))continue;
+    const point=pointAt(p);
+    if(adjoiningWalls.some(w=>Math.abs(w.normal.reduce((s,v,i)=>s+v*normal[i],0))<.6 &&
+        Math.abs(w.normal.reduce((s,v,i)=>s+v*point[i],0)-w.offset)<.045 && w.nativeNormalSupport(point)>=(p.rgb?2:3))) {
+      released.push(key(p.x,p.y));
+    }
+  }
+  return released;
+}
+
 // A curtain at a room corner can also project into the neighboring wall's
 // footprint. Share its measured fabric mask across that junction so the other
 // wall cannot recolor the thin cloth edge as a flat wall detail.
@@ -80,6 +104,7 @@ export function protectFoldedPanelJunctions(surfaces) {
   let protectedPixels=0;
   const panels=surfaces.filter(s=>s.preserved?.size);
   const nearby=new Map();
+  const plainWalls=new Map();
   for(const surface of surfaces) {
     const w=surface.wall,t=w.texture,mask=w.detailMask;
     for(let y=0;y<t.height;y++)for(let x=0;x<t.width;x++) {
@@ -87,6 +112,20 @@ export function protectFoldedPanelJunctions(surfaces) {
       const q=[w.extent[0][0]+(x+.5)/t.width*(w.extent[1][0]-w.extent[0][0]),
         w.extent[0][1]+(y+.5)/t.height*(w.extent[1][1]-w.extent[0][1])].map(v=>v*w.cellSize);
       const p=w.normal.map((n,a)=>n*w.offset+w.axes[0][a]*q[0]+w.axes[1][a]*q[1]);
+      const ownedKey=key(Math.floor(q[0]/w.cellSize),Math.floor(q[1]/w.cellSize));
+      const owned=surface.cells?.get(ownedKey),pixel=t.data?.subarray(i*4,i*4+3);
+      if(owned?.photoFrame && owned.support>=3 && !owned.foreground && !owned.textureDetail &&
+          !owned.framedPicture && Number.isFinite(owned.depthOffset) && Math.abs(owned.depthOffset)<.045 &&
+          pixel && pixel.reduce((sum,v)=>sum+v,0)/3>140 && Math.max(...pixel)-Math.min(...pixel)<25) {
+        const cacheKey=`${w.id}:${ownedKey}`;
+        if(!plainWalls.has(cacheKey)) {
+          const center=w.normal.map((n,a)=>n*w.offset+w.axes[0][a]*(owned.x+.5)*w.cellSize+w.axes[1][a]*(owned.y+.5)*w.cellSize);
+          plainWalls.set(cacheKey,!!surface.nativeWallSupport && surface.nativeWallSupport(center)>=2);
+        }
+        // An independently observed plain wall wins over a neighboring cloth
+        // mask's padding. Existing picture/foreground masks remain untouched.
+        if(plainWalls.get(cacheKey))continue;
+      }
       if(panels.some(s=>{
         if(s===surface)return false;
         const grid=s.wall.axes.map(axis=>Math.floor(axis.reduce((v,n,a)=>v+n*p[a],0)/s.wall.cellSize));
@@ -99,7 +138,7 @@ export function protectFoldedPanelJunctions(surfaces) {
           nearby.set(k,samples);
         }
         const residual=s.wall.normal.reduce((v,n,a)=>v+n*p[a],0)-s.wall.offset;
-        const rgb=t.data?.subarray(i*4,i*4+3);
+        const rgb=pixel;
         return nearby.get(k).some(cloth=>{
           if(Math.abs(residual-(cloth.depthOffset || 0))>=.18)return false;
           if(!rgb || !cloth.rgb)return !rgb;

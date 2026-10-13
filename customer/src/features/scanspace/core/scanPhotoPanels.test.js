@@ -1,4 +1,4 @@
-import { classifyFoldedPhotoPanels, protectFoldedPanelJunctions } from "./scanPhotoPanels";
+import { classifyFoldedPhotoPanels, protectFoldedPanelJunctions, foldedPanelWallBorders } from "./scanPhotoPanels";
 import { classifyWallPhotoDetails } from "./scanWallPhotoDetails";
 
 function panel({depth=true, shadows=false, horizontal=false}={}) {
@@ -46,6 +46,23 @@ test('cropped smooth cloth columns stay protected within the measured pleat enve
   expect(cells.get('2,10').foldedPanel).toBe(false);
 });
 
+test('native adjoining-wall normals release a white plaster border without releasing cloth or wood edging',()=>{
+  const cells=new Map();
+  for(let x=0;x<=24;x++)for(let y=0;y<25;y++)cells.set(`${x},${y}`,{x,y,foldedPanel:true,depthOffset:0,
+    rgb:x===24?[205,207,205]:x===23?[110,95,75]:[80,82,85]});
+  const pointAt=p=>[(p.x+.5)*.04,(p.y+.5)*.04,0];
+  const wall={normal:[-1,0,0],offset:-.96,nativeNormalSupport:()=>3};
+  const released=foldedPanelWallBorders(cells,.04,[0,0,1],pointAt,[wall]);
+  expect(released).toHaveLength(25);
+  expect(released.every(k=>k.startsWith('24,'))).toBe(true);
+  expect(foldedPanelWallBorders(cells,.04,[0,0,1],pointAt,[{...wall,nativeNormalSupport:()=>1}])).toHaveLength(0);
+  cells.get('24,10').framedPicture=true;
+  expect(foldedPanelWallBorders(cells,.04,[0,0,1],pointAt,[wall])).not.toContain('24,10');
+  cells.get('24,12').rgb=null;
+  expect(foldedPanelWallBorders(cells,.04,[0,0,1],pointAt,[wall])).toContain('24,12');
+  expect(foldedPanelWallBorders(cells,.04,[0,0,1],pointAt,[{...wall,nativeNormalSupport:()=>2}])).not.toContain('24,12');
+});
+
 test('a neighboring wall protects a curtain edge while distant wall pixels stay editable',()=>{
   const cloth={wall:{normal:[0,0,1],offset:0,axes:[[1,0,0],[0,1,0]],cellSize:.04,
     extent:[[0,0],[2,2]],texture:{width:2,height:2},detailMask:new Uint8Array(4)},
@@ -65,6 +82,16 @@ test('a neighboring wall protects a curtain edge while distant wall pixels stay 
   protectFoldedPanelJunctions([cloth,adjacent]);
   expect(adjacent.wall.detailMask.every(v=>v===255)).toBe(true);
   adjacent.wall.detailMask.fill(0);adjacent.wall.texture.data.fill(35);
+  protectFoldedPanelJunctions([cloth,adjacent]);
+  expect(adjacent.wall.detailMask.every(v=>v===255)).toBe(true);
+  for(const c of cloth.preserved.values())c.rgb=[205,207,205];
+  adjacent.wall.detailMask.fill(0);adjacent.wall.texture.data.fill(205);
+  adjacent.wall.id='adjacent';adjacent.nativeWallSupport=()=>3;
+  adjacent.cells=new Map();
+  for(let x=0;x<2;x++)for(let y=0;y<2;y++)adjacent.cells.set(`${x},${y}`,{x,y,photoFrame:{},support:5,depthOffset:0});
+  protectFoldedPanelJunctions([cloth,adjacent]);
+  expect(adjacent.wall.detailMask.some(Boolean)).toBe(false);
+  for(const c of adjacent.cells.values())c.foreground=true;
   protectFoldedPanelJunctions([cloth,adjacent]);
   expect(adjacent.wall.detailMask.every(v=>v===255)).toBe(true);
 });

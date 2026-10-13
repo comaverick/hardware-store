@@ -2,7 +2,7 @@ import { buildScanDesignSurfaces, validScanDesignSurfaces } from "./scanDesignSu
 import { identifyScanSurfaces } from "./scanSurfaces";
 import { alignFinishedScan } from "./scanCoordinates";
 import { serializePartialScan, parsePartialScan } from "./partialScanFile";
-import { prepareScanFloor } from "./scanFloorPreparation";
+import { prepareScanFloor, photographedWallTrim } from "./scanFloorPreparation";
 
 function fixture() {
   const positions=[],normals=[],colors=[],uvs=[],indices=[];
@@ -70,6 +70,35 @@ test('occluded photographs cannot invent a textured floor or erase the capture',
   expect(prepareScanFloor(mesh,[floor],{...helpers,photoVisible:()=>false},fragments,removed)).toBeNull();
   expect(removed.some(Boolean)).toBe(false);
   expect(fragments.indices).toHaveLength(0);
+});
+
+function trimWall() {
+  const width=60,height=66,data=new Uint8Array(width*height*4);
+  for(let y=0;y<height;y++)for(let x=0;x<width;x++)
+    data.set([...(y/height*1.32-.32<-.15?[30,25,20]:[210,205,200]),255],(y*width+x)*4);
+  return {normal:[0,0,1],offset:0,axes:[[1,0,0],[0,1,0]],cellSize:.04,extent:[[0,-8],[30,25]],
+    footprint:new Uint8Array(30*33).fill(2),texture:{width,height,data}};
+}
+
+test('wood skirting keeps its captured finish while the neighboring floor remains editable',()=>{
+  const {mesh,floor,helpers}=fixture(),wall=trimWall();
+  helpers.sampleColor=(f,uv)=>uv.v<.075?[30,25,20]:[200,190,170];
+  const fragments={positions:[],normals:[],colors:[],uvs:[],indices:[],sourceFaces:[],estimatedTriangleMask:[],finishLabels:[]};
+  const result=prepareScanFloor(mesh,[floor],helpers,fragments,new Uint8Array(mesh.indices.length/3),[wall]);
+  expect(result.preservedTrimTriangles).toBeGreaterThan(0);
+  expect(fragments.finishLabels.filter(x=>x===2)).toHaveLength(result.triangleCount);
+  for(let face=0;face<fragments.indices.length/3;face++) {
+    const z=[0,1,2].reduce((s,c)=>s+fragments.positions[fragments.indices[face*3+c]*3+2]/3,0);
+    if(z<.06)expect(fragments.finishLabels[face]).toBe(0);
+    if(z>.10)expect(fragments.finishLabels[face]).toBe(2);
+  }
+});
+
+test('a nearby floor shadow without matching wall trim remains part of the floor',()=>{
+  const wall=trimWall();
+  expect(photographedWallTrim([.5,-.25,.02],[90,85,80],[wall])).toBe(false);
+  expect(photographedWallTrim([.5,-.25,.12],[30,25,20],[wall])).toBe(false);
+  expect(photographedWallTrim([.5,-.25,.02],[30,25,20],[wall])).toBe(true);
 });
 
 test('independent rays through a floor opening veto enclosed gap filling',()=>{

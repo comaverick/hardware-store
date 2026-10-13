@@ -7,12 +7,12 @@ import { prepareScanFloor } from "./scanFloorPreparation";
 import { createScanPhotoVisibility } from "./scanPhotoVisibility";
 import { repairCapturedCeilingPhotos } from "./scanCapturedPhotoRepair";
 import { compactTexturedMesh } from "./compactTexturedMesh";
-import { protectFoldedPanelJunctions } from "./scanPhotoPanels";
+import { protectFoldedPanelJunctions, foldedPanelWallBorders } from "./scanPhotoPanels";
 
 // An editable surface is an approximation of the room envelope. It never
 // replaces the measured mesh or supplies new measured area/depth to capture.
 export const SCAN_DESIGN_SURFACE_VERSION = 2;
-export const SCAN_DESIGN_ALGORITHM_VERSION = 62;
+export const SCAN_DESIGN_ALGORITHM_VERSION = 63;
 export const MAX_SCAN_DESIGN_BYTES = 8 * 1024 * 1024;
 export const MAX_SCAN_CEILINGS = 2;
 const MAX_CELLS = 24000;
@@ -561,6 +561,11 @@ function buildWall(mesh, sourcePlane, frames, helpers, cell, junctionPlanes = []
     delete p.photoChoices; delete p.detailPhotoFrame;
   }
   background = photoDetails(cells, cell);
+  const adjoiningWalls = junctionPlanes.filter(p=>p!==sourcePlane && p.kind==='wall' && p.normal?.length===3 &&
+    Math.abs(p.normal[1])<.3).map(p=>({...p,nativeNormalSupport:makeWallNormalEvidence(frames,helpers,p)}));
+  const releasedWallBorders = foldedPanelWallBorders(cells,cell,normal,p=>world(p.x+.5,p.y+.5)
+    .map((v,i)=>v+normal[i]*p.depthOffset),adjoiningWalls);
+  for(const k of releasedWallBorders)cells.delete(k);
   const stableRaised = new Set();
   for (const region of gridComponents(new Map([...cells].filter(([,p]) => p.foreground && p.foregroundOffset >= .1)))) {
     const points=region.map(k=>cells.get(k)), width=Math.max(...points.map(p=>p.x))-Math.min(...points.map(p=>p.x))+1,
@@ -646,7 +651,7 @@ function buildWall(mesh, sourcePlane, frames, helpers, cell, junctionPlanes = []
     footprint, openingMask, supportingFrameIds: sourcePlane.supportingFrameIds || [],
     componentCount: gridComponents(cells).length, junctionVertexCount,
     source: meshOnly ? "mesh-footprint" : "independent-depth-footprint" }, cells, candidates, openings, preserved, background,
-    nativeWallSupport: makeWallNormalEvidence(frames, helpers, plane) };
+    nativeWallSupport: makeWallNormalEvidence(frames, helpers, plane), releasedWallBorderCells: releasedWallBorders.length };
 }
 
 function appendFragment(fragments, triangle, sourceFace, estimated = false) {
@@ -1114,10 +1119,12 @@ export function buildScanDesignSurfaces(mesh, planes, frames = [], helpers = {},
       estimatedArea: built.reduce((sum, p) => sum + p.wall.estimatedArea, 0),
       preservedFoldedPhotoArea: built.reduce((sum, p) => sum + p.preserved.size * cell * cell, 0),
       repairedPhotoPanelArea,
+      releasedWallBorderCells: built.reduce((sum,p)=>sum+p.releasedWallBorderCells,0),
       ...curtainJunctions,
       removedTriangles: removed.reduce((sum, x) => sum + x, 0), fragmentTriangles: fragments.indices.length / 3,
       ...boundaryRepair, ...backgroundCleanup, ...floorPhotoRepair, ...ceilingPhotoRepair,
-      floor: floor && { area: floor.area, repairedGapCells: floor.gapCells, triangleCount: floor.triangleCount },
+      floor: floor && { area: floor.area, repairedGapCells: floor.gapCells, triangleCount: floor.triangleCount,
+        preservedWallTrimTriangles: floor.preservedTrimTriangles },
       ceiling: ceiling?.diagnostics || null,
       ceilingLevels: ceilings.map(c=>c.diagnostics),
       wallPlacement: built.map(({ wall }) => ({ id: wall.id, setbackMeters: wall.setbackMeters })),
